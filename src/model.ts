@@ -52,7 +52,9 @@ export type WorkCopyKey =
   | 'stalled_for'
   | 'stalled_because'
   | 'duplicate_same_change'
+  | 'duplicate_same_artifact'
   | 'duplicate_same_topic'
+  | 'duplicate_same_step'
   | 'rank_approval_owed'
   | 'rank_subagent_gate'
   | 'rank_input_requested'
@@ -148,21 +150,13 @@ export interface WorkItem {
    * instruction and the platform has not yet reported the session as running.
    */
   instructed?: boolean
-  /** How many unfinished goals this stopped session left with nobody on them. */
+  /** Marks a goal nobody is on: idle work only the user can move forward. */
   unattendedGoals?: number
-  /**
-   * The names of those goals. The card must NAME them, not just count them: a
-   * card reading "4 unfinished goals" makes the user open a thread to learn what
-   * is being asked, which is the cost this queue exists to remove.
-   */
-  goals?: string[]
-  /** Finished goals of the same session, shown checked on a Resume card. */
-  doneGoals?: string[]
   /**
    * Other live work that appears to be the same job. Advice only: it never moves
    * the item or changes its state.
    */
-  duplicateOf?: { sessionKey: string; title: string; because: 'same_change' | 'same_topic' }
+  duplicateOf?: { sessionKey: string; title: string; because: GoalMatch }
   /** Seconds of silence, when the backend watcher flagged this as stalled. */
   stalledFor?: number
   /** Repeat count, when the backend watcher flagged a repeating failure. */
@@ -611,16 +605,23 @@ function intentWorkItems(
     ? []
     : intents.filter(intent => intent.state === 'in-progress')
 
-  if (unattended.length > 0) {
-    const leading = unattended.reduce(
-      (top, i) => ((i.last_touched_turn ?? 0) >= (top.last_touched_turn ?? 0) ? i : top),
-      unattended[0],
-    )
-    const nextStep = leading.next_steps?.find(step => step.what?.trim())?.what?.trim()
+  /*
+   * ONE ITEM PER UNFINISHED GOAL.
+   *
+   * These used to collapse into a single Resume card, on the theory that a
+   * stopped session poses one decision. It does not: two goals in one session
+   * are routinely unrelated work ("redesign the cards" and "fix the bugs"), so a
+   * shared row claimed they were parts of one thing, gave them one badge, and let
+   * a blocker belonging to one of them label both. Each goal is its own item —
+   * separately selectable, separately quotable, separately explained.
+   */
+  unattended.forEach(intent => {
+    const index = intents.indexOf(intent)
+    const nextSteps = (intent.next_steps ?? []).filter(step => step.what?.trim())
     built.push({
-      id: `unattended:${slot.key}`,
-      title: slot.title || copy('untitled_work'),
-      summary: nextStep || copy('no_next_step'),
+      id: `unattended:${slot.key}:${index}`,
+      title: deriveWorkTitle(intent.title, slot.title || copy('untitled_work')),
+      summary: nextSteps[0]?.what?.trim() || copy('no_next_step'),
       state: 'needs-you',
       issue: sessionIssue(slot),
       updatedAt: epoch(slot.last_ts || slot.last_activity_ts || slot.created),
@@ -628,36 +629,24 @@ function intentWorkItems(
       provenance: provenanceLabel(slot, copy),
       queuedBehind: slot.queue_depth || undefined,
       changeBlocked: sessionIssue(slot) || undefined,
-      unattendedGoals: unattended.length,
+      // Still the nobody_on_it signal — this goal is idle and only the user can
+      // move it — but now scoped to THIS goal rather than the whole session.
+      unattendedGoals: 1,
       action: 'resume',
       references: [
         { kind: 'session', id: slot.key, label: slot.title || copy('untitled_work'), sessionKey: slot.key },
         ...changeRefs,
       ],
-      nextSteps: unattended.flatMap(intent => (intent.next_steps ?? []).filter(step => step.what?.trim())),
-      goals: unattended.map(intent => intent.title?.trim()).filter((t): t is string => Boolean(t)),
-      // The session's FINISHED goals, shown checked on the same card. Its larger
-      // outcome is not done while goals remain, so these are progress, not
-      // completions — by the completion rule they do not belong in Done as peers.
-      doneGoals: intents
-        .filter(intent => intent.state === 'done' || intent.state === 'dropped')
-        .map(intent => intent.title?.trim())
-        .filter((t): t is string => Boolean(t)),
-      progress: [],
+      nextSteps,
+      progress: (intent.progress ?? []).filter(entry => entry.trim()),
       stale: Boolean(summary.stale),
-      lastTouchedTurn: leading.last_touched_turn ?? 0,
+      lastTouchedTurn: intent.last_touched_turn ?? 0,
     })
-  }
+  })
 
   intents.forEach((intent, index) => {
-    // Already represented by the collapsed card above.
+    // Already its own item above.
     if (unattended.includes(intent)) return
-    // A finished goal of a session that still has unfinished goals is progress,
-    // not a standalone completion: it is folded into that session's Resume card
-    // as a checked goal, so it must not also stand as its own Done card. A
-    // needs-you intent (e.g. a pending approval) is a real separate action and
-    // still renders.
-    if (unattended.length > 0 && (intent.state === 'done' || intent.state === 'dropped')) return
     const state = intentState(intent, slot)
     // A summary Crew Manager cannot place honestly is skipped, and the
     // session-level fallback describes the session instead.
@@ -870,6 +859,60 @@ function linkedSources(item: WorkItem): string[] {
     .map(ref => ref.id)
 }
 
+/** Artifacts this item points at — a shared output is a fact, like a shared PR. */
+function artifactSources(item: WorkItem): string[] {
+  return item.references.filter(ref => ref.kind === 'artifact').map(ref => ref.id)
+}
+
+/** Next-step texts, for step-level overlap. */
+function stepTexts(item: WorkItem): string[] {
+  return (item.nextSteps ?? []).map(step => step.what).filter(Boolean)
+}
+
+/** Why two items are judged the same job, ordered strongest first. */
+export type GoalMatch = 'same_change' | 'same_artifact' | 'same_topic' | 'same_step'
+
+/**
+ * The ONE judge of "these two items are the same job". Grouping and the
+ * duplicate warning both call it, so the two can never disagree.
+ */
+export function sameGoal(a: WorkItem, b: WorkItem): GoalMatch | null {
+  const sharedChange = linkedSources(a).find(url => linkedSources(b).includes(url))
+  if (sharedChange) return 'same_change'
+  const sharedArtifact = artifactSources(a).find(id => artifactSources(b).includes(id))
+  if (sharedArtifact) return 'same_artifact'
+  if (titleOverlap(a.title, b.title) >= DUPLICATE_OVERLAP) return 'same_topic'
+  // Titles are named offhand per session; the concrete next step is what the
+  // work actually is, so it catches matches the titles miss.
+  for (const left of stepTexts(a)) {
+    for (const right of stepTexts(b)) {
+      if (titleOverlap(left, right) >= DUPLICATE_OVERLAP) return 'same_step'
+    }
+  }
+  return null
+}
+
+/**
+ * The user's rulings on "same job" pairs. Heuristics guess; these correct.
+ * `split` forbids a pairing, `merged` forces one, and each is keyed by
+ * goalPairKey so a ruling survives item ids changing between polls.
+ */
+export interface GoalVerdicts {
+  merged: string[]
+  split: string[]
+}
+
+export const EMPTY_VERDICTS: GoalVerdicts = { merged: [], split: [] }
+
+/** Stable identity for verdicts: the session plus the title's distinctive words. */
+export function goalIdentity(item: WorkItem): string {
+  return `${item.sessionKey ?? item.id}|${titleWords(item.title).join(' ')}`
+}
+
+export function goalPairKey(a: WorkItem, b: WorkItem): string {
+  return [goalIdentity(a), goalIdentity(b)].sort().join('\u0001')
+}
+
 /**
  * Live work that duplicates other live work.
  *
@@ -877,12 +920,8 @@ function linkedSources(item: WorkItem): string[] {
  * half the spec asks for: two sessions doing the same thing RIGHT NOW, which
  * history cannot see because neither has finished.
  *
- * Two signals, and they are not equally strong:
- *
- * * **the same linked change or issue** in two different sessions. This is a
- *   fact, not a guess, and it is the one that catches the expensive case;
- * * **the titles say the same thing**, which is a heuristic and gated hard
- *   (distinctive words only, measured against the shorter title, 60% floor).
+ * The judgement itself lives in sameGoal(), shared with goal grouping so the
+ * warning and the grouping can never disagree about what "the same job" means.
  *
  * The NEWER item is the one marked, pointing back at the older. The new work is
  * what should be told it may be redundant; telling the session that started first
@@ -891,7 +930,7 @@ function linkedSources(item: WorkItem): string[] {
  * It never changes state or ordering. The spec says recall is advice and never a
  * gate, and the same restraint applies here.
  */
-export function markDuplicates(items: WorkItem[]): void {
+export function markDuplicates(items: WorkItem[], verdicts: GoalVerdicts = EMPTY_VERDICTS): void {
   const live = items
     .filter(item => item.state !== 'done' && item.sessionKey)
     .sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0))
@@ -901,21 +940,15 @@ export function markDuplicates(items: WorkItem[]): void {
     for (let older = 0; older < newer; older += 1) {
       const prior = live[older]
       if (prior.sessionKey === item.sessionKey) continue
+      // The user ruled this pair apart; a warning would re-litigate their call.
+      if (verdicts.split.includes(goalPairKey(item, prior))) continue
 
-      const shared = linkedSources(item).find(url => linkedSources(prior).includes(url))
-      if (shared) {
+      const because = sameGoal(item, prior)
+      if (because) {
         item.duplicateOf = {
           sessionKey: prior.sessionKey as string,
           title: prior.title,
-          because: 'same_change',
-        }
-        break
-      }
-      if (titleOverlap(item.title, prior.title) >= DUPLICATE_OVERLAP) {
-        item.duplicateOf = {
-          sessionKey: prior.sessionKey as string,
-          title: prior.title,
-          because: 'same_topic',
+          because,
         }
         break
       }
@@ -1178,6 +1211,7 @@ export function normalizeWorkItems(
   summaries: Record<string, SessionSummary> = {},
   stalls: Record<string, StallFinding> = {},
   loops: Record<string, ErrorLoopFinding> = {},
+  verdicts: GoalVerdicts = EMPTY_VERDICTS,
 ): WorkItem[] {
   const items = new Map<string, WorkItem>()
   const bySession = new Map<string, WorkItem>()
@@ -1381,7 +1415,7 @@ export function normalizeWorkItems(
   const built = [...items.values()]
   // Last, so it sees the finished shape of every item -- its links, its title
   // after intent derivation, and its final state.
-  markDuplicates(built)
+  markDuplicates(built, verdicts)
   return sortWorkItems(built)
 }
 
@@ -1408,7 +1442,7 @@ export function searchWorkItems(items: WorkItem[], query: string): WorkItem[] {
   })
 }
 
-export type GroupMode = 'session' | 'pr'
+export type GroupMode = 'session' | 'pr' | 'goal'
 
 export interface SessionRollup {
   sessionKey: string
@@ -1448,7 +1482,7 @@ export interface WorkBlock {
   key: string
   items: WorkItem[]
   /** Header kind. null renders no header (ungrouped item). */
-  header: 'session' | 'pr' | null
+  header: 'session' | 'pr' | 'goal' | null
   /** Present for session headers, to wire Open. */
   sessionKey: string | null
   /** Present for PR headers. */
@@ -1467,9 +1501,14 @@ export interface WorkBlock {
  * so a session touching four PRs appears under all four — each PR is its own card
  * with the work underneath it. Work with no PR is NOT shown in the PR view — this
  * view is about PRs, so unlinked work stays in the Session view only.
+ *
+ * GOAL: the job is the primary entity. Items from DIFFERENT sessions judged to
+ * be the same job (sameGoal, corrected by the user's verdicts) merge into one
+ * card, so "S1 is on it, S2 left it open" reads as one thing, not two.
  */
-export function clusterBy(items: WorkItem[], mode: GroupMode): WorkBlock[] {
+export function clusterBy(items: WorkItem[], mode: GroupMode, verdicts: GoalVerdicts = EMPTY_VERDICTS): WorkBlock[] {
   if (mode === 'pr') return clusterByPr(items)
+  if (mode === 'goal') return clusterByGoal(items, verdicts)
   const blocks: WorkBlock[] = []
   const byKey = new Map<string, WorkBlock>()
 
@@ -1519,4 +1558,217 @@ function clusterByPr(items: WorkItem[]): WorkBlock[] {
     }
   }
   return prBlocks
+}
+
+/**
+ * Merge cross-session items that are the same job into one block. A block takes
+ * the position of its most-urgent member; singletons stay plain rows, because
+ * every item here already IS a goal — only the cross-session merge is news.
+ */
+function clusterByGoal(items: WorkItem[], verdicts: GoalVerdicts): WorkBlock[] {
+  const parent = items.map((_, index) => index)
+  const find = (index: number): number => {
+    while (parent[index] !== index) {
+      parent[index] = parent[parent[index]]
+      index = parent[index]
+    }
+    return index
+  }
+  const union = (a: number, b: number) => { parent[find(b)] = find(a) }
+
+  for (let i = 0; i < items.length; i += 1) {
+    for (let j = i + 1; j < items.length; j += 1) {
+      const a = items[i]
+      const b = items[j]
+      // Two intents inside one session are distinct goals; only sessions merge.
+      if (!a.sessionKey || !b.sessionKey || a.sessionKey === b.sessionKey) continue
+      const pair = goalPairKey(a, b)
+      // The user's ruling beats every heuristic, in both directions.
+      if (verdicts.split.includes(pair)) continue
+      if (verdicts.merged.includes(pair) || sameGoal(a, b)) union(i, j)
+    }
+  }
+
+  const blocks: WorkBlock[] = []
+  const byRoot = new Map<number, WorkBlock>()
+  for (let index = 0; index < items.length; index += 1) {
+    const root = find(index)
+    const existing = byRoot.get(root)
+    if (existing) {
+      existing.items.push(items[index])
+      existing.header = 'goal'
+      continue
+    }
+    const block: WorkBlock = {
+      key: `goal:${items[index].id}`,
+      items: [items[index]],
+      header: null,
+      sessionKey: null,
+      changeRef: null,
+    }
+    byRoot.set(root, block)
+    blocks.push(block)
+  }
+  return blocks
+}
+
+/** One project bucket from the workspace's projects.md, via the backend. */
+export interface Initiative {
+  name: string
+  aliases: string[]
+}
+
+/**
+ * The Goal view's top level: one big goal holding the deduped work of every
+ * session on it. Status is DERIVED from members, never stored — a sub-goal
+ * finishing is progress, and the initiative is done only when everything is.
+ */
+export interface InitiativeBlock {
+  key: string
+  /** null = the loose tail: items no bucket claimed, rendered without a shell. */
+  name: string | null
+  status: WorkState
+  /** Distinct session labels under this initiative, for the card header. */
+  sessions: string[]
+  blocks: WorkBlock[]
+}
+
+/**
+ * Which bucket claims this item. Same matching contract projects.md documents
+ * for Crew Companion: case-insensitive substring over what the item says about
+ * itself (title, session label, provenance), first bucket wins.
+ */
+export function initiativeFor(item: WorkItem, initiatives: Initiative[]): string | null {
+  const sessionLabel = item.references.find(ref => ref.kind === 'session')?.label ?? ''
+  const haystack = `${item.title}\n${sessionLabel}\n${item.provenance}`.toLowerCase()
+  for (const bucket of initiatives) {
+    if (bucket.aliases.some(alias => alias && haystack.includes(alias.toLowerCase()))) {
+      return bucket.name
+    }
+  }
+  return null
+}
+
+/**
+ * Candidate big goals, guessed from the project directories sessions run in.
+ * This is the bootstrap path: a user with no projects.md still gets offered
+ * their real projects instead of silently missing the whole top level.
+ */
+export function initiativeCandidates(
+  slots: ChatSlot[],
+  initiatives: Initiative[],
+): { name: string; sessions: number }[] {
+  const taken = initiatives.flatMap(bucket => bucket.aliases.map(alias => alias.toLowerCase()))
+  const counts = new Map<string, number>()
+  for (const slot of slots) {
+    if (!slot.key || CONDUCTOR_SLOT_KEYS.has(slot.key) || slot.memory_mode === 'incognito') continue
+    const raw = slot.project
+    if (!raw) continue
+    const name = raw.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop()
+    if (!name) continue
+    // Already covered by a bucket: not a candidate, however many sessions use it.
+    if (taken.some(alias => name.toLowerCase().includes(alias) || alias.includes(name.toLowerCase()))) continue
+    counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([name, sessions]) => ({ name, sessions }))
+    .sort((a, b) => b.sessions - a.sessions)
+}
+
+/** Members roll up: anything owed to the user outranks motion outranks done. */
+export function rollupStatus(items: WorkItem[]): WorkState {
+  if (items.some(item => item.state === 'needs-you')) return 'needs-you'
+  if (items.some(item => item.state === 'running')) return 'running'
+  return 'done'
+}
+
+/**
+ * Where an instruction to a cross-session goal goes: the session actively ON
+ * the job — it already holds the context, so it is the cheapest executor. With
+ * nobody moving, the most recently touched member (sending resumes it). Never
+ * broadcast: two sessions receiving one instruction is the duplicated work this
+ * whole view exists to prevent.
+ */
+export function goalRouteTarget(items: WorkItem[]): WorkItem {
+  const moving = items.find(item => item.moving)
+  if (moving) return moving
+  const running = items.find(item => item.state === 'running')
+  if (running) return running
+  return [...items].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0]
+}
+
+function sessionLabels(items: WorkItem[]): string[] {
+  const labels: string[] = []
+  const seen = new Set<string>()
+  for (const item of items) {
+    const key = item.sessionKey
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    labels.push(item.references.find(ref => ref.kind === 'session')?.label ?? item.provenance)
+  }
+  return labels
+}
+
+/**
+ * The two-level Goal view: initiative buckets on top, same-job dedup inside.
+ * An initiative takes the position of its most-urgent member and its internal
+ * order is preserved — grouping stays a lens, nothing is re-scored. Items no
+ * bucket claims keep their positions as a shell-less tail block (name null),
+ * NOT a "No project" dump.
+ */
+export function clusterByInitiative(
+  items: WorkItem[],
+  initiatives: Initiative[],
+  verdicts: GoalVerdicts = EMPTY_VERDICTS,
+): InitiativeBlock[] {
+  const byName = new Map<string, WorkItem[]>()
+  const loose: WorkItem[] = []
+  const nameFor = new Map<string, string | null>()
+
+  for (const item of items) {
+    const name = initiativeFor(item, initiatives)
+    nameFor.set(item.id, name)
+    if (name === null) {
+      loose.push(item)
+      continue
+    }
+    if (!byName.has(name)) byName.set(name, [])
+    byName.get(name)!.push(item)
+  }
+
+  // Loose items dedup among THEMSELVES too — same-job across sessions merges
+  // whether or not a bucket claims it.
+  const looseBlocks = clusterByGoal(loose, verdicts)
+  const looseByLead = new Map<string, WorkBlock>()
+  for (const block of looseBlocks) looseByLead.set(block.items[0].id, block)
+
+  // Walk the ordered flat list: each unit surfaces at its most-urgent member.
+  const out: InitiativeBlock[] = []
+  const emitted = new Set<string>()
+  for (const item of items) {
+    const name = nameFor.get(item.id) ?? null
+    if (name !== null) {
+      if (emitted.has(name)) continue
+      emitted.add(name)
+      const members = byName.get(name)!
+      out.push({
+        key: `initiative:${name}`,
+        name,
+        status: rollupStatus(members),
+        sessions: sessionLabels(members),
+        blocks: clusterByGoal(members, verdicts),
+      })
+      continue
+    }
+    const block = looseByLead.get(item.id)
+    if (!block) continue
+    out.push({
+      key: block.key,
+      name: null,
+      status: rollupStatus(block.items),
+      sessions: [],
+      blocks: [block],
+    })
+  }
+  return out
 }

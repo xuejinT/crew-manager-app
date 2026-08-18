@@ -464,6 +464,67 @@ check(
     repr(focused_real[:90]),
 )
 
+# --- initiatives: the projects.md parser behind GET /initiatives -------------
+from initiatives import parse_projects  # noqa: E402
+
+_PROJECTS_SAMPLE = """
+<!-- comment the parser must skip -->
+- **Crew Companion** — macOS desktop pet; aliases: Desktop Buddy, mochi, the pet
+- **Design Critique** — UI critique skill
+- not a bucket line
+- **Crew Companion** — duplicate must be dropped
+"""
+_buckets = parse_projects(_PROJECTS_SAMPLE)
+check("parses one bucket per bold line", len(_buckets) == 2, repr([b["name"] for b in _buckets]))
+check(
+    "the display name always leads the alias list",
+    _buckets[0]["aliases"][0] == "Crew Companion",
+    repr(_buckets[0]["aliases"]),
+)
+check(
+    "aliases split on commas",
+    "mochi" in _buckets[0]["aliases"] and "the pet" in _buckets[0]["aliases"],
+    repr(_buckets[0]["aliases"]),
+)
+check(
+    "a bucket without an aliases clause still matches by name",
+    _buckets[1]["aliases"] == ["Design Critique"],
+    repr(_buckets[1]["aliases"]),
+)
+check("duplicate names collapse to the first", sum(1 for b in _buckets if b["name"] == "Crew Companion") == 1)
+check("empty text degrades to no buckets", parse_projects("") == [])
+
+# add_initiative round-trips through a THROWAWAY data home — never the real one.
+import os  # noqa: E402
+import tempfile  # noqa: E402
+import initiatives as _initiatives_mod  # noqa: E402
+
+with tempfile.TemporaryDirectory() as _tmp_home:
+    _prior_home = os.environ.get("KIROCREW_HOME")
+    os.environ["KIROCREW_HOME"] = _tmp_home
+    try:
+        _written = _initiatives_mod.add_initiative("Crew Manager", ["overwatch", "crew-manager"])
+        check("add_initiative creates the file and returns the bucket",
+              any(b["name"] == "Crew Manager" for b in _written))
+        _round = _initiatives_mod.load_initiatives()
+        _cm = next((b for b in _round if b["name"] == "Crew Manager"), None)
+        check("the written line parses back with its aliases",
+              _cm is not None and "overwatch" in _cm["aliases"], repr(_cm))
+        _again = _initiatives_mod.add_initiative("crew manager", [])
+        check("adding the same name again is idempotent",
+              sum(1 for b in _again if b["name"].lower() == "crew manager") == 1)
+        _bad = False
+        try:
+            _initiatives_mod.add_initiative("   ")
+        except ValueError:
+            _bad = True
+        check("a blank name is refused", _bad)
+    finally:
+        if _prior_home is None:
+            os.environ.pop("KIROCREW_HOME", None)
+        else:
+            os.environ["KIROCREW_HOME"] = _prior_home
+
 print()
 if FAILURES:
     print(f"{len(FAILURES)} failing check(s): {', '.join(FAILURES)}")

@@ -1,5 +1,6 @@
 node_modules/
 coverage/
+data/
 .kiro/
 .playwright-mcp/
 __pycache__/

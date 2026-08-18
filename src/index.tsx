@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from 'react'
 import {
   AlertTriangle as AlertCircle,
   Bot,
@@ -60,17 +60,27 @@ import {
   SNOOZE_MS,
   explainRank,
   fleetBriefing,
+  clusterByInitiative,
+  goalPairKey,
+  goalRouteTarget,
+  initiativeCandidates,
   normalizeWorkItems,
   rankWorkItem,
+  sameGoal,
   searchWorkItems,
+  titleOverlap,
   workCounts,
   type AgentRow,
   type ApprovalRow,
   type WorkflowRow,
   type WorkCopyKey,
+  type GoalVerdicts,
+  type Initiative,
+  type InitiativeBlock,
   type InstructedItems,
   type PendingPermission,
   type ResponseVerb,
+  type WorkBlock,
   type WorkItem,
   type WorkReference,
   type GroupMode,
@@ -100,6 +110,8 @@ interface SourcesResponse {
 const SNOOZE_KEY = 'crew-manager.snoozed'
 const HANDLED_KEY = 'crew-manager.handled'
 const DONE_COLLAPSED_KEY = 'crew-manager.done-collapsed'
+const GOAL_VERDICTS_KEY = 'crew-manager.goal-verdicts'
+const INITIATIVE_COLLAPSED_KEY = 'crew-manager.initiative-collapsed'
 
 function readStore<T>(key: string, fallback: T = {} as T): T {
   try {
@@ -151,7 +163,9 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   stalled_for: 'Check on it — no activity for {{duration}}, still marked running',
   stalled_because: '{{reason}} Silent for {{duration}}.',
   duplicate_same_change: 'Also being worked in “{{title}}” — same linked change',
+  duplicate_same_artifact: 'Also being worked in “{{title}}” — same artifact',
   duplicate_same_topic: 'Looks like the same work as “{{title}}”',
+  duplicate_same_step: 'Next step matches “{{title}}” — may be the same work',
   rank_approval_owed: 'only you can clear this approval',
   rank_subagent_gate: 'a sub-agent is held at the spawn gate',
   rank_input_requested: 'the agent asked you a question',
@@ -413,6 +427,179 @@ function metaReferences(item: WorkItem) {
  */
 
 
+/**
+ * The bootstrap path for big goals. A goal is only useful if it exists, and
+ * projects.md is a convention not everyone has — so the view offers to seed it
+ * from the projects sessions actually run in, or from a name the user types.
+ * Everything lands in projects.md, where Crew Companion reads it too.
+ */
+function GoalBootstrap({ candidates, prominent, busy, onAdd }: {
+  candidates: { name: string; sessions: number }[]
+  /** True when no buckets exist at all — the whole top level is missing. */
+  prominent: boolean
+  busy: boolean
+  onAdd: (name: string, aliases?: string[]) => void
+}) {
+  const [name, setName] = useState('')
+  const shown = prominent ? candidates : candidates.filter(entry => entry.sessions >= 2)
+  if (!prominent && shown.length === 0) return null
+  return (
+    <div className="ow-bootstrap" data-prominent={prominent ? 'true' : undefined}>
+      <div className="ow-bootstrap-head">
+        {prominent ? 'No big goals defined yet' : 'Some work is under no goal'}
+      </div>
+      <div className="ow-bootstrap-sub">
+        A goal gathers the same job across sessions. Make one from a project you are working in:
+      </div>
+      {shown.length > 0 && (
+        <div className="ow-bootstrap-chips">
+          {shown.slice(0, 4).map(entry => (
+            <button
+              type="button"
+              key={entry.name}
+              className="ow-bootstrap-chip"
+              disabled={busy}
+              onClick={() => onAdd(entry.name, [entry.name])}
+            >
+              {entry.name} <span className="ow-bootstrap-count">{entry.sessions} session{entry.sessions === 1 ? '' : 's'}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="ow-bootstrap-custom">
+        <Input
+          value={name}
+          placeholder="Or name a goal yourself…"
+          aria-label="New goal name"
+          onChange={event => setName(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter' && name.trim()) { onAdd(name); setName('') }
+          }}
+        />
+        <Btn disabled={busy || !name.trim()} onClick={() => { onAdd(name); setName('') }}>Add goal</Btn>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The big goal's header: name, DERIVED status, and the sessions on it. The
+ * whole header toggles collapse — a folded card is only usable if its one
+ * visible line already answers "does this need me".
+ */
+function InitiativeHeader({ block, collapsed, onToggle }: {
+  block: InitiativeBlock
+  collapsed: boolean
+  onToggle: () => void
+}) {
+  return (
+    <Clickable onActivate={onToggle} className="ow-init-head" aria-expanded={!collapsed}>
+      <ChevronRight className="ow-icon ow-init-chevron" data-open={collapsed ? undefined : 'true'} aria-hidden="true" />
+      <span className="ow-truncate ow-init-name">{block.name}</span>
+      <span className="ow-init-status" data-status={block.status}>{stateLabels[block.status]}</span>
+      <span className="ow-init-sessions ow-truncate">
+        {block.sessions.slice(0, 3).join(' · ')}
+        {block.sessions.length > 3 ? ` +${block.sessions.length - 3}` : ''}
+      </span>
+    </Clickable>
+  )
+}
+
+/**
+ * One goal, several sessions. The header names the JOB (the leading item's
+ * title); the rows underneath say who is on it. Split undoes a wrong merge:
+ * heuristics guess, the user rules.
+ */
+function GoalBlockHeader({ block, onSplit, selected, onSelect }: {
+  block: WorkBlock
+  onSplit?: (pairs: string[]) => void
+  selected?: boolean
+  onSelect?: () => void
+}) {
+  const lead = block.items[0]
+  const sessions = new Set(block.items.map(item => item.sessionKey).filter(Boolean)).size
+  const pairs: string[] = []
+  for (let i = 0; i < block.items.length; i += 1) {
+    for (let j = i + 1; j < block.items.length; j += 1) {
+      if (block.items[i].sessionKey !== block.items[j].sessionKey) {
+        pairs.push(goalPairKey(block.items[i], block.items[j]))
+      }
+    }
+  }
+  // Selecting the header quotes the GOAL: the Conductor then routes any
+  // instruction to the goal's active session, not to a row the user must pick.
+  const body = (
+    <>
+      <Users className="ow-icon" aria-hidden="true" />
+      <span className="ow-truncate ow-block-name">{lead.title}</span>
+      <span className="ow-block-tab-meta">
+        <span aria-hidden="true">·</span>
+        <span className="ow-truncate">{sessions} sessions, one goal</span>
+      </span>
+      {onSplit && (
+        <Btn
+          className="ow-block-open"
+          title="Not the same goal — split into separate cards"
+          aria-label={`Split ${lead.title}`}
+          onClick={event => { event.stopPropagation(); onSplit(pairs) }}
+        >
+          Split
+        </Btn>
+      )}
+    </>
+  )
+  if (onSelect) {
+    return (
+      <Clickable
+        onActivate={onSelect}
+        className="ow-block-tab ow-goal-tab"
+        aria-pressed={selected}
+        data-selected={selected ? 'true' : undefined}
+      >
+        {body}
+      </Clickable>
+    )
+  }
+  return <div className="ow-block-tab">{body}</div>
+}
+
+/**
+ * Merge candidates for a selected lone goal. Ranked by the same matcher the
+ * grouping uses, with a lower floor: what scored too low to auto-merge (or was
+ * split earlier) is exactly what only the user can rule on.
+ */
+const MERGE_HINT_FLOOR = 0.3
+
+function GoalMergeHint({ item, items, onMerge }: {
+  item: WorkItem
+  items: WorkItem[]
+  onMerge: (pair: string) => void
+}) {
+  const candidates = items
+    .filter(other => other.id !== item.id && other.sessionKey && item.sessionKey
+      && other.sessionKey !== item.sessionKey)
+    .map(other => ({ other, score: sameGoal(item, other) ? 1 : titleOverlap(item.title, other.title) }))
+    .filter(entry => entry.score >= MERGE_HINT_FLOOR)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2)
+  if (candidates.length === 0) return null
+  return (
+    <div className="ow-merge-hint">
+      <span className="ow-merge-hint-label">Same goal?</span>
+      {candidates.map(({ other }) => (
+        <button
+          type="button"
+          key={other.id}
+          className="ow-merge-hint-btn ow-truncate"
+          onClick={() => onMerge(goalPairKey(item, other))}
+        >
+          Merge with “{other.title}”
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function SessionBlockHeader({
   item,
   onOpen,
@@ -583,9 +770,13 @@ function WorkRow({
   onPickStep,
   onSnooze,
   onHandled,
+  hideBadge,
+  compact,
 }: {
   item: WorkItem
   selected: boolean
+  hideBadge?: boolean
+  compact?: boolean
   onAnswerPermission?: (id: string, approve: boolean) => void
   permissionBusy?: boolean
   onRetry?: (path: string) => void
@@ -608,6 +799,7 @@ function WorkRow({
   onSelect: () => void
   onOpenSession: (slot: string) => void
 }) {
+  const [showAllSteps, setShowAllSteps] = useState(false)
   return (
     <Clickable
       onActivate={onSelect}
@@ -621,17 +813,15 @@ function WorkRow({
       <div className="ow-row-layout">
         <div className="ow-row-content">
           <div className="ow-row-heading">
-            {/*
-              Verb first. The badge only earns its keep if it forms a column you
-              can run your eye down — trailing the title, each one starts at a
-              different x and there is nothing to scan.
-            */}
-            {stateBadge(item)}
+            {hideBadge
+              ? (item.state === 'done' && <Check className="ow-icon ow-row-check" aria-hidden="true" />)
+              : stateBadge(item)}
             <span className="ow-row-title">{item.title}</span>
           </div>
-          {/* Skip the summary when it just repeats a next-step chip below — the
-              resume card's summary is its leading next_step, already a chip. */}
-          {item.summary && !(item.nextSteps ?? []).some(step => step.what?.trim() === item.summary) && (
+          {/* Compact rows show the title only at rest; selecting one expands its
+              summary here, so a click always reveals content (every item has a
+              summary) rather than only the ones that happen to carry next-steps. */}
+          {(!compact || selected) && item.summary && !(item.nextSteps ?? []).some(step => step.what?.trim() === item.summary) && (
             <p className="ow-row-summary">{item.summary}</p>
           )}
           {/*
@@ -647,38 +837,11 @@ function WorkRow({
               <Users className="ow-icon" aria-hidden="true" />
               <span className="ow-truncate">
                 {workCopy(
-                  item.duplicateOf.because === 'same_change'
-                    ? 'duplicate_same_change'
-                    : 'duplicate_same_topic',
+                  `duplicate_${item.duplicateOf.because}` as WorkCopyKey,
                   { title: item.duplicateOf.title },
                 )}
               </span>
             </Clickable>
-          )}
-          {/*
-            Name the goals, do not merely count them. This is one card because a
-            stopped session poses one decision — but the user still has to see
-            WHAT stopped without opening the session to find out.
-          */}
-          {item.goals && item.goals.length > 0 && (
-            <ul className="ow-row-goals">
-              {item.goals.slice(0, MAX_LISTED_GOALS).map(goal => (
-                <li key={goal} className="ow-truncate">{goal}</li>
-              ))}
-              {item.goals.length > MAX_LISTED_GOALS && (
-                <li className="ow-row-goals-more">
-                  +{item.goals.length - MAX_LISTED_GOALS} more
-                </li>
-              )}
-              {/* The session's finished goals, checked, so the card shows the whole
-                  ledger: what is done and what is left to resume. */}
-              {item.doneGoals?.slice(0, MAX_LISTED_GOALS).map(goal => (
-                <li key={`done:${goal}`} className="ow-row-goal-done">
-                  <Check className="ow-icon" aria-hidden="true" />
-                  <span className="ow-truncate">{goal}</span>
-                </li>
-              ))}
-            </ul>
           )}
           {/*
             Only in Needs you. That is the one group ordered by score rather than
@@ -730,11 +893,12 @@ function WorkRow({
       */}
       {selected && onPickStep && item.nextSteps && item.nextSteps.length > 0 && (
         <Expand><div className="ow-row-steps">
-          {/* Same list, same cap, same overflow as the session summary's "Open
-              items" panel — these ARE the summary's open items, so the label and
-              the +N more make that explicit and keep the two from disagreeing. */}
-          <div className="ow-steps-head">Open items</div>
-          {item.nextSteps.slice(0, MAX_QUOTE_STEPS).map((step, index) => (
+          {/* "Suggested" because these are the model's inferences, not a task
+              list the user wrote. It was "Open items", which collided with the
+              Open button (one word, two meanings) and called them items when the
+              cards are the items. */}
+          <div className="ow-steps-head">Suggested next steps</div>
+          {item.nextSteps.slice(0, showAllSteps ? undefined : MAX_QUOTE_STEPS).map((step, index) => (
             <button
               type="button"
               key={`${index}:${step.what}`}
@@ -750,7 +914,15 @@ function WorkRow({
             </button>
           ))}
           {item.nextSteps.length > MAX_QUOTE_STEPS && (
-            <div className="ow-steps-more">+{item.nextSteps.length - MAX_QUOTE_STEPS} more in the session</div>
+            <button
+              type="button"
+              className="ow-steps-more"
+              onClick={event => { event.stopPropagation(); setShowAllSteps(show => !show) }}
+            >
+              {showAllSteps
+                ? 'Show fewer'
+                : `+${item.nextSteps.length - MAX_QUOTE_STEPS} more`}
+            </button>
           )}
         </div></Expand>
       )}
@@ -791,6 +963,139 @@ function WorkRow({
   )
 }
 
+type LaneKey = 'unblock' | 'followup' | 'running' | 'done'
+const LANE_ORDER: LaneKey[] = ['unblock', 'followup', 'running', 'done']
+const LANE_BADGE: Record<'unblock' | 'followup', { label: string; cls: string }> = {
+  unblock: { label: 'UNBLOCK', cls: 'ow-lane-unblock' },
+  followup: { label: 'FOLLOW UP', cls: 'ow-lane-followup' },
+}
+
+function laneKeyOf(item: WorkItem): LaneKey {
+  if (item.state === 'done') return 'done'
+  if (item.state === 'running') return 'running'
+  return responseVerb(item) ?? 'unblock'
+}
+
+/**
+ * A session's items, grouped by response. The verb moves OFF each row and onto
+ * ONE lane head, so four "verify" items read as one labelled group of four
+ * instead of four repeated badges. Rows stay compact and selectable; the badge
+ * is a column you scan once, not per row.
+ */
+function SessionLanes({
+  items,
+  selectedId,
+  onSelect,
+  onOpenSession,
+  onAnswerPermission,
+  permissionBusy,
+  onRetry,
+  retryBusy,
+  onPickStep,
+  onSnooze,
+  onHandled,
+  doneTitles,
+}: {
+  items: WorkItem[]
+  selectedId: string | null
+  onSelect: (item: WorkItem) => void
+  onOpenSession: (slot: string) => void
+  onAnswerPermission?: (id: string, approve: boolean) => void
+  permissionBusy?: boolean
+  onRetry?: (path: string) => void
+  retryBusy?: boolean
+  onPickStep?: (what: string) => void
+  onSnooze?: (id: string) => void
+  onHandled?: (id: string, updatedAt: number) => void
+  /** This session's finished goals, listed elsewhere — shown here as context. */
+  doneTitles?: string[]
+}) {
+  const [showDone, setShowDone] = useState(false)
+  const byLane = new Map<LaneKey, WorkItem[]>()
+  for (const item of items) {
+    const key = laneKeyOf(item)
+    const list = byLane.get(key)
+    if (list) list.push(item)
+    else byLane.set(key, [item])
+  }
+  return (
+    <>
+      {LANE_ORDER.filter(key => byLane.has(key)).map(laneKey => {
+        const laneItems = byLane.get(laneKey) as WorkItem[]
+        const badge = laneKey === 'unblock' || laneKey === 'followup' ? LANE_BADGE[laneKey] : null
+        // One shared reason on the head only when every item gives the same one;
+        // otherwise keep each row's own reason so nothing is flattened away.
+        const reasons = badge
+          ? laneItems.map(it => (it.action !== 'resume' ? explainRank(rankWorkItem(it), workCopy) : ''))
+          : []
+        const laneReason = badge && reasons.length > 0 && reasons.every(r => r && r === reasons[0])
+          ? reasons[0]
+          : undefined
+        return (
+          <div className="ow-lane" key={laneKey}>
+            {badge && (
+              <div className="ow-lane-head">
+                <span className={`ow-lane-badge ${badge.cls}`}>{badge.label}</span>
+                {laneReason && <span className="ow-lane-reason">{laneReason}</span>}
+              </div>
+            )}
+            {laneItems.map(item => (
+              <WorkRow
+                key={item.id}
+                item={item}
+                hideBadge
+                compact
+                selected={selectedId === item.id}
+                continuation
+                whyRanked={laneReason
+                  ? undefined
+                  : (item.state === 'needs-you' && item.action !== 'resume'
+                    ? explainRank(rankWorkItem(item), workCopy)
+                    : undefined)}
+                onSelect={() => onSelect(item)}
+                onOpenSession={onOpenSession}
+                onAnswerPermission={onAnswerPermission}
+                permissionBusy={permissionBusy}
+                onRetry={onRetry}
+                retryBusy={retryBusy}
+                onPickStep={onPickStep}
+                onSnooze={onSnooze}
+                onHandled={onHandled}
+              />
+            ))}
+          </div>
+        )
+      })}
+      {/* This session's finished goals. They are their own items in Done, but the
+          card is where you judge what is LEFT — so the ledger is offered here,
+          collapsed, rather than making you open another section to see it. */}
+      {!byLane.has('done') && doneTitles && doneTitles.length > 0 && (
+        <div className="ow-lane ow-lane-done">
+          <button
+            type="button"
+            className="ow-goals-toggle"
+            aria-expanded={showDone}
+            onClick={() => setShowDone(show => !show)}
+          >
+            <ChevronRight className="ow-icon" data-open={showDone ? 'true' : undefined} aria-hidden="true" />
+            {doneTitles.length} done
+          </button>
+          {showDone && (
+            <ul className="ow-done-list">
+              {doneTitles.map(title => (
+                <li key={title} className="ow-row-goal-done">
+                  <Check className="ow-icon" aria-hidden="true" />
+                  <span className="ow-truncate">{title}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
 function WorkSection({
   title,
   items,
@@ -810,6 +1115,15 @@ function WorkSection({
   groupBy,
   prChecks,
   prFilter,
+  doneBySession,
+  goalVerdicts,
+  onSplitGoal,
+  onMergeGoal,
+  initiativeBlocks,
+  collapsedInitiatives,
+  onToggleInitiative,
+  selectedGoalKey,
+  onSelectGoal,
   subtitle,
   emptyLabel,
 }: {
@@ -834,36 +1148,34 @@ function WorkSection({
   prChecks?: Record<string, PrChecks>
   /** PR-status chip in PR mode; filters whole PR groups. */
   prFilter?: PrFilterKey
+  /** Per-session finished-goal titles, for the collapsed ledger on a card. */
+  doneBySession?: Record<string, string[]>
+  /** Goal mode: the user's same-job rulings, and how to record new ones. */
+  goalVerdicts?: GoalVerdicts
+  onSplitGoal?: (pairs: string[]) => void
+  onMergeGoal?: (pair: string) => void
+  /** Goal mode: the two-level initiative clustering, computed by the parent. */
+  initiativeBlocks?: InitiativeBlock[]
+  collapsedInitiatives?: Record<string, boolean>
+  onToggleInitiative?: (key: string, next: boolean) => void
+  selectedGoalKey?: string | null
+  onSelectGoal?: (key: string) => void
   subtitle?: string
   emptyLabel: string
 }) {
-  const blocks = clusterBy(items, groupBy)
+  const blocks = clusterBy(items, groupBy, goalVerdicts)
   // PR mode only: drop whole PR groups that do not match the chosen status chip.
   const shownBlocks = groupBy === 'pr' && prFilter && prFilter !== 'all'
     ? blocks.filter(block => block.changeRef
         && prBucket(block.changeRef, prChecks?.[block.changeRef.url ?? '']) === prFilter)
     : blocks
-  // In PR mode the header counts PRs (groups); elsewhere it counts items.
-  const headerCount = groupBy === 'pr' ? shownBlocks.length : items.length
-  return (
-    <section className="ow-section" aria-label={title}>
-      {onToggleCollapsed
-        ? (
-          <Clickable onActivate={onToggleCollapsed} className="ow-section-toggle">
-            <PanelSectionHeader label={title} count={headerCount} subtitle={subtitle} />
-            <ChevronRight
-              className="ow-icon ow-section-chevron"
-              data-open={collapsed ? undefined : 'true'}
-              aria-hidden="true"
-            />
-          </Clickable>
-        )
-        : <PanelSectionHeader label={title} count={headerCount} subtitle={subtitle} />}
-      {collapsed ? null : (
-      <div className="ow-section-list">
-        {shownBlocks.length === 0
-          ? <p className="ow-section-empty">{emptyLabel}</p>
-          : shownBlocks.map(block => (
+  const initiatives = initiativeBlocks ?? []
+  // In PR mode the header counts PRs; in Goal mode it counts big goals (units).
+  const headerCount = groupBy === 'goal'
+    ? initiatives.length
+    : groupBy === 'pr' ? shownBlocks.length : items.length
+
+  const renderBlock = (block: WorkBlock) => (
             <div
               key={block.key}
               className="ow-block"
@@ -880,9 +1192,19 @@ function WorkSection({
               {block.header === 'pr' && block.changeRef && (
                 <PrBlockHeader reference={block.changeRef} checks={prChecks?.[block.changeRef.url ?? '']} />
               )}
-              {block.header === 'pr' ? (
+              {block.header === 'goal' && (
+                <GoalBlockHeader
+                  block={block}
+                  onSplit={onSplitGoal}
+                  selected={selectedGoalKey === block.key}
+                  onSelect={onSelectGoal ? () => onSelectGoal(block.key) : undefined}
+                />
+              )}
+              {block.header === 'pr' || block.header === 'goal' ? (
                 <>
-                  <div className="ow-pr-sublabel">Sessions on this PR</div>
+                  <div className="ow-pr-sublabel">
+                    {block.header === 'pr' ? 'Sessions on this PR' : 'Sessions on this goal'}
+                  </div>
                   {rollUpSessions(block.items).map(session => (
                     <SessionRollupRow
                       key={session.sessionKey}
@@ -893,10 +1215,25 @@ function WorkSection({
                     />
                   ))}
                 </>
+              ) : block.header === 'session' ? (
+                <SessionLanes
+                  items={block.items}
+                  doneTitles={block.sessionKey ? doneBySession?.[block.sessionKey] : undefined}
+                  selectedId={selectedId}
+                  onSelect={onSelect}
+                  onOpenSession={onOpenSession}
+                  onAnswerPermission={onAnswerPermission}
+                  permissionBusy={permissionBusy}
+                  onRetry={onRetry}
+                  retryBusy={retryBusy}
+                  onPickStep={onPickStep}
+                  onSnooze={onSnooze}
+                  onHandled={onHandled}
+                />
               ) : (
               block.items.map((item) => (
+            <Fragment key={item.id}>
             <WorkRow
-              key={item.id}
               item={item}
               selected={selectedId === item.id}
               // Session groups state the session in the header, so the row's own
@@ -917,9 +1254,56 @@ function WorkSection({
               onSnooze={onSnooze}
               onHandled={onHandled}
             />
+            {groupBy === 'goal' && onMergeGoal && selectedId === item.id && (
+              <GoalMergeHint item={item} items={items} onMerge={onMergeGoal} />
+            )}
+            </Fragment>
               )))}
             </div>
-          ))}
+  )
+
+  // Goal mode: initiative shells on top, the goal blocks inside. A bucket with
+  // no name is the loose tail and renders its one block without a shell.
+  const renderInitiative = (init: InitiativeBlock) => {
+    if (!init.name) return <Fragment key={init.key}>{renderBlock(init.blocks[0])}</Fragment>
+    // Folded by default unless something inside needs the user — the fold is
+    // for finished/quiet groups, not for hiding decisions.
+    const folded = collapsedInitiatives?.[init.key] ?? (init.status !== 'needs-you')
+    return (
+      <div key={init.key} className="ow-initiative" data-status={init.status}>
+        <InitiativeHeader
+          block={init}
+          collapsed={folded}
+          onToggle={() => onToggleInitiative?.(init.key, !folded)}
+        />
+        {!folded && <div className="ow-init-body">{init.blocks.map(renderBlock)}</div>}
+      </div>
+    )
+  }
+
+  return (
+    <section className="ow-section" aria-label={title}>
+      {onToggleCollapsed
+        ? (
+          <Clickable onActivate={onToggleCollapsed} className="ow-section-toggle">
+            <PanelSectionHeader label={title} count={headerCount} subtitle={subtitle} />
+            <ChevronRight
+              className="ow-icon ow-section-chevron"
+              data-open={collapsed ? undefined : 'true'}
+              aria-hidden="true"
+            />
+          </Clickable>
+        )
+        : <PanelSectionHeader label={title} count={headerCount} subtitle={subtitle} />}
+      {collapsed ? null : (
+      <div className="ow-section-list">
+        {groupBy === 'goal'
+          ? (initiatives.length === 0
+            ? <p className="ow-section-empty">{emptyLabel}</p>
+            : initiatives.map(renderInitiative))
+          : shownBlocks.length === 0
+            ? <p className="ow-section-empty">{emptyLabel}</p>
+            : shownBlocks.map(renderBlock)}
       </div>
       )}
       {footer}
@@ -989,6 +1373,10 @@ export default function CrewOverviewApp() {
   // so without a persisted record a dismissed item returns within seconds.
   const [snoozed, setSnoozed] = useState<Record<string, number>>(() => readStore(SNOOZE_KEY))
   const [handled, setHandled] = useState<Record<string, number>>(() => readStore(HANDLED_KEY))
+  const [goalVerdicts, setGoalVerdicts] = useState<GoalVerdicts>(() => readStore(GOAL_VERDICTS_KEY, { merged: [], split: [] }))
+  const [initiatives, setInitiatives] = useState<Initiative[]>([])
+  const [collapsedInitiatives, setCollapsedInitiatives] = useState<Record<string, boolean>>(() => readStore(INITIATIVE_COLLAPSED_KEY))
+  const [selectedGoalKey, setSelectedGoalKey] = useState<string | null>(null)
   const [doneCollapsed, setDoneCollapsed] = useState<boolean>(() => readStore<boolean | null>(DONE_COLLAPSED_KEY, null) ?? true)
   // Instructions sent from here. They land in ANOTHER session's transcript, so the
   // Conductor has to keep its own record or the conversation loses the user's turn.
@@ -1111,6 +1499,22 @@ export default function CrewOverviewApp() {
     return () => { cancelled = true }
   }, [sources])
 
+  // Initiative buckets from projects.md, once per load. A gateway without the
+  // backend route just yields no initiative cards — the flat goal list.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const payload = await apiRef.current.get<{ initiatives?: Initiative[] }>('/api/apps/crew-manager/initiatives')
+        if (cancelled || !mountedRef.current) return
+        setInitiatives((payload?.initiatives ?? []).filter(bucket => bucket?.name))
+      } catch {
+        // Degrade silently: the Goal view works without buckets.
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
   /*
    * Recall runs on the query, not on the board.
    *
@@ -1151,8 +1555,8 @@ export default function CrewOverviewApp() {
     // into it: real state wins on the next poll, and the ack expires on its own.
     () => applyInstructed(normalizeWorkItems(sources ?? {
       slots: [], approvals: [], agents: [], workflows: [], crons: [], artifacts: [],
-    }, workCopy, summaries, stalls, loops), instructed),
-    [sources, summaries, stalls, loops, instructed],
+    }, workCopy, summaries, stalls, loops, goalVerdicts), instructed),
+    [sources, summaries, stalls, loops, instructed, goalVerdicts],
   )
   const setAside = useMemo(
     () => applySetAside(derived, snoozed, handled),
@@ -1163,15 +1567,27 @@ export default function CrewOverviewApp() {
     [setAside],
   )
   const counts = useMemo(() => workCounts(items), [items])
+  // Finished goals per session, so a card in Needs you / In progress can offer
+  // that session's ledger without the Done section having to be open.
+  const doneBySession = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const item of items) {
+      if (item.state !== 'done' || !item.sessionKey) continue
+      const list = map[item.sessionKey]
+      if (list) list.push(item.title)
+      else map[item.sessionKey] = [item.title]
+    }
+    return map
+  }, [items])
   const selected = useMemo(
     () => items.find(item => item.id === selectedId) ?? null,
     [items, selectedId],
   )
   const visibleItems = useMemo(() => {
     const searched = searchWorkItems(items, query)
-    // PR grouping spans states — one PR carries its done and needs-you work at
-    // once — so the state filter does not narrow it; only search does.
-    if (groupBy === 'pr' || query.trim() || filter === 'all') return searched
+    // PR and Goal grouping span states — one PR or one goal carries its done and
+    // needs-you work at once — so the state filter does not narrow them.
+    if (groupBy === 'pr' || groupBy === 'goal' || query.trim() || filter === 'all') return searched
     return searched.filter(item => item.state === filter)
   }, [filter, items, query, groupBy])
 
@@ -1284,6 +1700,47 @@ export default function CrewOverviewApp() {
    */
   const quoted = selected && !selected.permissionId ? selected : null
 
+  // Two-level goal clustering lives in the parent so the Conductor can resolve
+  // a selected goal's members for context and routing.
+  const initiativeBlocks = useMemo(
+    () => (groupBy === 'goal' ? clusterByInitiative(visibleItems, initiatives, goalVerdicts) : []),
+    [groupBy, visibleItems, initiatives, goalVerdicts],
+  )
+  // Re-derived each render: a poll can reshape the clusters, and a quote must
+  // describe the board as it is now, not as it was when clicked.
+  const selectedGoal = useMemo(() => {
+    if (!selectedGoalKey) return null
+    for (const init of initiativeBlocks) {
+      const block = init.blocks.find(candidate => candidate.key === selectedGoalKey)
+      if (block && block.items.length > 0) return block
+    }
+    return null
+  }, [selectedGoalKey, initiativeBlocks])
+  const goalTarget = selectedGoal ? goalRouteTarget(selectedGoal.items) : null
+
+  const [addingGoal, setAddingGoal] = useState(false)
+  const goalCandidates = useMemo(
+    () => (groupBy === 'goal' ? initiativeCandidates(sources?.slots ?? [], initiatives) : []),
+    [groupBy, sources, initiatives],
+  )
+  const addInitiative = useCallback(async (name: string, aliases: string[] = []) => {
+    if (!name.trim()) return
+    setAddingGoal(true)
+    try {
+      const payload = await apiRef.current.post<{ initiatives?: Initiative[] }>(
+        '/api/apps/crew-manager/initiatives',
+        { name: name.trim(), aliases },
+      )
+      if (mountedRef.current && payload?.initiatives) {
+        setInitiatives(payload.initiatives.filter(bucket => bucket?.name))
+      }
+    } catch {
+      // Gateway without the write route: the panel simply stays.
+    } finally {
+      if (mountedRef.current) setAddingGoal(false)
+    }
+  }, [])
+
   const resolvePermission = useCallback(async (id: string, approve: boolean) => {
     if (resolvingApproval) return
     setResolvingApproval(id)
@@ -1329,6 +1786,29 @@ export default function CrewOverviewApp() {
     writeStore(SNOOZE_KEY, {})
   }, [])
 
+  // A ruling in one direction erases the opposite one, so the last call wins.
+  const splitGoal = useCallback((pairs: string[]) => {
+    setGoalVerdicts(current => {
+      const next: GoalVerdicts = {
+        merged: current.merged.filter(key => !pairs.includes(key)),
+        split: [...new Set([...current.split, ...pairs])],
+      }
+      writeStore(GOAL_VERDICTS_KEY, next)
+      return next
+    })
+  }, [])
+
+  const mergeGoal = useCallback((pair: string) => {
+    setGoalVerdicts(current => {
+      const next: GoalVerdicts = {
+        merged: [...new Set([...current.merged, pair])],
+        split: current.split.filter(key => key !== pair),
+      }
+      writeStore(GOAL_VERDICTS_KEY, next)
+      return next
+    })
+  }, [])
+
   const toggleDone = useCallback(() => {
     setDoneCollapsed(current => {
       writeStore(DONE_COLLAPSED_KEY, !current)
@@ -1361,6 +1841,37 @@ export default function CrewOverviewApp() {
    * shows. ChatEmbed owns the optimistic echo and polling, so we only deliver.
    */
   const handleConductorSend = useCallback(async (message: string) => {
+    // A quoted GOAL routes to the session actively on it — it already holds the
+    // context. Never broadcast: duplicated instructions are the duplicated work
+    // this view exists to prevent. The quote bar shows the target before send.
+    if (selectedGoal && goalTarget?.sessionKey) {
+      const slot = goalTarget.sessionKey
+      const members = selectedGoal.items
+        .map(item => `- ${item.references.find(ref => ref.kind === 'session')?.label ?? item.sessionKey}: ${stateLabels[item.state]}`)
+        .join('\n')
+      await apiRef.current.post(`/api/chat/slots/${encodeURIComponent(slot)}/context`, {
+        content: [
+          `Crew Manager: this instruction concerns the goal "${selectedGoal.items[0].title}", which spans sessions:`,
+          members,
+          'You are the session actively on it, so the instruction is routed to you. Do not duplicate work already done in the other sessions.',
+        ].join('\n'),
+        source: 'crew-manager',
+        ephemeral: true,
+      }).catch(() => { /* context is best-effort */ })
+      await apiRef.current.post('/api/chat', { message, slot }).catch(error => {
+        if (!(error instanceof SyntaxError)) throw error
+      })
+      if (!mountedRef.current) return
+      setInstructed(current => ({ ...current, [goalTarget.id]: Date.now() }))
+      setWatchedSessions(current => (current.includes(slot) ? current : [...current, slot]))
+      const label = goalTarget.references.find(ref => ref.kind === 'session')?.label ?? goalTarget.title
+      setDeliveryReceipt(goalTarget.moving || goalTarget.state === 'running'
+        ? `Sent to ${label} — the active session on this goal`
+        : `Sent to ${label} — resuming the last session on this goal`)
+      setSelectedGoalKey(null)
+      void loadSources()
+      return
+    }
     const target = selected && !selected.permissionId ? selected : null
     if (target?.sessionKey) {
       const slot = target.sessionKey
@@ -1384,7 +1895,7 @@ export default function CrewOverviewApp() {
     await apiRef.current.post('/api/chat', { message, slot: CONDUCTOR_SLOT }).catch(error => {
       if (!(error instanceof SyntaxError)) throw error
     })
-  }, [selected, items, loadSources])
+  }, [selected, selectedGoal, goalTarget, items, loadSources])
 
   const recalled = useMemo(
     // Dedupe against what the live results already show: a session can be both
@@ -1399,11 +1910,26 @@ export default function CrewOverviewApp() {
     running: visibleItems.filter(item => item.state === 'running'),
     done: visibleItems.filter(item => item.state === 'done'),
   }
+
+  const toggleInitiative = useCallback((key: string, next: boolean) => {
+    setCollapsedInitiatives(current => {
+      const updated = { ...current, [key]: next }
+      writeStore(INITIATIVE_COLLAPSED_KEY, updated)
+      return updated
+    })
+  }, [])
+
+  const selectGoal = useCallback((key: string) => {
+    setSelectedGoalKey(current => (current === key ? null : key))
+    setSelectedId(null)
+    setDeliveryReceipt(null)
+  }, [])
   const openSession = (slot: string) => navigate(`/chat?sid=${encodeURIComponent(slot)}`)
   const selectItem = (item: WorkItem) => {
     // Clicking the selected card again deselects it — selection is a mode, and a
     // mode you can enter but not leave from the same place is a trap.
     setSelectedId(current => (current === item.id ? null : item.id))
+    setSelectedGoalKey(null)
     setDeliveryReceipt(null)
   }
 
@@ -1422,7 +1948,7 @@ export default function CrewOverviewApp() {
                   filter sit above the list. */}
               <div className="ow-groupby" role="group" aria-label="Group by">
                 <span className="ow-groupby-label">Group by</span>
-                {(['session', 'pr'] as GroupMode[]).map(mode => (
+                {(['session', 'pr', 'goal'] as GroupMode[]).map(mode => (
                   <Btn
                     key={mode}
                     onClick={() => setGroupBy(mode)}
@@ -1430,7 +1956,7 @@ export default function CrewOverviewApp() {
                     data-selected={groupBy === mode}
                     className="ow-groupby-opt"
                   >
-                    {mode === 'session' ? 'Session' : 'PR'}
+                    {mode === 'session' ? 'Session' : mode === 'pr' ? 'PR' : 'Goal'}
                   </Btn>
                 ))}
               </div>
@@ -1464,6 +1990,10 @@ export default function CrewOverviewApp() {
                     </Btn>
                   ))}
                 </div>
+                ) : groupBy === 'goal' ? (
+                  // A goal card spans states, so a state filter would be a control
+                  // that does nothing. Search still narrows.
+                  null
                 ) : (
                 <div className="ow-filters" role="group" aria-label="Filter by state">
                   {(Object.keys(filterLabels) as FilterKey[]).map(key => (
@@ -1536,12 +2066,49 @@ export default function CrewOverviewApp() {
                             />
                           )
                         )
+                        : groupBy === 'goal'
+                        ? (
+                          // Goal-primary: one list, a goal card spans states and
+                          // sessions — "S1 is on it, S2 left it open" is one thing.
+                          <WorkSection
+                            title="Work by goal"
+                            subtitle="The same job across sessions, merged into one card"
+                            items={visibleItems}
+                            selectedId={selectedId}
+                            onSelect={selectItem}
+                            onOpenSession={openSession}
+                onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                permissionBusy={resolvingApproval !== null}
+                onRetry={path => { void retryRun(path) }}
+                retryBusy={retrying !== null}
+                onPickStep={what => { void handleConductorSend(what) }}
+                            groupBy={groupBy}
+                            goalVerdicts={goalVerdicts}
+                            onSplitGoal={splitGoal}
+                            onMergeGoal={mergeGoal}
+                            initiativeBlocks={initiativeBlocks}
+                            collapsedInitiatives={collapsedInitiatives}
+                            onToggleInitiative={toggleInitiative}
+                            selectedGoalKey={selectedGoalKey}
+                            onSelectGoal={selectGoal}
+                            footer={
+                              <GoalBootstrap
+                                candidates={goalCandidates}
+                                prominent={initiatives.length === 0}
+                                busy={addingGoal}
+                                onAdd={(name, aliases) => { void addInitiative(name, aliases) }}
+                              />
+                            }
+                            emptyLabel="No matching work"
+                          />
+                        )
                         : (
                         <>
                           <WorkSection
                             title="Needs you"
                             subtitle="Waiting on a decision or reply from you"
                             items={grouped['needs-you']}
+                            doneBySession={doneBySession}
                             selectedId={selectedId}
                             onSelect={selectItem}
                             onSnooze={snoozeItem}
@@ -1566,6 +2133,7 @@ export default function CrewOverviewApp() {
                             title="In progress"
                             subtitle="Being worked on right now"
                             items={grouped.running}
+                            doneBySession={doneBySession}
                             selectedId={selectedId}
                             onSelect={selectItem}
                             onOpenSession={openSession}
@@ -1636,26 +2204,10 @@ export default function CrewOverviewApp() {
               {conductorAvailable
                 ? (
                   <div className="ow-chat-panel">
-                    {/* Quote bar and permissions sit ABOVE the embed; the embed owns
-                        the transcript and composer, so anything that must stay put
-                        (an approval, the current target) lives outside its scroll. */}
-                    {quoted && (
-                      <div className="ow-quote">
-                        <div className="ow-quote-body">
-                          <span className="ow-eyebrow">
-                            {quoted.sessionKey ? 'Instructing' : 'Quoted'}
-                          </span>
-                          <span className="ow-quote-title" title={quoted.title}>{quoted.title}</span>
-                        </div>
-                        <Btn
-                          className="ow-quote-clear"
-                          aria-label="Remove the quoted work item"
-                          onClick={() => { setSelectedId(null); setDeliveryReceipt(null) }}
-                        >
-                          Clear
-                        </Btn>
-                      </div>
-                    )}
+                    {/* Permissions and the receipt stay ABOVE the embed — they are
+                        alerts that must not scroll away. The instructing target
+                        instead DOCKS above the composer (ow-quote-docked, after the
+                        embed) because it modifies the message about to be typed. */}
                     {permissions.length > 0 && (
                       <div className="ow-permissions" role="alert">
                         {permissions.map(permission => (
@@ -1688,10 +2240,52 @@ export default function CrewOverviewApp() {
                       slotKey={CONDUCTOR_SLOT}
                       frameless
                       startAtBottom
-                      placeholder={quoted?.sessionKey ? 'New instructions for this session…' : 'Ask across your work…'}
+                      placeholder={selectedGoal
+                        ? 'Instruction for this goal…'
+                        : quoted?.sessionKey ? 'New instructions for this session…' : 'Ask across your work…'}
                       onSend={handleConductorSend}
                     />
                     </div>
+                    {/* Docked just above the composer, where the target belongs —
+                        ChatEmbed exposes no slot inside itself, so it floats over the
+                        transcript's foot via absolute positioning. */}
+                    {selectedGoal && goalTarget ? (
+                      <div className="ow-quote ow-quote-docked">
+                        <div className="ow-quote-body ow-quote-goal">
+                          <div className="ow-quote-line">
+                            <span className="ow-eyebrow">Instructing goal</span>
+                            <span className="ow-quote-title" title={selectedGoal.items[0].title}>{selectedGoal.items[0].title}</span>
+                          </div>
+                          {/* Name the routing target BEFORE send — visibility is the
+                              confirmation. Its own line: it must never squeeze the title. */}
+                          <span className="ow-quote-route ow-truncate">
+                            → {goalTarget.references.find(ref => ref.kind === 'session')?.label ?? goalTarget.title}
+                            {goalTarget.moving || goalTarget.state === 'running' ? ' (active)' : ' (will resume)'}
+                          </span>
+                        </div>
+                        <Btn
+                          className="ow-quote-clear"
+                          aria-label="Remove the quoted goal"
+                          onClick={() => { setSelectedGoalKey(null); setDeliveryReceipt(null) }}
+                        >
+                          Clear
+                        </Btn>
+                      </div>
+                    ) : quoted && (
+                      <div className="ow-quote ow-quote-docked">
+                        <div className="ow-quote-body">
+                          <span className="ow-eyebrow">{quoted.sessionKey ? 'Instructing' : 'Quoted'}</span>
+                          <span className="ow-quote-title" title={quoted.title}>{quoted.title}</span>
+                        </div>
+                        <Btn
+                          className="ow-quote-clear"
+                          aria-label="Remove the quoted work item"
+                          onClick={() => { setSelectedId(null); setDeliveryReceipt(null) }}
+                        >
+                          Clear
+                        </Btn>
+                      </div>
+                    )}
                   </div>
                 )
                 : <div className="ow-chat-loading"><ContentSkeleton rows={4} /></div>}
