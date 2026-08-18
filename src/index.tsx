@@ -16,7 +16,7 @@ import {
   Users,
   Zap as Workflow,
 } from 'lucide-react'
-import { useAppApi, useNavigate, useNavBadge } from '@kirocrew/app-sdk'
+import { useAppApi, useNavigate, useNavBadge, ChatEmbed } from '@kirocrew/app-sdk'
 import {
   Badge,
   Btn,
@@ -50,6 +50,8 @@ import {
 } from './recall'
 import {
   applyInstructed,
+  clusterBy,
+  rollUpSessions,
   applySetAside,
   inDoneWindow,
   pendingPermissions,
@@ -68,9 +70,10 @@ import {
   type InstructedItems,
   type PendingPermission,
   type ResponseVerb,
-  type SentInstruction,
   type WorkItem,
   type WorkReference,
+  type GroupMode,
+  type SessionRollup,
   type WorkReferenceKind,
   type WorkState,
 } from './model'
@@ -91,22 +94,6 @@ interface SourcesResponse {
   workflows: WorkflowRow[]
   crons: CronJob[]
   artifacts: Artifact[]
-}
-
-interface ConductorMessage {
-  role: string
-  content: string
-  ts?: string
-}
-
-interface ConductorSlotResponse {
-  messages?: ConductorMessage[]
-  running?: boolean
-}
-
-interface ConductorDelivery {
-  session: string
-  message: string
 }
 
 const SNOOZE_KEY = 'crew-manager.snoozed'
@@ -132,26 +119,6 @@ function writeStore(key: string, value: unknown): void {
 
 const CONDUCTOR_SLOT = 'crew-manager-conductor'
 const SOURCE_POLL_MS = 5_000
-const DELIVERY_PATTERN = /<crew-manager-delivery>([\s\S]*?)<\/crew-manager-delivery>/g
-
-function parseConductorDeliveries(content: string): ConductorDelivery[] {
-  const deliveries: ConductorDelivery[] = []
-  for (const match of content.matchAll(DELIVERY_PATTERN)) {
-    try {
-      const value = JSON.parse(match[1]) as Partial<ConductorDelivery>
-      if (typeof value.session === 'string' && typeof value.message === 'string' && value.message.trim()) {
-        deliveries.push({ session: value.session, message: value.message.trim() })
-      }
-    } catch {
-      // Ignore incomplete directives while the Conductor response is streaming.
-    }
-  }
-  return deliveries
-}
-
-function visibleConductorContent(content: string): string {
-  return content.replace(DELIVERY_PATTERN, '').trim()
-}
 
 const WORK_COPY: Record<WorkCopyKey, string> = {
   session: 'Session',
@@ -171,6 +138,7 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   approval_needed: 'Approval needed',
   tool_call_waiting: 'Allow or refuse a waiting tool call',
   agent_work: 'Agent work',
+  agent_done: 'This agent run finished',
   agent_failed: 'This agent stopped before finishing — nothing to do here',
   workflow_failed: 'This workflow stopped before finishing',
   workflow_failed_generic: 'This workflow stopped before finishing',
@@ -442,27 +410,7 @@ function metaReferences(item: WorkItem) {
  * single-item session a header would double the row count and say nothing — 16
  * finished items would become 32 rows.
  */
-function clusterBySession(items: WorkItem[]): { sessionKey: string | null; items: WorkItem[] }[] {
-  const blocks: { sessionKey: string | null; items: WorkItem[] }[] = []
-  const bySession = new Map<string, WorkItem[]>()
 
-  items.forEach(item => {
-    if (!item.sessionKey) {
-      blocks.push({ sessionKey: null, items: [item] })
-      return
-    }
-    const existing = bySession.get(item.sessionKey)
-    if (existing) {
-      existing.push(item)
-      return
-    }
-    const block = { sessionKey: item.sessionKey, items: [item] }
-    bySession.set(item.sessionKey, block.items)
-    blocks.push(block)
-  })
-
-  return blocks
-}
 
 function SessionBlockHeader({
   item,
@@ -494,6 +442,74 @@ function SessionBlockHeader({
       >
         Open
       </Btn>
+    </div>
+  )
+}
+
+interface PrChecks {
+  available: boolean
+  total?: number
+  passing?: number
+  failing?: number
+  pending?: number
+}
+
+/**
+ * A session under a PR: who is on this change and where they stand. The row's
+ * leading (most-urgent) work item is the select target, so quoting it in the
+ * Conductor still works; Open goes to the session itself.
+ */
+function SessionRollupRow({ session, selected, onSelect, onOpen }: {
+  session: SessionRollup
+  selected: boolean
+  onSelect: () => void
+  onOpen: () => void
+}) {
+  return (
+    <Clickable onActivate={onSelect} className="ow-srow" data-selected={selected}>
+      <MessageSquare className="ow-icon" aria-hidden="true" />
+      <div className="ow-srow-body">
+        <div className="ow-srow-name ow-truncate">{session.label}</div>
+        <div className="ow-srow-state ow-truncate">{session.leading.summary}</div>
+      </div>
+      <span className="ow-srow-badge">{stateBadge(session.leading)}</span>
+      <Btn
+        className="ow-srow-open"
+        aria-label={`Open ${session.label}`}
+        onClick={event => { event.stopPropagation(); onOpen() }}
+      >
+        Open
+      </Btn>
+    </Clickable>
+  )
+}
+
+function PrBlockHeader({ reference, checks }: { reference: WorkReference; checks?: PrChecks }) {
+  const RefIcon = referenceIcon[reference.kind]
+  const bad = reference.status ? /fail|conflict|closed/.test(reference.status) : false
+  return (
+    <div className="ow-pr-head">
+      <div className="ow-pr-head-top">
+        <RefIcon className="ow-icon" aria-hidden="true" />
+        <span className="ow-truncate ow-block-name">{reference.label}</span>
+        {reference.url && (
+          <a className="ow-block-open" href={reference.url} target="_blank" rel="noopener noreferrer">Open</a>
+        )}
+      </div>
+      <div className="ow-pr-status-line">
+        {/* Real per-check counts from GitHub when available; otherwise the coarse
+            ci status the platform gives natively. */}
+        {checks?.available && (checks.total ?? 0) > 0
+          ? (
+            <span className="ow-pr-dot" data-bad={(checks.failing ?? 0) > 0 ? 'true' : undefined}>
+              {checks.passing ?? 0}/{checks.total} checks passing
+              {(checks.failing ?? 0) > 0 ? ` · ${checks.failing} failing` : ''}
+            </span>
+          )
+          : reference.status && (
+            <span className="ow-pr-dot" data-bad={bad ? 'true' : undefined}>{reference.status}</span>
+          )}
+      </div>
     </div>
   )
 }
@@ -781,6 +797,8 @@ function WorkSection({
   footer,
   collapsed,
   onToggleCollapsed,
+  groupBy,
+  prChecks,
   emptyLabel,
 }: {
   title: string
@@ -800,6 +818,8 @@ function WorkSection({
   /** When set, the header toggles the list; undefined means always open. */
   collapsed?: boolean
   onToggleCollapsed?: () => void
+  groupBy: GroupMode
+  prChecks?: Record<string, PrChecks>
   emptyLabel: string
 }) {
   return (
@@ -820,29 +840,45 @@ function WorkSection({
       <div className="ow-section-list">
         {items.length === 0
           ? <p className="ow-section-empty">{emptyLabel}</p>
-          : clusterBySession(items).map(block => (
+          : clusterBy(items, groupBy).map(block => (
             <div
-              key={block.sessionKey ?? block.items[0].id}
+              key={block.key}
               className="ow-block"
-              // Every card that belongs to a session gets the header, whether it
+              // Every card that belongs to a group gets the header, whether it
               // holds one row or five. One row is not a different KIND of thing.
-              data-grouped={block.sessionKey ? 'true' : undefined}
+              data-grouped={block.header ? 'true' : undefined}
             >
-              {block.sessionKey && (
+              {block.header === 'session' && block.sessionKey && (
                 <SessionBlockHeader
                   item={block.items[0]}
                   onOpen={() => onOpenSession(block.sessionKey as string)}
                 />
               )}
-              {block.items.map((item, index) => (
+              {block.header === 'pr' && block.changeRef && (
+                <PrBlockHeader reference={block.changeRef} checks={prChecks?.[block.changeRef.url ?? '']} />
+              )}
+              {block.header === 'pr' ? (
+                <>
+                  <div className="ow-pr-sublabel">Sessions on this PR</div>
+                  {rollUpSessions(block.items).map(session => (
+                    <SessionRollupRow
+                      key={session.sessionKey}
+                      session={session}
+                      selected={selectedId === session.leading.id}
+                      onSelect={() => onSelect(session.leading)}
+                      onOpen={() => onOpenSession(session.sessionKey)}
+                    />
+                  ))}
+                </>
+              ) : (
+              block.items.map((item) => (
             <WorkRow
               key={item.id}
               item={item}
               selected={selectedId === item.id}
-              // The header owns the session, project and change links, so the
-              // row's own meta line would just repeat them. This is a RELOCATION
-              // of that line, not an addition — the density cost is zero.
-              continuation={Boolean(block.sessionKey)}
+              // Session groups state the session in the header, so the row's own
+              // meta line would repeat it — suppress it.
+              continuation={block.header === 'session'}
               whyRanked={
                 item.state === 'needs-you' && item.action !== 'resume'
                   ? explainRank(rankWorkItem(item), workCopy)
@@ -858,7 +894,7 @@ function WorkSection({
               onSnooze={onSnooze}
               onHandled={onHandled}
             />
-              ))}
+              )))}
             </div>
           ))}
       </div>
@@ -883,20 +919,10 @@ function contextMessage(item: WorkItem | null, items: WorkItem[]): string {
     return [
       'Crew Manager context: workspace overview.',
       ...briefing,
-      'Act as the Conductor: assess the work and decide whether intervention is warranted.',
-      'No referenced session is selected, so discuss only and do not emit a delivery directive.',
-      'Always tell the user that you did not intervene and briefly explain why.',
+      'Answer the user about the state of their work. This is a conversation, not an action channel.',
     ].join('\n')
   }
   const references = item.references.map(ref => `${ref.kind}: ${ref.label} (${ref.id})`).join('\n')
-  const deliveryRule = item.sessionKey
-    ? [
-      'You own the decision to intervene in the referenced session. Selection alone does not require intervention.',
-      `If intervention is warranted, append exactly one directive: <crew-manager-delivery>{"session":${JSON.stringify(item.sessionKey)},"message":"your instruction"}</crew-manager-delivery>`,
-      'Only target that referenced session. The app validates the target, delivers once, and shows the user a receipt.',
-      'Always tell the user whether you intervened and briefly explain why.',
-    ]
-    : ['No referenced session is available, so discuss only and do not emit a delivery directive.']
   return [
     `Crew Manager context: ${item.title}`,
     ...briefing,
@@ -907,8 +933,7 @@ function contextMessage(item: WorkItem | null, items: WorkItem[]): string {
     `Provenance: ${item.provenance}`,
     item.sessionKey ? `Referenced session: ${item.sessionKey}` : 'Referenced session: none',
     `References:\n${references}`,
-    'This context was selected silently. Act as the Conductor and decide whether another session needs direction.',
-    ...deliveryRule,
+    'This context was selected silently. Answer the user about it; the user sends any instruction to a session themselves.',
   ].filter((line): line is string => Boolean(line)).join('\n')
 }
 
@@ -919,6 +944,8 @@ export default function CrewOverviewApp() {
   const navigate = useNavigate()
   const setNavBadge = useNavBadge()
   const [filter, setFilter] = useState<FilterKey>('all')
+  const [groupBy, setGroupBy] = useState<GroupMode>('session')
+  const [prChecks, setPrChecks] = useState<Record<string, PrChecks>>({})
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [deliveryReceipt, setDeliveryReceipt] = useState<string | null>(null)
@@ -929,7 +956,6 @@ export default function CrewOverviewApp() {
   const summaryStampsRef = useRef(new Map<string, string>())
   const [stalls, setStalls] = useState<Record<string, StallFinding>>({})
   const [instructed, setInstructed] = useState<InstructedItems>({})
-  const [isInstructing, setIsInstructing] = useState(false)
   // Sessions instructed from here. Kept beyond the acknowledgement window because
   // an approval can surface well after the instruction lands.
   const [watchedSessions, setWatchedSessions] = useState<string[]>([])
@@ -942,7 +968,6 @@ export default function CrewOverviewApp() {
   const [doneCollapsed, setDoneCollapsed] = useState<boolean>(() => readStore<boolean | null>(DONE_COLLAPSED_KEY, null) ?? true)
   // Instructions sent from here. They land in ANOTHER session's transcript, so the
   // Conductor has to keep its own record or the conversation loses the user's turn.
-  const [sentInstructions, setSentInstructions] = useState<SentInstruction[]>([])
   const [recall, setRecall] = useState<RecallState>(EMPTY_RECALL)
   const [loops, setLoops] = useState<Record<string, ErrorLoopFinding>>({})
   // Flips false the first time the backend route is unreachable.
@@ -950,27 +975,16 @@ export default function CrewOverviewApp() {
   const [sourcesLoading, setSourcesLoading] = useState(true)
   const [sourcesError, setSourcesError] = useState<Error | null>(null)
   const [conductorCreated, setConductorCreated] = useState(false)
-  const [conductorMessages, setConductorMessages] = useState<ConductorMessage[]>([])
-  const [conductorRunning, setConductorRunning] = useState(false)
-  const [conductorInput, setConductorInput] = useState('')
   const [conductorError, setConductorError] = useState<string | null>(null)
-  const [isConductorSending, setIsConductorSending] = useState(false)
   const mountedRef = useRef(true)
   const sourceRequestRef = useRef(0)
-  const conductorRequestRef = useRef(0)
   const conductorAttemptedRef = useRef(false)
-  const conductorHistoryInitializedRef = useRef(false)
-  const processedDeliveriesRef = useRef(new Set<string>())
-  const pendingDeliveryTargetRef = useRef<string | null>(null)
-  const pendingDeliveryTitleRef = useRef<string | null>(null)
-  const conductorScrollerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
       sourceRequestRef.current += 1
-      conductorRequestRef.current += 1
     }
   }, [])
 
@@ -1135,6 +1149,25 @@ export default function CrewOverviewApp() {
     return searched.filter(item => item.state === filter)
   }, [filter, items, query])
 
+  useEffect(() => {
+    if (groupBy !== 'pr') return
+    // Only GitHub pull URLs; the backend caches per URL and degrades gracefully.
+    const urls = new Set<string>()
+    for (const item of visibleItems) {
+      for (const ref of item.references) {
+        if ((ref.kind === 'change') && ref.url && /github\.com\/.+\/pull\//.test(ref.url)) urls.add(ref.url)
+      }
+    }
+    let cancelled = false
+    for (const url of urls) {
+      if (prChecks[url]) continue
+      apiRef.current.get<PrChecks>(`/pr-checks?url=${encodeURIComponent(url)}`)
+        .then(payload => { if (!cancelled && mountedRef.current) setPrChecks(cur => ({ ...cur, [url]: payload })) })
+        .catch(() => { /* leave unset; header falls back to coarse status */ })
+    }
+    return () => { cancelled = true }
+  }, [groupBy, visibleItems, prChecks])
+
   useEffect(() => setNavBadge(counts['needs-you']), [counts, setNavBadge])
   useEffect(() => {
     if (selectedId && !items.some(item => item.id === selectedId)) setSelectedId(null)
@@ -1189,171 +1222,6 @@ export default function CrewOverviewApp() {
       )
     })
   }, [api, conductorSlot, loadSources, sources])
-
-  const processConductorDeliveries = useCallback(async (messages: ConductorMessage[]) => {
-    const candidates = messages.flatMap((message, index) =>
-      message.role === 'assistant'
-        ? parseConductorDeliveries(message.content).map(delivery => ({
-          delivery,
-          key: `${message.ts ?? index}:${delivery.session}:${delivery.message}`,
-        }))
-        : [],
-    )
-    if (!conductorHistoryInitializedRef.current) {
-      candidates.forEach(candidate => processedDeliveriesRef.current.add(candidate.key))
-      conductorHistoryInitializedRef.current = true
-      return
-    }
-    for (const candidate of candidates) {
-      if (processedDeliveriesRef.current.has(candidate.key)) continue
-      processedDeliveriesRef.current.add(candidate.key)
-      const expectedTarget = pendingDeliveryTargetRef.current
-      if (!expectedTarget || candidate.delivery.session !== expectedTarget) {
-        setConductorError('Conductor proposed a delivery outside the selected session; Crew Manager blocked it.')
-        continue
-      }
-      try {
-        await apiRef.current.post('/api/chat', { message: candidate.delivery.message, slot: candidate.delivery.session })
-      } catch (error) {
-        if (!(error instanceof SyntaxError)) {
-          setConductorError(error instanceof Error ? error.message : 'Conductor delivery failed')
-          continue
-        }
-      }
-      if (mountedRef.current) {
-        setDeliveryReceipt(`Conductor sent direction to ${pendingDeliveryTitleRef.current ?? candidate.delivery.session}`)
-      }
-    }
-  }, [])
-
-  const loadConductor = useCallback(async () => {
-    const request = ++conductorRequestRef.current
-    try {
-      const detail = await apiRef.current.get<ConductorSlotResponse>(
-        `/api/chat/slots/${encodeURIComponent(CONDUCTOR_SLOT)}`,
-      )
-      if (!mountedRef.current || request !== conductorRequestRef.current) return
-      const messages = Array.isArray(detail.messages) ? detail.messages : []
-      setConductorMessages(messages)
-      setConductorRunning(Boolean(detail.running))
-      setConductorError(null)
-      await processConductorDeliveries(messages)
-    } catch (error) {
-      if (mountedRef.current && request === conductorRequestRef.current) {
-        setConductorError(error instanceof Error ? error.message : 'Unable to load Conductor')
-      }
-    }
-  }, [processConductorDeliveries])
-
-  useEffect(() => {
-    if (!conductorAvailable) return
-    void loadConductor()
-    const interval = window.setInterval(
-      () => { void loadConductor() },
-      conductorRunning ? 1_000 : SOURCE_POLL_MS,
-    )
-    return () => window.clearInterval(interval)
-  }, [conductorAvailable, conductorRunning, loadConductor])
-
-  useEffect(() => {
-    const scroller = conductorScrollerRef.current
-    if (scroller) scroller.scrollTop = scroller.scrollHeight
-  }, [conductorMessages])
-
-  const sendPrivate = useCallback(async (message: string) => {
-    const currentApi = apiRef.current
-    pendingDeliveryTargetRef.current = selected?.sessionKey ?? null
-    pendingDeliveryTitleRef.current = selected?.title ?? null
-    setDeliveryReceipt(null)
-    await currentApi.post(`/api/chat/slots/${encodeURIComponent(CONDUCTOR_SLOT)}/context`, {
-      content: contextMessage(selected, items),
-      source: 'crew-manager',
-      ephemeral: true,
-    })
-    try {
-      // Same reason as slot creation: naming an agent we cannot verify is how a
-      // send succeeds and no answer ever arrives. An omitted agent binds the
-      // platform's default.
-      await currentApi.post('/api/chat', { message, slot: CONDUCTOR_SLOT })
-    } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error
-    }
-  }, [selected])
-
-  const submitConductorMessage = useCallback(async (raw: string) => {
-    const message = raw.trim()
-    if (!message || isConductorSending) return
-    setConductorError(null)
-    setIsConductorSending(true)
-    try {
-      await sendPrivate(message)
-      await loadConductor()
-    } catch (error) {
-      if (mountedRef.current) {
-        setConductorError(error instanceof Error ? error.message : 'Unable to send your message')
-      }
-    } finally {
-      if (mountedRef.current) setIsConductorSending(false)
-    }
-  }, [isConductorSending, loadConductor, sendPrivate])
-
-  /**
-   * Send the user's instruction to the session behind the QUOTED work item.
-   *
-   * The quoted item is the target. That is what selection means here: the item is
-   * quoted in the Conductor, the user writes, and the instruction lands in the
-   * session that item belongs to. No routing decision is left implicit.
-   *
-   * A user-typed, user-aimed message is the path the spec says stays as it is; the
-   * blocked half is the Manager acting on a session by itself.
-   *
-   * Three things happen after a successful send, and all three are needed: the
-   * Conductor records what was sent, the receipt says where it went, and the item
-   * is acknowledged as In progress so the queue does not still show it as waiting
-   * on the user.
-   */
-  const instructSelected = useCallback(async (instruction: string) => {
-    const message = instruction.trim()
-    const target = selected
-    if (!message || !target?.sessionKey || isInstructing) return
-    setIsInstructing(true)
-    setConductorError(null)
-    try {
-      try {
-        await apiRef.current.post('/api/chat', { message, slot: target.sessionKey })
-      } catch (error) {
-        if (!(error instanceof SyntaxError)) throw error
-      }
-      if (!mountedRef.current) return
-      setConductorInput('')
-      // The instruction becomes part of the conversation and the quote leaves the
-      // box. Keeping it quoted after sending read as "not sent yet", and the
-      // message itself went to another session's transcript, so this view showed
-      // no trace of what the user had just done.
-      setSentInstructions(current => [...current, {
-        ts: new Date().toISOString(),
-        target: target.title,
-        message,
-      }])
-      setSelectedId(null)
-      setInstructed(current => ({ ...current, [target.id]: Date.now() }))
-      setWatchedSessions(current => (
-        current.includes(target.sessionKey as string) ? current : [...current, target.sessionKey as string]
-      ))
-      setDeliveryReceipt(`Sent new instructions to ${target.title}`)
-      void loadSources()
-    } catch (error) {
-      if (mountedRef.current) {
-        setConductorError(
-          error instanceof Error
-            ? `Could not send that to the session: ${error.message}`
-            : 'Could not send that to the session',
-        )
-      }
-    } finally {
-      if (mountedRef.current) setIsInstructing(false)
-    }
-  }, [isInstructing, loadSources, selected])
 
   /**
    * Approvals blocking sessions the Conductor instructed.
@@ -1449,43 +1317,36 @@ export default function CrewOverviewApp() {
     }
   }, [loadSources, retrying])
 
-  const submitConductor = useCallback(async () => {
-    const message = conductorInput.trim()
-    if (!message || isConductorSending || isInstructing) return
-    // A quoted item with a session is an instruction for that session. Nothing
-    // quoted is a question for the Conductor about the fleet.
-    if (selected?.sessionKey) {
-      await instructSelected(message)
+  /**
+   * The one composer, routed. A quoted item's message is an instruction to that
+   * session; anything else talks to the Conductor, whose transcript the embed
+   * shows. ChatEmbed owns the optimistic echo and polling, so we only deliver.
+   */
+  const handleConductorSend = useCallback(async (message: string) => {
+    const target = selected && !selected.permissionId ? selected : null
+    if (target?.sessionKey) {
+      const slot = target.sessionKey
+      await apiRef.current.post('/api/chat', { message, slot }).catch(error => {
+        if (!(error instanceof SyntaxError)) throw error
+      })
+      if (!mountedRef.current) return
+      setInstructed(current => ({ ...current, [target.id]: Date.now() }))
+      setWatchedSessions(current => (current.includes(slot) ? current : [...current, slot]))
+      setDeliveryReceipt(`Sent new instructions to ${target.title}`)
+      setSelectedId(null)
+      void loadSources()
       return
     }
-    setConductorInput('')
-    await submitConductorMessage(message)
-  }, [
-    conductorInput,
-    instructSelected,
-    isConductorSending,
-    isInstructing,
-    selected,
-    submitConductorMessage,
-  ])
-
-  /**
-   * The Conductor's own messages plus the instructions sent from here, in time
-   * order. Instructions are the user's turns in this view even though the platform
-   * recorded them against the session they were aimed at.
-   */
-  const visibleConductorMessages = useMemo(() => {
-    const own = conductorMessages
-      .filter(message => message.content?.trim() && (message.role === 'user' || message.role === 'assistant'))
-      .map(message => ({ ...message, sentTo: undefined as string | undefined }))
-    const sent = sentInstructions.map(entry => ({
-      role: 'user' as const,
-      ts: entry.ts,
-      content: entry.message,
-      sentTo: entry.target,
-    }))
-    return [...own, ...sent].sort((a, b) => (a.ts ?? '').localeCompare(b.ts ?? ''))
-  }, [conductorMessages, sentInstructions])
+    // Talk to the Conductor: inject the fleet context, then post to its slot.
+    await apiRef.current.post(`/api/chat/slots/${encodeURIComponent(CONDUCTOR_SLOT)}/context`, {
+      content: contextMessage(selected, items),
+      source: 'crew-manager',
+      ephemeral: true,
+    }).catch(() => { /* context is best-effort */ })
+    await apiRef.current.post('/api/chat', { message, slot: CONDUCTOR_SLOT }).catch(error => {
+      if (!(error instanceof SyntaxError)) throw error
+    })
+  }, [selected, items, loadSources])
 
   const recalled = useMemo(
     // Dedupe against what the live results already show: a session can be both
@@ -1527,7 +1388,32 @@ export default function CrewOverviewApp() {
                 aria-label="Search work"
                 className="ow-search"
               />
-              <div className="ow-filters">
+              {/* Group by is the primary view mode — it changes the whole
+                  structure — so it lives in the nav. The state filter is a
+                  refinement of what's shown and moves next to the list. */}
+              <div className="ow-groupby" role="group" aria-label="Group by">
+                <span className="ow-groupby-label">Group by</span>
+                {(['session', 'pr'] as GroupMode[]).map(mode => (
+                  <Btn
+                    key={mode}
+                    onClick={() => setGroupBy(mode)}
+                    aria-pressed={groupBy === mode}
+                    data-selected={groupBy === mode}
+                    className="ow-groupby-opt"
+                  >
+                    {mode === 'session' ? 'Session' : 'PR'}
+                  </Btn>
+                ))}
+              </div>
+            </div>
+          </nav>
+
+          <main className="ow-work">
+            <div className="ow-work-inner">
+              {/* State filter, next to the list it refines. In PR view it narrows
+                  which work the PR groups draw from; in Session view it is the
+                  section split. */}
+              <div className="ow-filters" role="group" aria-label="Filter by state">
                 {(Object.keys(filterLabels) as FilterKey[]).map(key => (
                   <Btn
                     key={key}
@@ -1541,11 +1427,6 @@ export default function CrewOverviewApp() {
                   </Btn>
                 ))}
               </div>
-            </div>
-          </nav>
-
-          <main className="ow-work">
-            <div className="ow-work-inner">
               {sourcesLoading
                 ? <ContentSkeleton rows={7} />
                 : sourcesError && !sources
@@ -1567,6 +1448,48 @@ export default function CrewOverviewApp() {
                     )
                     : filter === 'all' || query.trim()
                       ? (
+                        groupBy === 'pr'
+                        ? (
+                          visibleItems.some(it => it.references.some(r => r.kind === 'change' || r.kind === 'issue'))
+                          ? (
+                          // PR-primary: one list, PR groups span states (a PR can
+                          // have done and needs-you work at once). State stays
+                          // visible as each row's badge, not as section walls.
+                          <WorkSection
+                            title="Work by PR"
+                            items={visibleItems}
+                            prChecks={prChecks}
+                            selectedId={selectedId}
+                            onSelect={selectItem}
+                            onSnooze={snoozeItem}
+                            onHandled={markHandled}
+                            footer={setAside.snoozedCount > 0
+                              ? (
+                                <button type="button" className="ow-aside-note" onClick={restoreSnoozed}>
+                                  {setAside.snoozedCount} set aside for later — bring back
+                                </button>
+                              )
+                              : undefined}
+                            onOpenSession={openSession}
+                onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                permissionBusy={resolvingApproval !== null}
+                onRetry={path => { void retryRun(path) }}
+                retryBusy={retrying !== null}
+                onPickStep={what => { void handleConductorSend(what) }}
+                            groupBy={groupBy}
+                            emptyLabel="No matching work"
+                          />
+                          )
+                          : (
+                            <EmptyState
+                              icon={<Tag className="ow-icon" />}
+                              title="No work is linked to a PR right now"
+                              subtitle="Work links to a PR when a session mentions its URL (a GitHub/GitLab pull, merge request, or issue). None of the current sessions do, so there is nothing to group by PR yet."
+                              action={<Btn onClick={() => setGroupBy('session')}>Back to Session view</Btn>}
+                            />
+                          )
+                        )
+                        : (
                         <>
                           <WorkSection
                             title="Needs you"
@@ -1587,7 +1510,8 @@ export default function CrewOverviewApp() {
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
-                onPickStep={what => setConductorInput(what)}
+                onPickStep={what => { void handleConductorSend(what) }}
+                            groupBy={groupBy}
                             emptyLabel="Nothing needs your input right now."
                           />
                           <WorkSection
@@ -1600,7 +1524,8 @@ export default function CrewOverviewApp() {
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
-                onPickStep={what => setConductorInput(what)}
+                onPickStep={what => { void handleConductorSend(what) }}
+                            groupBy={groupBy}
                             emptyLabel="Nothing is in progress right now."
                           />
                           <WorkSection
@@ -1615,10 +1540,12 @@ export default function CrewOverviewApp() {
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
-                onPickStep={what => setConductorInput(what)}
+                onPickStep={what => { void handleConductorSend(what) }}
+                            groupBy={groupBy}
                             emptyLabel="No recent completed work."
                           />
                         </>
+                        )
                       )
                       : (
                         <WorkSection
@@ -1631,7 +1558,8 @@ export default function CrewOverviewApp() {
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
-                onPickStep={what => setConductorInput(what)}
+                onPickStep={what => { void handleConductorSend(what) }}
+                          groupBy={groupBy}
                           emptyLabel="No matching work"
                         />
                       )}
@@ -1658,33 +1586,26 @@ export default function CrewOverviewApp() {
               {conductorAvailable
                 ? (
                   <div className="ow-chat-panel">
-                    <div ref={conductorScrollerRef} className="ow-chat-messages" aria-live="polite">
-                      {visibleConductorMessages.length === 0 && !conductorRunning
-                        ? <div className="ow-chat-empty">Conductor is ready.</div>
-                        : visibleConductorMessages.map((message, index) => (
-                          <div
-                            className="ow-chat-message"
-                            data-role={message.role}
-                            key={`${message.ts ?? 'message'}:${index}`}
-                          >
-                            <div className="ow-chat-role">
-                              {message.role === 'user' ? 'You' : 'Conductor'}
-                              {/* Says where it went, so a message aimed at another
-                                  session is not mistaken for one to the Conductor. */}
-                              {message.sentTo && (
-                                <span className="ow-chat-sent-to"> → {message.sentTo}</span>
-                              )}
-                            </div>
-                            <div className="ow-chat-content">{visibleConductorContent(message.content)}</div>
-                          </div>
-                        ))}
-                      {conductorRunning && <div className="ow-chat-status">Conductor is working…</div>}
-                    </div>
-                    {/*
-                      Sits between the transcript and the composer, outside the
-                      scroller, because an approval that scrolls out of view is
-                      indistinguishable from the stall it causes.
-                    */}
+                    {/* Quote bar and permissions sit ABOVE the embed; the embed owns
+                        the transcript and composer, so anything that must stay put
+                        (an approval, the current target) lives outside its scroll. */}
+                    {quoted && (
+                      <div className="ow-quote">
+                        <div className="ow-quote-body">
+                          <span className="ow-eyebrow">
+                            {quoted.sessionKey ? 'Instructing' : 'Quoted'}
+                          </span>
+                          <span className="ow-quote-title" title={quoted.title}>{quoted.title}</span>
+                        </div>
+                        <Btn
+                          className="ow-quote-clear"
+                          aria-label="Remove the quoted work item"
+                          onClick={() => { setSelectedId(null); setDeliveryReceipt(null) }}
+                        >
+                          Clear
+                        </Btn>
+                      </div>
+                    )}
                     {permissions.length > 0 && (
                       <div className="ow-permissions" role="alert">
                         {permissions.map(permission => (
@@ -1699,75 +1620,28 @@ export default function CrewOverviewApp() {
                         ))}
                       </div>
                     )}
-                    <div className="ow-composer">
-                      {/*
-                        The quote lives IN the composer, attached to the thing being
-                        written, and only exists while something is quoted. As a
-                        panel above the transcript it displaced the conversation
-                        permanently — including when nothing was selected, where it
-                        showed a placeholder and cost a whole band of the column.
-                      */}
-                      {/*
-                        A reference, nothing more: who the next message goes to,
-                        and a way to let go. Goals, next steps, links and the
-                        ranking reason all live on the SELECTED CARD in the list —
-                        the quote duplicating them grew taller than the
-                        conversation it sat under.
-                      */}
-                      {quoted && (
-                        <div className="ow-quote">
-                          <div className="ow-quote-body">
-                            <span className="ow-eyebrow">
-                              {quoted.sessionKey ? 'Instructing' : 'Quoted'}
-                            </span>
-                            <span className="ow-quote-title" title={quoted.title}>{quoted.title}</span>
-                          </div>
-                          <Btn
-                            className="ow-quote-clear"
-                            aria-label="Remove the quoted work item"
-                            onClick={() => { setSelectedId(null); setDeliveryReceipt(null) }}
-                          >
-                            Clear
-                          </Btn>
-                        </div>
-                      )}
-                      <div className="ow-chat-composer">
-                      <Input
-                        value={conductorInput}
-                        onChange={event => setConductorInput(event.target.value)}
-                        onKeyDown={event => {
-                          if (event.key === 'Enter' && conductorInput.trim()) {
-                            event.preventDefault()
-                            void submitConductor()
-                          }
-                        }}
-                        placeholder={
-                          quoted?.sessionKey
-                            ? 'New instructions for this session…'
-                            : 'Ask across your work…'
-                        }
-                        aria-label="Message to Conductor"
-                        disabled={isConductorSending || isInstructing}
-                      />
-                      <SendBtn
-                        onClick={() => { void submitConductor() }}
-                        disabled={!conductorInput.trim() || isConductorSending || isInstructing}
-                        aria-label={
-                          quoted?.sessionKey
-                            ? 'Send new instructions to the quoted session'
-                            : 'Send message to Conductor'
-                        }
-                      >
-                        Send
-                      </SendBtn>
-                      </div>
-                    </div>
                     {deliveryReceipt && (
                       <div className="ow-conductor-receipt" role="status">
                         <CircleCheck className="ow-icon" />{deliveryReceipt}
                       </div>
                     )}
                     {conductorError && <div className="ow-chat-error" role="alert">{conductorError}</div>}
+                    {/* Native chat: same rendering, markdown, OPTIONS buttons,
+                        streaming and persistence as the main chat. onSend routes a
+                        quoted message to that session; otherwise it talks to the
+                        Conductor, whose transcript the embed shows. Wrapped so it
+                        fills the remaining height and scrolls INSIDE its own box —
+                        without this the transcript overflowed and the reference
+                        banner above it looked like it floated over the chat. */}
+                    <div className="ow-embed">
+                    <ChatEmbed
+                      slotKey={CONDUCTOR_SLOT}
+                      frameless
+                      startAtBottom
+                      placeholder={quoted?.sessionKey ? 'New instructions for this session…' : 'Ask across your work…'}
+                      onSend={handleConductorSend}
+                    />
+                    </div>
                   </div>
                 )
                 : <div className="ow-chat-loading"><ContentSkeleton rows={4} /></div>}

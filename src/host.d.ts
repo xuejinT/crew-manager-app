@@ -25,6 +25,16 @@ declare module '@kirocrew/app-sdk' {
     options?: { type?: 'info' | 'success' | 'error' },
   ) => void
   export function useAppEvents(event: string, callback: (data: unknown) => void): void
+  // Native chat surface shared with the main ChatPage: markdown, OPTIONS buttons,
+  // streaming, and persistence. onSend overrides the default POST /api/chat.
+  export const ChatEmbed: import('react').ComponentType<{
+    slotKey: string
+    agent?: string
+    placeholder?: string
+    frameless?: boolean
+    startAtBottom?: boolean
+    onSend?: (message: string) => Promise<unknown> | void
+  }>
 }
 
 declare module '@kirocrew/app-sdk/ui' {

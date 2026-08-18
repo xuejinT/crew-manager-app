@@ -7,6 +7,8 @@ import {
   ACK_WINDOW_MS,
   BRIEFING_LIMIT,
   applyInstructed,
+  clusterBy,
+  rollUpSessions,
   applySetAside,
   DONE_WINDOW_MS,
   inDoneWindow,
@@ -830,6 +832,19 @@ describe('actionable issues', () => {
     expect(item.state).toBe('running')
   })
 
+  it('drops a successful subagent whose parent session is not on the board', () => {
+    // A subagent belongs to its parent. With the parent gone, a finished run is
+    // noise; a failed one still surfaces because nobody could otherwise see it.
+    const items = normalizeWorkItems(sources({
+      agents: [
+        { id: 'a1', task: 'Research X', done: true, parent: 'gone', agent: 'kirocrew', started: 10, outcome: 'success' },
+        { id: 'a2', task: 'Research Y', done: true, parent: 'gone', agent: 'kirocrew', started: 10, outcome: 'failed', error: 'boom' },
+      ],
+    }))
+    expect(items.find(i => i.id === 'agent:a1')).toBeUndefined()
+    expect(items.find(i => i.id === 'agent:a2')?.state).toBe('needs-you')
+  })
+
   it('puts a failed agent run in the queue with a way to re-run it', () => {
     const items = normalizeWorkItems(sources({
       agents: [{
@@ -1128,6 +1143,82 @@ describe('response verb', () => {
   it('labels nothing outside the needs-you queue', () => {
     expect(responseVerb(needsYou({ state: 'running', stalledFor: 900 }))).toBeNull()
     expect(responseVerb(needsYou({ state: 'done' }))).toBeNull()
+  })
+})
+
+describe('grouping the list', () => {
+  function item(id: string, session: string, change?: string): WorkItem {
+    return {
+      id, title: id, summary: 's', state: 'needs-you', issue: false, updatedAt: 1,
+      sessionKey: session, provenance: 'p',
+      references: [
+        { kind: 'session', id: session, label: session, sessionKey: session },
+        ...(change ? [{ kind: 'change' as const, id: change, label: `PR ${change}` }] : []),
+      ],
+    } as WorkItem
+  }
+
+  it('fans an item out to every PR it references', () => {
+    // A session touching several PRs must appear under each — otherwise all but
+    // the first PR are invisible in the PR view.
+    const multi = { ...item('a', 's1', '42'), references: [
+      { kind: 'session' as const, id: 's1', label: 's1', sessionKey: 's1' },
+      { kind: 'change' as const, id: '42', label: 'PR 42' },
+      { kind: 'change' as const, id: '43', label: 'PR 43' },
+    ] } as WorkItem
+    const blocks = clusterBy([multi], 'pr')
+    expect(blocks.map(b => b.changeRef?.label)).toEqual(['PR 42', 'PR 43'])
+    expect(blocks.every(b => b.items[0].id === 'a')).toBe(true)
+  })
+
+  it('collects PR-less work into a trailing unlinked block', () => {
+    const blocks = clusterBy([item('a', 's1', '42'), item('b', 's2')], 'pr')
+    expect(blocks[0].header).toBe('pr')
+    expect(blocks[blocks.length - 1].header).toBeNull()
+    expect(blocks[blocks.length - 1].items[0].id).toBe('b')
+  })
+
+  it('rolls a PR block up to one row per session, keeping the most-urgent leader', () => {
+    // Under a PR the unit is the session, not every goal — two goals from one
+    // session collapse to a single row led by the first (most-urgent).
+    const rollups = rollUpSessions([
+      item('a', 's1', '42'),
+      item('b', 's1', '42'),
+      item('c', 's2', '42'),
+    ])
+    expect(rollups.map(r => r.sessionKey)).toEqual(['s1', 's2'])
+    expect(rollups[0].leading.id).toBe('a')
+    expect(rollups[0].count).toBe(2)
+  })
+
+  it('by session gathers a session even when its items are not adjacent', () => {
+    const blocks = clusterBy([item('a', 's1'), item('b', 's2'), item('c', 's1')], 'session')
+    expect(blocks.map(b => b.key)).toEqual(['s1', 's2'])
+    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'c'])
+    expect(blocks[0].header).toBe('session')
+  })
+
+  it('by PR groups the same change across different sessions', () => {
+    // The whole point: one PR touched by two sessions folds into one group.
+    const blocks = clusterBy([
+      item('a', 's1', '42'),
+      item('b', 's2', '42'),
+      item('c', 's3'),
+    ], 'pr')
+    const prBlock = blocks.find(b => b.header === 'pr')
+    expect(prBlock?.items.map(i => i.id)).toEqual(['a', 'b'])
+    expect(prBlock?.changeRef?.label).toBe('PR 42')
+    // A work item with no PR stands alone, no header — the PR view still shows it.
+    const solo = blocks.find(b => b.items[0].id === 'c')
+    expect(solo?.header).toBeNull()
+  })
+
+  it('a group takes the position of its most-urgent (first) member', () => {
+    // Items arrive pre-sorted; grouping must not reorder across groups.
+    const blocks = clusterBy([item('a', 's1', '42'), item('b', 's2'), item('c', 's3', '42')], 'pr')
+    expect(blocks[0].header).toBe('pr')
+    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'c'])
+    expect(blocks[1].items[0].id).toBe('b')
   })
 })
 
