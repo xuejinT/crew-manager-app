@@ -51,6 +51,7 @@ import {
 import {
   applyInstructed,
   clusterBy,
+  prBucket,
   rollUpSessions,
   applySetAside,
   inDoneWindow,
@@ -180,10 +181,7 @@ function workCopy(key: WorkCopyKey, values: Record<string, string> = {}): string
  * reason a form field label is not a sentence.
  */
 const verbLabels: Record<ResponseVerb, string> = {
-  decide: 'DECIDE',
-  answer: 'ANSWER',
-  verify: 'VERIFY',
-  resume: 'RESUME',
+  followup: 'FOLLOW UP',
   unblock: 'UNBLOCK',
 }
 
@@ -200,6 +198,14 @@ const filterLabels: Record<FilterKey, string> = {
   running: 'Running',
   done: 'Done',
 }
+
+const prFilterLabels = {
+  all: 'All',
+  failing: 'Failing',
+  running: 'Running',
+  merged: 'Merged',
+} as const
+type PrFilterKey = keyof typeof prFilterLabels
 
 const referenceIcon: Record<WorkReferenceKind, typeof MessageSquare> = {
   session: MessageSquare,
@@ -235,11 +241,14 @@ function Clickable({
   )
 }
 
-function PanelSectionHeader({ label, count }: { label: string; count: number }) {
+function PanelSectionHeader({ label, count, subtitle }: { label: string; count: number; subtitle?: string }) {
   return (
     <div className="ow-section-header">
-      <h2 className="ow-section-title">{label}</h2>
-      <span className="ow-section-count">{count}</span>
+      <div className="ow-section-heading">
+        <h2 className="ow-section-title">{label}</h2>
+        <span className="ow-section-count">{count}</span>
+      </div>
+      {subtitle && <p className="ow-section-subtitle">{subtitle}</p>}
     </div>
   )
 }
@@ -386,14 +395,6 @@ function Expand({ children }: { children: ReactNode }) {
 /** Steps beyond this crowd the composer; the rest stay in the session itself. */
 const MAX_QUOTE_STEPS = 3
 
-const actionLabels = {
-  reply: 'Reply',
-  'review-approval': 'Review approval',
-  open: 'Open',
-  resume: 'Resume',
-  discuss: 'Discuss',
-} as const
-
 /** References worth showing: drop ones that only repeat the provenance label. */
 function metaReferences(item: WorkItem) {
   const provenance = item.provenance.trim().toLowerCase()
@@ -485,15 +486,24 @@ function SessionRollupRow({ session, selected, onSelect, onOpen }: {
 }
 
 function PrBlockHeader({ reference, checks }: { reference: WorkReference; checks?: PrChecks }) {
-  const RefIcon = referenceIcon[reference.kind]
   const bad = reference.status ? /fail|conflict|closed/.test(reference.status) : false
   return (
     <div className="ow-pr-head">
       <div className="ow-pr-head-top">
-        <RefIcon className="ow-icon" aria-hidden="true" />
+        {/* No leading icon: in the PR view every card IS a PR, and the change
+            glyph is the same external-link icon as Open — two of the same thing.
+            The one affordance is an external-link icon on the right. */}
         <span className="ow-truncate ow-block-name">{reference.label}</span>
         {reference.url && (
-          <a className="ow-block-open" href={reference.url} target="_blank" rel="noopener noreferrer">Open</a>
+          <a
+            className="ow-block-open ow-icon-link"
+            href={reference.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open ${reference.label}`}
+          >
+            <GitPullRequest className="ow-icon" aria-hidden="true" />
+          </a>
         )}
       </div>
       <div className="ow-pr-status-line">
@@ -799,6 +809,8 @@ function WorkSection({
   onToggleCollapsed,
   groupBy,
   prChecks,
+  prFilter,
+  subtitle,
   emptyLabel,
 }: {
   title: string
@@ -820,14 +832,25 @@ function WorkSection({
   onToggleCollapsed?: () => void
   groupBy: GroupMode
   prChecks?: Record<string, PrChecks>
+  /** PR-status chip in PR mode; filters whole PR groups. */
+  prFilter?: PrFilterKey
+  subtitle?: string
   emptyLabel: string
 }) {
+  const blocks = clusterBy(items, groupBy)
+  // PR mode only: drop whole PR groups that do not match the chosen status chip.
+  const shownBlocks = groupBy === 'pr' && prFilter && prFilter !== 'all'
+    ? blocks.filter(block => block.changeRef
+        && prBucket(block.changeRef, prChecks?.[block.changeRef.url ?? '']) === prFilter)
+    : blocks
+  // In PR mode the header counts PRs (groups); elsewhere it counts items.
+  const headerCount = groupBy === 'pr' ? shownBlocks.length : items.length
   return (
     <section className="ow-section" aria-label={title}>
       {onToggleCollapsed
         ? (
           <Clickable onActivate={onToggleCollapsed} className="ow-section-toggle">
-            <PanelSectionHeader label={title} count={items.length} />
+            <PanelSectionHeader label={title} count={headerCount} subtitle={subtitle} />
             <ChevronRight
               className="ow-icon ow-section-chevron"
               data-open={collapsed ? undefined : 'true'}
@@ -835,12 +858,12 @@ function WorkSection({
             />
           </Clickable>
         )
-        : <PanelSectionHeader label={title} count={items.length} />}
+        : <PanelSectionHeader label={title} count={headerCount} subtitle={subtitle} />}
       {collapsed ? null : (
       <div className="ow-section-list">
-        {items.length === 0
+        {shownBlocks.length === 0
           ? <p className="ow-section-empty">{emptyLabel}</p>
-          : clusterBy(items, groupBy).map(block => (
+          : shownBlocks.map(block => (
             <div
               key={block.key}
               className="ow-block"
@@ -945,6 +968,7 @@ export default function CrewOverviewApp() {
   const setNavBadge = useNavBadge()
   const [filter, setFilter] = useState<FilterKey>('all')
   const [groupBy, setGroupBy] = useState<GroupMode>('session')
+  const [prFilter, setPrFilter] = useState<PrFilterKey>('all')
   const [prChecks, setPrChecks] = useState<Record<string, PrChecks>>({})
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -1145,9 +1169,23 @@ export default function CrewOverviewApp() {
   )
   const visibleItems = useMemo(() => {
     const searched = searchWorkItems(items, query)
-    if (query.trim() || filter === 'all') return searched
+    // PR grouping spans states — one PR carries its done and needs-you work at
+    // once — so the state filter does not narrow it; only search does.
+    if (groupBy === 'pr' || query.trim() || filter === 'all') return searched
     return searched.filter(item => item.state === filter)
-  }, [filter, items, query])
+  }, [filter, items, query, groupBy])
+
+  // One tally per PR (block), not per item, so the chip counts match the groups.
+  const prCounts = useMemo(() => {
+    const tally: Record<PrFilterKey, number> = { all: 0, failing: 0, running: 0, merged: 0 }
+    for (const block of clusterBy(visibleItems, 'pr')) {
+      if (!block.changeRef) continue
+      tally.all++
+      const bucket = prBucket(block.changeRef, prChecks[block.changeRef.url ?? ''])
+      if (bucket !== 'other') tally[bucket]++
+    }
+    return tally
+  }, [visibleItems, prChecks])
 
   useEffect(() => {
     if (groupBy !== 'pr') return
@@ -1380,17 +1418,8 @@ export default function CrewOverviewApp() {
         <div className="ow-layout">
           <nav className="ow-rail" aria-label="Crew Manager">
             <div className="ow-rail-inner">
-              <SearchInput
-                data-crew-manager-search="true"
-                value={query}
-                onChange={event => setQuery(event.target.value)}
-                placeholder="Search work and projects… ⌘K"
-                aria-label="Search work"
-                className="ow-search"
-              />
-              {/* Group by is the primary view mode — it changes the whole
-                  structure — so it lives in the nav. The state filter is a
-                  refinement of what's shown and moves next to the list. */}
+              {/* Group by — the view mode — is the left rail. Search and the state
+                  filter sit above the list. */}
               <div className="ow-groupby" role="group" aria-label="Group by">
                 <span className="ow-groupby-label">Group by</span>
                 {(['session', 'pr'] as GroupMode[]).map(mode => (
@@ -1410,22 +1439,47 @@ export default function CrewOverviewApp() {
 
           <main className="ow-work">
             <div className="ow-work-inner">
-              {/* State filter, next to the list it refines. In PR view it narrows
-                  which work the PR groups draw from; in Session view it is the
-                  section split. */}
-              <div className="ow-filters" role="group" aria-label="Filter by state">
-                {(Object.keys(filterLabels) as FilterKey[]).map(key => (
-                  <Btn
-                    key={key}
-                    onClick={() => setFilter(key)}
-                    aria-pressed={filter === key}
-                    data-selected={filter === key}
-                    className="ow-filter"
-                  >
-                    {filterLabels[key]}
-                    <span className="ow-count">{counts[key]}</span>
-                  </Btn>
-                ))}
+              {/* Above the list: search, then the state filter. */}
+              <div className="ow-toolbar">
+                <SearchInput
+                  data-crew-manager-search="true"
+                  value={query}
+                  onChange={event => setQuery(event.target.value)}
+                  placeholder="Search work and projects… ⌘K"
+                  aria-label="Search work"
+                  className="ow-search"
+                />
+                {groupBy === 'pr' ? (
+                <div className="ow-filters" role="group" aria-label="Filter by PR status">
+                  {(Object.keys(prFilterLabels) as PrFilterKey[]).map(key => (
+                    <Btn
+                      key={key}
+                      onClick={() => setPrFilter(key)}
+                      aria-pressed={prFilter === key}
+                      data-selected={prFilter === key}
+                      className="ow-filter"
+                    >
+                      {prFilterLabels[key]}
+                      <span className="ow-count">{prCounts[key]}</span>
+                    </Btn>
+                  ))}
+                </div>
+                ) : (
+                <div className="ow-filters" role="group" aria-label="Filter by state">
+                  {(Object.keys(filterLabels) as FilterKey[]).map(key => (
+                    <Btn
+                      key={key}
+                      onClick={() => setFilter(key)}
+                      aria-pressed={filter === key}
+                      data-selected={filter === key}
+                      className="ow-filter"
+                    >
+                      {filterLabels[key]}
+                      <span className="ow-count">{counts[key]}</span>
+                    </Btn>
+                  ))}
+                </div>
+                )}
               </div>
               {sourcesLoading
                 ? <ContentSkeleton rows={7} />
@@ -1457,19 +1511,12 @@ export default function CrewOverviewApp() {
                           // visible as each row's badge, not as section walls.
                           <WorkSection
                             title="Work by PR"
+                            subtitle="Every pull request your work touches"
                             items={visibleItems}
                             prChecks={prChecks}
+                            prFilter={prFilter}
                             selectedId={selectedId}
                             onSelect={selectItem}
-                            onSnooze={snoozeItem}
-                            onHandled={markHandled}
-                            footer={setAside.snoozedCount > 0
-                              ? (
-                                <button type="button" className="ow-aside-note" onClick={restoreSnoozed}>
-                                  {setAside.snoozedCount} set aside for later — bring back
-                                </button>
-                              )
-                              : undefined}
                             onOpenSession={openSession}
                 onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
                 permissionBusy={resolvingApproval !== null}
@@ -1493,6 +1540,7 @@ export default function CrewOverviewApp() {
                         <>
                           <WorkSection
                             title="Needs you"
+                            subtitle="Waiting on a decision or reply from you"
                             items={grouped['needs-you']}
                             selectedId={selectedId}
                             onSelect={selectItem}
@@ -1516,6 +1564,7 @@ export default function CrewOverviewApp() {
                           />
                           <WorkSection
                             title="In progress"
+                            subtitle="Being worked on right now"
                             items={grouped.running}
                             selectedId={selectedId}
                             onSelect={selectItem}
@@ -1530,6 +1579,7 @@ export default function CrewOverviewApp() {
                           />
                           <WorkSection
                             title="Done recently"
+                            subtitle="Finished in the last few days"
                             items={grouped.done}
                             selectedId={selectedId}
                             onSelect={selectItem}
@@ -1578,8 +1628,8 @@ export default function CrewOverviewApp() {
             <div className="ow-conductor-header">
               <div className="ow-conductor-title">
                 <h2>Conductor</h2>
+                {!quoted && <span className="ow-conductor-sub">select work, or ask across all</span>}
               </div>
-              <p className="ow-private-hint">Select work on the left to send it instructions. With nothing selected, ask across your work.</p>
             </div>
 
             <div className="ow-chat">

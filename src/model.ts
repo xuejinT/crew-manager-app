@@ -96,6 +96,29 @@ export function changeStatus(link: { ci?: string; mergeable?: string; state?: st
   return undefined
 }
 
+export type PrBucket = 'failing' | 'running' | 'merged' | 'other'
+
+/**
+ * Which PR-status chip a change sits under. GitHub's live check counts win over
+ * the coarse ci status; a merge conflict is failing because it needs you even
+ * when checks are green. `other` (green/open/closed) shows only under All.
+ */
+export function prBucket(
+  ref: { status?: string },
+  checks?: { available?: boolean; total?: number; failing?: number; pending?: number },
+): PrBucket {
+  if (ref.status === 'merged') return 'merged'
+  if (ref.status === 'conflict') return 'failing'
+  if (checks?.available && (checks.total ?? 0) > 0) {
+    if ((checks.failing ?? 0) > 0) return 'failing'
+    if ((checks.pending ?? 0) > 0) return 'running'
+    return 'other'
+  }
+  if (ref.status === 'checks failing') return 'failing'
+  if (ref.status === 'checks running') return 'running'
+  return 'other'
+}
+
 export interface WorkItem {
   id: string
   title: string
@@ -998,24 +1021,25 @@ export function rankWorkItem(item: WorkItem, now: number = Date.now()): Ranking 
  * line. A category label above its own controls is ordinary; a queue you cannot
  * read at a glance is not.
  */
-export type ResponseVerb = 'decide' | 'answer' | 'verify' | 'resume' | 'unblock'
+export type ResponseVerb = 'followup' | 'unblock'
 
 /**
- * Which signals mean which response. `unblock` covers three different
- * interventions — redirect a failing call, check a silent session, fix a red
- * check — because the badge exists for batching, and batching wants few
- * categories. Six verbs stop being a column and become a second sentence.
+ * Two responses, because the badge exists for batching and batching wants few
+ * categories. `unblock` is every item where something is waiting on you or has
+ * gone wrong — an approval, a question, a failed or stalled run, a red check, a
+ * done-but-unverified result. `followup` is the one calm case: a session went
+ * idle with its goal unfinished and just needs you to carry it forward.
  */
 const VERB_FOR_SIGNAL: Partial<Record<RankSignal, ResponseVerb>> = {
-  approval_owed: 'decide',
-  subagent_gate: 'decide',
-  input_requested: 'answer',
-  unverified_completion: 'verify',
+  approval_owed: 'unblock',
+  subagent_gate: 'unblock',
+  input_requested: 'unblock',
+  unverified_completion: 'unblock',
   error_loop: 'unblock',
   run_failed: 'unblock',
   stalled: 'unblock',
   change_blocked: 'unblock',
-  nobody_on_it: 'resume',
+  nobody_on_it: 'followup',
 }
 
 /**
@@ -1441,8 +1465,8 @@ export interface WorkBlock {
  *
  * PR: the PR is the primary entity. An item FANS OUT to every PR it references,
  * so a session touching four PRs appears under all four — each PR is its own card
- * with the work underneath it. Work with no PR collects in a trailing unlinked
- * block, so a PR view still accounts for everything without pretending it is a PR.
+ * with the work underneath it. Work with no PR is NOT shown in the PR view — this
+ * view is about PRs, so unlinked work stays in the Session view only.
  */
 export function clusterBy(items: WorkItem[], mode: GroupMode): WorkBlock[] {
   if (mode === 'pr') return clusterByPr(items)
@@ -1476,14 +1500,12 @@ export function clusterBy(items: WorkItem[], mode: GroupMode): WorkBlock[] {
 function clusterByPr(items: WorkItem[]): WorkBlock[] {
   const prBlocks: WorkBlock[] = []
   const byKey = new Map<string, WorkBlock>()
-  const unlinked: WorkItem[] = []
 
   for (const item of items) {
     const changeRefs = item.references.filter(ref => ref.kind === 'change' || ref.kind === 'issue')
-    if (changeRefs.length === 0) {
-      unlinked.push(item)
-      continue
-    }
+    // Work with no PR is not shown in the PR view — this view is about PRs, not
+    // "everything, some of it under a PR". A session with no linked change simply
+    // does not appear here; it is in the Session view.
     for (const ref of changeRefs) {
       const key = `${ref.kind}:${ref.id}`
       const existing = byKey.get(key)
@@ -1496,9 +1518,5 @@ function clusterByPr(items: WorkItem[]): WorkBlock[] {
       prBlocks.push(block)
     }
   }
-  // PR groups first (they are the point of this view), then everything unlinked
-  // as its own headerless rows so nothing is hidden.
-  return [...prBlocks, ...unlinked.map((item): WorkBlock => ({
-    key: item.id, items: [item], header: null, sessionKey: null, changeRef: null,
-  }))]
+  return prBlocks
 }

@@ -44,8 +44,6 @@ export const OVERWATCH_STYLES = String.raw`
   }
   .ow-rail-inner { display: flex; height: 100%; flex-direction: column; gap: 12px; }
   .ow-search { width: 100%; min-width: 0; }
-  .ow-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-  .ow-filter { justify-content: center; gap: 6px; }
   .ow-filter[data-selected='true'] {
     border-color: var(--accent);
     background: var(--aim-subtle);
@@ -59,17 +57,17 @@ export const OVERWATCH_STYLES = String.raw`
   }
   .ow-work-inner { padding: 16px; }
   .ow-section { margin: 0 0 24px; }
-  .ow-section-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .ow-section-header { display: flex; flex-direction: column; gap: 2px; }
+  .ow-section-heading { display: flex; align-items: baseline; gap: 8px; }
   .ow-section-title {
     margin: 0;
-    color: var(--muted);
-    font-size: 12px;
+    color: var(--text-strong);
+    font-size: 15px;
     font-weight: 650;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
   }
-  .ow-section-count { color: var(--muted); font-size: 12px; }
-  .ow-section-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .ow-section-count { color: var(--muted); font-size: 13px; }
+  .ow-section-subtitle { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+  .ow-section-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
   .ow-section-empty { margin: 0; padding: 12px 4px; color: var(--muted); font-size: 14px; }
   .ow-row {
     position: relative;
@@ -129,9 +127,10 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-primary-action { flex-shrink: 0; }
   .ow-icon { width: 14px; height: 14px; flex-shrink: 0; }
   .ow-conductor { display: flex; min-height: 0; flex-direction: column; background: var(--bg); border-left: 1px solid var(--border); }
-  .ow-conductor-title { display: flex; align-items: center; gap: 8px; }
+  .ow-conductor-header { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .ow-conductor-title { display: flex; align-items: baseline; gap: 8px; }
   .ow-conductor-title h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 650; }
-  .ow-private-hint { margin: 4px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
+  .ow-conductor-sub { color: var(--muted); font-size: 12px; font-weight: 500; }
   .ow-eyebrow { color: var(--muted); font-size: 12px; font-weight: 550; }
     min-width: 0;
     overflow: hidden;
@@ -315,9 +314,19 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-embed > * { flex: 1; min-height: 0; }
   /* One visible way in, pushed to the trailing edge of the session header. */
   .ow-block-open { margin-left: auto; flex: none; }
-  .ow-groupby { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 12px; }
-  .ow-groupby-label { margin-right: 2px; color: var(--muted); font-size: 12px; }
-  .ow-groupby-opt { flex: 1; padding: 4px 10px; font-size: 12px; justify-content: center; }
+  /* Icon-only open affordance in the PR header — replaces the redundant "Open"
+     text that duplicated the leading external-link glyph. */
+  .ow-icon-link { display: inline-flex; align-items: center; padding: 4px; border-radius: 6px; color: var(--muted); }
+  .ow-icon-link:hover { background: var(--bg-hover); color: var(--text); }
+  .ow-toolbar { display: flex; flex-direction: row; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+  .ow-toolbar .ow-search { flex: 1 1 240px; min-width: 200px; width: auto; order: 2; }
+  .ow-filters { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; order: 1; }
+  .ow-filter { justify-content: center; gap: 5px; padding: 3px 10px; font-size: 12px; }
+  .ow-filter .ow-count { font-size: 11px; }
+  /* Group by — vertical in the rail: label, then the two modes stacked. */
+  .ow-groupby { display: flex; flex-direction: column; gap: 4px; }
+  .ow-groupby-label { color: var(--muted); font-size: 12px; }
+  .ow-groupby-opt { width: 100%; justify-content: center; padding: 4px 12px; font-size: 12px; }
   .ow-groupby-opt[data-selected='true'] {
     border-color: var(--accent);
     background: var(--aim-subtle);
