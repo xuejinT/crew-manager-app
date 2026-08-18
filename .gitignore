@@ -1,0 +1,8 @@
+node_modules/
+coverage/
+.kiro/
+.playwright-mcp/
+__pycache__/
+*.pyc
+.DS_Store
+*.log

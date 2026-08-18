@@ -1,0 +1,71 @@
+{
+  "name": "crew-manager",
+  "displayName": "Crew Manager",
+  "version": "0.4.0",
+  "description": "A live view of work across Kiro Crew that shows what needs you, what is running, and what recently finished.",
+  "author": "Kiro Crew",
+  "license": "MIT",
+  "tags": [
+    "productivity",
+    "work",
+    "agents",
+    "overview"
+  ],
+  "highlights": [
+    "One work-item view across sessions, approvals, agents, workflows, monitors, artifacts, and linked changes",
+    "Live count navigation for Needs you, Running, and Done, plus global search",
+    "Silent selection keeps private Conductor context separate from consequential actions",
+    "Explicit delivery sends only to the selected session"
+  ],
+  "defaultEnabled": false,
+  "backend": {
+    "hooks": {
+      "routes": "backend.routes:register_routes"
+    }
+  },
+  "notifications": {
+    "channels": [
+      {
+        "id": "stalled",
+        "name": "Stalled sessions",
+        "icon": "alert-circle",
+        "defaultPriority": "default"
+      },
+      {
+        "id": "error-loop",
+        "name": "Repeating failures",
+        "icon": "alert-triangle",
+        "defaultPriority": "default"
+      }
+    ]
+  },
+  "permissions": {
+    "api": [
+      "/api/chat",
+      "/api/approvals",
+      "/api/spawn",
+      "/api/workflows",
+      "/api/crons",
+      "/api/artifacts",
+      "/api/apps/crew-manager"
+    ],
+    "events": [
+      "slots",
+      "approval",
+      "subagent_status"
+    ],
+    "storage": false,
+    "cron": false,
+    "network": false
+  },
+  "ui": {
+    "entry": "index.mjs",
+    "pages": [
+      {
+        "route": "/crew-manager",
+        "label": "Crew Manager",
+        "iconUrl": "icon.svg"
+      }
+    ]
+  }
+}
