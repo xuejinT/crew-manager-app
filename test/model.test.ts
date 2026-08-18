@@ -8,6 +8,7 @@ import {
   BRIEFING_LIMIT,
   applyInstructed,
   clusterBy,
+  prBucket,
   rollUpSessions,
   applySetAside,
   DONE_WINDOW_MS,
@@ -1091,14 +1092,16 @@ describe('response verb', () => {
   }
 
   it('names the response for each reason', () => {
-    expect(responseVerb(needsYou({ action: 'reply' }))).toBe('answer')
-    expect(responseVerb(needsYou({ unverified: true }))).toBe('verify')
-    expect(responseVerb(needsYou({ unattendedGoals: 2 }))).toBe('resume')
+    expect(responseVerb(needsYou({ action: 'reply' }))).toBe('unblock')
+    expect(responseVerb(needsYou({ unverified: true }))).toBe('unblock')
+    expect(responseVerb(needsYou({ unattendedGoals: 2 }))).toBe('followup')
   })
 
-  it('groups the three interventions under one verb', () => {
-    // Redirecting a loop, checking a silent session and fixing a red check are
-    // different jobs; the badge names the pass and the card's line says which.
+  it('groups every blocker under one verb', () => {
+    // A question, a done-but-unverified result, a loop, a stall and a red check
+    // are different jobs; the badge names the pass and the card's line says which.
+    expect(responseVerb(needsYou({ action: 'reply' }))).toBe('unblock')
+    expect(responseVerb(needsYou({ unverified: true }))).toBe('unblock')
     expect(responseVerb(needsYou({ loopRepeats: 3 }))).toBe('unblock')
     expect(responseVerb(needsYou({ stalledFor: 900 }))).toBe('unblock')
     expect(responseVerb(needsYou({ changeBlocked: true }))).toBe('unblock')
@@ -1107,8 +1110,8 @@ describe('response verb', () => {
   it('labels an owed approval too, so the column has no holes', () => {
     // Collapsed, an approval card has no Approve/Reject visible. Without a badge
     // it was indistinguishable at a glance and its title fell out of line.
-    expect(responseVerb(needsYou({ approvalKind: 'tool', permissionId: 'ap-1' }))).toBe('decide')
-    expect(responseVerb(needsYou({ approvalKind: 'subagent', permissionId: 'ap-2' }))).toBe('decide')
+    expect(responseVerb(needsYou({ approvalKind: 'tool', permissionId: 'ap-1' }))).toBe('unblock')
+    expect(responseVerb(needsYou({ approvalKind: 'subagent', permissionId: 'ap-2' }))).toBe('unblock')
   })
 
   it('gives every needs-you reason a verb', () => {
@@ -1130,14 +1133,14 @@ describe('response verb', () => {
     const top = rankWorkItem(item).signals[0].signal
 
     expect(top).toBe('input_requested')
-    expect(responseVerb(item)).toBe('answer')
+    expect(responseVerb(item)).toBe('unblock')
   })
 
   it('skips amplifiers rather than leaving an item unlabelled', () => {
     // A big queue can outweigh nobody_on_it, but "12 queued" is not a response.
     const item = needsYou({ unattendedGoals: 1, queuedBehind: 12 })
     expect(rankWorkItem(item).signals[0].signal).toBe('queued_behind')
-    expect(responseVerb(item)).toBe('resume')
+    expect(responseVerb(item)).toBe('followup')
   })
 
   it('labels nothing outside the needs-you queue', () => {
@@ -1171,11 +1174,12 @@ describe('grouping the list', () => {
     expect(blocks.every(b => b.items[0].id === 'a')).toBe(true)
   })
 
-  it('collects PR-less work into a trailing unlinked block', () => {
+  it('excludes PR-less work from the PR view', () => {
+    // The PR view is about PRs — a session with no linked change does not appear.
     const blocks = clusterBy([item('a', 's1', '42'), item('b', 's2')], 'pr')
+    expect(blocks).toHaveLength(1)
     expect(blocks[0].header).toBe('pr')
-    expect(blocks[blocks.length - 1].header).toBeNull()
-    expect(blocks[blocks.length - 1].items[0].id).toBe('b')
+    expect(blocks.some(b => b.items.some(i => i.id === 'b'))).toBe(false)
   })
 
   it('rolls a PR block up to one row per session, keeping the most-urgent leader', () => {
@@ -1208,17 +1212,16 @@ describe('grouping the list', () => {
     const prBlock = blocks.find(b => b.header === 'pr')
     expect(prBlock?.items.map(i => i.id)).toEqual(['a', 'b'])
     expect(prBlock?.changeRef?.label).toBe('PR 42')
-    // A work item with no PR stands alone, no header — the PR view still shows it.
-    const solo = blocks.find(b => b.items[0].id === 'c')
-    expect(solo?.header).toBeNull()
+    // A work item with no PR is excluded from the PR view entirely.
+    expect(blocks.some(b => b.items.some(i => i.id === 'c'))).toBe(false)
   })
 
   it('a group takes the position of its most-urgent (first) member', () => {
     // Items arrive pre-sorted; grouping must not reorder across groups.
-    const blocks = clusterBy([item('a', 's1', '42'), item('b', 's2'), item('c', 's3', '42')], 'pr')
-    expect(blocks[0].header).toBe('pr')
+    const blocks = clusterBy([item('a', 's1', '42'), item('b', 's2', '43'), item('c', 's3', '42')], 'pr')
+    expect(blocks[0].changeRef?.id).toBe('42')
     expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'c'])
-    expect(blocks[1].items[0].id).toBe('b')
+    expect(blocks[1].changeRef?.id).toBe('43')
   })
 })
 
@@ -1373,5 +1376,28 @@ describe('searchWorkItems', () => {
     expect(searchWorkItems(items, '#2051')).toHaveLength(1)
     expect(searchWorkItems(items, 'crew companion')).toHaveLength(1)
     expect(searchWorkItems(items, 'missing')).toHaveLength(0)
+  })
+})
+
+describe('prBucket', () => {
+  it('prefers live GitHub check counts over the coarse status', () => {
+    expect(prBucket({ status: 'checks running' }, { available: true, total: 5, failing: 2 })).toBe('failing')
+    expect(prBucket({ status: 'checks failing' }, { available: true, total: 5, pending: 1 })).toBe('running')
+    expect(prBucket({ status: 'checks failing' }, { available: true, total: 5, failing: 0, pending: 0 })).toBe('other')
+  })
+
+  it('counts a merge conflict as failing even with green checks', () => {
+    expect(prBucket({ status: 'conflict' }, { available: true, total: 5, failing: 0 })).toBe('failing')
+  })
+
+  it('sends merged to its own bucket and closed/open to other', () => {
+    expect(prBucket({ status: 'merged' })).toBe('merged')
+    expect(prBucket({ status: 'closed' })).toBe('other')
+    expect(prBucket({ status: undefined })).toBe('other')
+  })
+
+  it('falls back to the coarse status when no live checks exist', () => {
+    expect(prBucket({ status: 'checks failing' })).toBe('failing')
+    expect(prBucket({ status: 'checks running' })).toBe('running')
   })
 })
