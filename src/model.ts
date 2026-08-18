@@ -40,6 +40,7 @@ export type WorkCopyKey =
   | 'approval_needed'
   | 'tool_call_waiting'
   | 'agent_work'
+  | 'agent_done'
   | 'agent_failed'
   | 'workflow_failed'
   | 'workflow_failed_generic'
@@ -77,6 +78,22 @@ export interface WorkReference {
   label: string
   url?: string
   sessionKey?: string
+  /**
+   * The PR's OWN status (checks failing / conflict / merged / open) — a different
+   * axis from the work item's state. A PR group is organized by the change, so its
+   * header shows the change's status, not a needs-you/running/done badge.
+   */
+  status?: string
+}
+
+/** Short, human status for a linked change, or undefined for a plain open PR/issue. */
+export function changeStatus(link: { ci?: string; mergeable?: string; state?: string }): string | undefined {
+  if (link.state === 'merged') return 'merged'
+  if (link.state === 'closed') return 'closed'
+  if (link.mergeable === 'conflicting') return 'conflict'
+  if (link.ci === 'failed') return 'checks failing'
+  if (link.ci === 'pending') return 'checks running'
+  return undefined
 }
 
 export interface WorkItem {
@@ -157,12 +174,6 @@ export interface ApprovalRow {
   ts?: number
   /** The tool's own stated reason. This is what makes an approval decidable here. */
   tool_purpose?: string
-}
-
-export interface SentInstruction {
-  ts: string
-  target: string
-  message: string
 }
 
 export interface PendingPermission {
@@ -356,6 +367,7 @@ function sessionItem(slot: ChatSlot, copy: WorkCopy): WorkItem {
       : `${link.provider} #${link.number}`,
     url: link.url,
     sessionKey: slot.key,
+    status: changeStatus(link),
   }))
   return {
     id: `session:${slot.key}`,
@@ -551,6 +563,7 @@ function intentWorkItems(
       : `${link.provider} #${link.number}`,
     url: link.url,
     sessionKey: slot.key,
+    status: changeStatus(link),
   }))
 
   const built: WorkItem[] = []
@@ -1235,6 +1248,12 @@ export function normalizeWorkItems(
       continue
     }
     const failed = Boolean(agent.done && (agent.error || agent.outcome === 'failed'))
+    // A subagent belongs to its parent session, not the top level. When the
+    // parent is on the board it folds in above. When it is NOT, a SUCCESSFUL run
+    // is just noise — an implementation detail of a session that is not even
+    // here — so it is dropped. A FAILED orphan still surfaces, because a failure
+    // nobody can see is the one thing worth keeping visible.
+    if (agent.parent && !failed) continue
     items.set(`agent:${agent.id}`, {
       id: `agent:${agent.id}`,
       title: deriveWorkTitle(agent.task || agent.agent, copy('agent_work')),
@@ -1243,7 +1262,7 @@ export function normalizeWorkItems(
       // that it failed, on one card. The response is to read the error and retry.
       summary: failed
         ? (agent.error?.trim() || copy('agent_failed', { task: agent.task }))
-        : agent.done ? copy('recent_work_ready') : copy('work_in_progress'),
+        : agent.done ? copy('agent_done') : copy('work_in_progress'),
       state: failed ? 'needs-you' : agent.done ? 'done' : 'running',
       issue: failed,
       runFailed: failed || undefined,
@@ -1363,4 +1382,123 @@ export function searchWorkItems(items: WorkItem[], query: string): WorkItem[] {
     ].join(String.fromCharCode(10)).toLowerCase()
     return haystack.includes(needle)
   })
+}
+
+export type GroupMode = 'session' | 'pr'
+
+export interface SessionRollup {
+  sessionKey: string
+  label: string
+  /** The most-urgent work item of this session on the PR — the quote/select target. */
+  leading: WorkItem
+  /** How many of this session's work items touch the PR. */
+  count: number
+}
+
+/**
+ * Roll a PR block's work items up to one row per session. Under a PR the useful
+ * unit is "which sessions are on this change," not every individual goal — so
+ * items are collapsed by session, keeping the most-urgent one (the first, since
+ * the list arrives sorted) as the row's representative and select target.
+ */
+export function rollUpSessions(items: WorkItem[]): SessionRollup[] {
+  const out: SessionRollup[] = []
+  const byKey = new Map<string, SessionRollup>()
+  for (const item of items) {
+    const key = item.sessionKey
+    if (!key) continue
+    const existing = byKey.get(key)
+    if (existing) {
+      existing.count += 1
+      continue
+    }
+    const label = item.references.find(ref => ref.kind === 'session')?.label ?? item.provenance
+    const rollup: SessionRollup = { sessionKey: key, label, leading: item, count: 1 }
+    byKey.set(key, rollup)
+    out.push(rollup)
+  }
+  return out
+}
+
+export interface WorkBlock {
+  key: string
+  items: WorkItem[]
+  /** Header kind. null renders no header (ungrouped item). */
+  header: 'session' | 'pr' | null
+  /** Present for session headers, to wire Open. */
+  sessionKey: string | null
+  /** Present for PR headers. */
+  changeRef: WorkReference | null
+}
+
+/**
+ * Group the (already ordered) list. Grouping is a lens over the flat list: a
+ * group takes the position of its most-urgent member (the first one, since the
+ * list arrives sorted), and order within a group is preserved. Nothing is
+ * re-scored.
+ *
+ * SESSION: one block per session.
+ *
+ * PR: the PR is the primary entity. An item FANS OUT to every PR it references,
+ * so a session touching four PRs appears under all four — each PR is its own card
+ * with the work underneath it. Work with no PR collects in a trailing unlinked
+ * block, so a PR view still accounts for everything without pretending it is a PR.
+ */
+export function clusterBy(items: WorkItem[], mode: GroupMode): WorkBlock[] {
+  if (mode === 'pr') return clusterByPr(items)
+  const blocks: WorkBlock[] = []
+  const byKey = new Map<string, WorkBlock>()
+
+  for (const item of items) {
+    const key = item.sessionKey
+    if (!key) {
+      blocks.push({ key: item.id, items: [item], header: null, sessionKey: null, changeRef: null })
+      continue
+    }
+    const existing = byKey.get(key)
+    if (existing) {
+      existing.items.push(item)
+      continue
+    }
+    const block: WorkBlock = {
+      key,
+      items: [item],
+      header: 'session',
+      sessionKey: item.sessionKey ?? null,
+      changeRef: null,
+    }
+    byKey.set(key, block)
+    blocks.push(block)
+  }
+  return blocks
+}
+
+function clusterByPr(items: WorkItem[]): WorkBlock[] {
+  const prBlocks: WorkBlock[] = []
+  const byKey = new Map<string, WorkBlock>()
+  const unlinked: WorkItem[] = []
+
+  for (const item of items) {
+    const changeRefs = item.references.filter(ref => ref.kind === 'change' || ref.kind === 'issue')
+    if (changeRefs.length === 0) {
+      unlinked.push(item)
+      continue
+    }
+    for (const ref of changeRefs) {
+      const key = `${ref.kind}:${ref.id}`
+      const existing = byKey.get(key)
+      if (existing) {
+        existing.items.push(item)
+        continue
+      }
+      const block: WorkBlock = { key, items: [item], header: 'pr', sessionKey: null, changeRef: ref }
+      byKey.set(key, block)
+      prBlocks.push(block)
+    }
+  }
+  // PR groups first (they are the point of this view), then everything unlinked
+  // as its own headerless rows so nothing is hidden.
+  return [...prBlocks, ...unlinked.map((item): WorkBlock => ({
+    key: item.id, items: [item], header: null, sessionKey: null, changeRef: null,
+  }))]
 }

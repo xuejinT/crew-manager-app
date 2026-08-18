@@ -58,9 +58,8 @@ describe('Crew Manager Conductor boundaries', () => {
     fireEvent.click(row)
 
     expect(row).toHaveAttribute('aria-pressed', 'true')
-    // The quote must live INSIDE the composer, not in a panel above the
-    // conversation: it belongs to the message being written.
-    const quote = document.querySelector('.ow-composer .ow-quote')
+    // The quote bar sits above the embedded chat as a reference to the target.
+    const quote = document.querySelector('.ow-chat-panel .ow-quote')
     expect(quote).not.toBeNull()
     expect(quote?.textContent).toContain('Instructing')
     expect(screen.queryByText('Private')).not.toBeInTheDocument()
@@ -103,10 +102,10 @@ describe('Crew Manager Conductor boundaries', () => {
 
     const input = await screen.findByLabelText('Message to Conductor')
     fireEvent.change(input, { target: { value: 'Apply the approved copy.' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Send new instructions to the quoted session' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => {
-      // Straight to the quoted item's session — the target is not inferred.
+      // Routed straight to the quoted item's session by the embed's onSend.
       expect(appSdkMocks.post).toHaveBeenCalledWith('/api/chat', {
         message: 'Apply the approved copy.',
         slot: 'session-2',
@@ -115,11 +114,9 @@ describe('Crew Manager Conductor boundaries', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Sent new instructions to')
     })
 
-    // The message moves into the conversation and the quote leaves the box.
-    // Staying quoted after sending read as "not sent yet".
+    // Selection clears after sending, so the quote leaves the panel.
     await waitFor(() => {
       expect(document.querySelector('.ow-quote')).toBeNull()
-      expect(document.querySelector('.ow-chat-sent-to')?.textContent).toContain('Docs cleanup')
     })
   })
 
@@ -188,7 +185,7 @@ describe('Crew Manager Conductor boundaries', () => {
     renderApp()
     const input = await screen.findByLabelText('Message to Conductor')
     fireEvent.change(input, { target: { value: 'What needs me?' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Send message to Conductor' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => {
       expect(appSdkMocks.post).toHaveBeenCalledWith(

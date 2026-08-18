@@ -44,8 +44,8 @@ export const OVERWATCH_STYLES = String.raw`
   }
   .ow-rail-inner { display: flex; height: 100%; flex-direction: column; gap: 12px; }
   .ow-search { width: 100%; min-width: 0; }
-  .ow-filters { display: flex; flex-direction: column; gap: 4px; }
-  .ow-filter { width: 100%; justify-content: space-between; }
+  .ow-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .ow-filter { justify-content: center; gap: 6px; }
   .ow-filter[data-selected='true'] {
     border-color: var(--accent);
     background: var(--aim-subtle);
@@ -128,7 +128,7 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-row-actions { display: flex; flex-shrink: 0; align-self: center; align-items: center; gap: 4px; }
   .ow-primary-action { flex-shrink: 0; }
   .ow-icon { width: 14px; height: 14px; flex-shrink: 0; }
-  .ow-conductor { display: flex; min-height: 0; flex-direction: column; background: var(--bg-hover); }
+  .ow-conductor { display: flex; min-height: 0; flex-direction: column; background: var(--bg); border-left: 1px solid var(--border); }
   .ow-conductor-title { display: flex; align-items: center; gap: 8px; }
   .ow-conductor-title h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 650; }
   .ow-private-hint { margin: 4px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
@@ -304,20 +304,43 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-next-step-why { display: block; color: var(--muted); font-size: 12px; }
   .ow-chat { display: flex; min-height: 0; flex: 1; }
   .ow-chat-loading { width: 100%; padding: 16px; }
-  .ow-chat-panel { display: flex; min-height: 0; width: 100%; flex-direction: column; }
-  .ow-chat-messages { min-height: 0; flex: 1; overflow-y: auto; padding: 16px; }
-  .ow-chat-empty, .ow-chat-status { padding: 20px 8px; color: var(--muted); font-size: 13px; text-align: center; }
-  .ow-chat-message { max-width: 92%; margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg, 8px); background: var(--card); }
-  .ow-chat-message[data-role='user'] { margin-left: auto; background: var(--aim-subtle); }
-  .ow-chat-role { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 650; }
-  .ow-chat-content { color: var(--text); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .ow-chat-panel { display: flex; min-height: 0; width: 100%; flex-direction: column; padding: 12px 16px; gap: 8px; }
+  .ow-chat-panel > .ow-quote,
+  .ow-chat-panel > .ow-permissions,
+  .ow-chat-panel > .ow-conductor-receipt,
+  .ow-chat-panel > .ow-chat-error { flex: none; }
+  /* The embed fills the rest and scrolls inside itself, so the banner above it
+     stays put instead of being overrun by the transcript. */
+  .ow-embed { display: flex; flex: 1; min-height: 0; }
+  .ow-embed > * { flex: 1; min-height: 0; }
   /* One visible way in, pushed to the trailing edge of the session header. */
   .ow-block-open { margin-left: auto; flex: none; }
+  .ow-groupby { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-bottom: 12px; }
+  .ow-groupby-label { margin-right: 2px; color: var(--muted); font-size: 12px; }
+  .ow-groupby-opt { flex: 1; padding: 4px 10px; font-size: 12px; justify-content: center; }
+  .ow-groupby-opt[data-selected='true'] {
+    border-color: var(--accent);
+    background: var(--aim-subtle);
+    color: var(--accent);
+  }
+  .ow-pr-head { padding: 10px 12px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--text) 6%, var(--card)); }
+  .ow-pr-head-top { display: flex; align-items: center; gap: 8px; }
+  .ow-pr-status-line { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 12px; }
+  .ow-pr-dot { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); }
+  .ow-pr-dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .ow-pr-dot[data-bad='true'] { color: var(--danger); }
+  .ow-pr-sublabel { padding: 6px 12px 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
+  .ow-srow { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--border); cursor: pointer; }
+  .ow-srow[data-selected='true'] { background: var(--aim-subtle); }
+  .ow-srow-body { min-width: 0; flex: 1; }
+  .ow-srow-name { color: var(--text-strong); font-weight: 600; }
+  .ow-srow-state { margin-top: 2px; color: var(--muted); font-size: 12px; }
+  .ow-srow-badge { flex: none; }
+  .ow-srow-open { flex: none; }
+  .ow-pr-status { color: var(--muted); }
+  .ow-pr-status[data-bad='true'] { color: var(--danger); }
 
-  /* The quote sits inside the composer, so it exists only while something is
-     quoted and never displaces the conversation. */
-  /* Outside the transcript scroller: an approval that scrolls away reads as a stall. */
-  .ow-chat-sent-to { color: var(--accent); font-weight: 500; }
+
   /* The decision inside a list row: flush to the row's own padding. */
   .ow-row .ow-permission { margin: 10px 0 2px; }
 
@@ -369,8 +392,6 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-permission-why { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
   .ow-permission-actions { display: flex; flex: none; gap: 6px; }
 
-  .ow-composer { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
-  .ow-composer .ow-chat-composer { padding: 0; border-top: 0; }
   .ow-quote {
     display: flex; align-items: center; gap: 8px;
     padding: 4px 10px; border-left: 3px solid var(--accent);
@@ -406,8 +427,6 @@ export const OVERWATCH_STYLES = String.raw`
     .ow-rail { border-right: 0; border-bottom: 1px solid var(--border); }
     .ow-rail-inner { height: auto; flex-direction: row; align-items: center; }
     .ow-search { max-width: 320px; }
-    .ow-filters { flex: 1; flex-direction: row; justify-content: flex-end; }
-    .ow-filter { width: auto; justify-content: center; }
     .ow-work { border-right: 0; border-bottom: 1px solid var(--border); }
   }
 `

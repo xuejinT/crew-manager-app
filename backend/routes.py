@@ -33,6 +33,7 @@ from aiohttp import web
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from recall import search_past_work  # noqa: E402
+from prchecks import pr_check_counts  # noqa: E402
 from watcher import WATCHER  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,20 @@ def _caller_workspace(request: web.Request) -> str | None:
     return _ws_bucket(name)
 
 
+async def handle_pr_checks(request: web.Request, ctx: Any) -> web.Response:
+    """GET /pr-checks?url=... — check-count rollup for one PR, from `gh`.
+
+    Degrades to ``available: False`` (never an error) when gh is missing, the URL
+    is not a GitHub PR, or the call fails, so the UI falls back to the coarse
+    status line rather than breaking.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+    payload = await pr_check_counts(request.query.get("url"))
+    return web.json_response(payload)
+
+
 def register_routes(ctx: Any) -> list:
     """Declare Crew Manager's backend routes.
 
@@ -172,4 +187,5 @@ def register_routes(ctx: Any) -> list:
         AppRoute(method="POST", path="/sweep", handler=handle_sweep),
         AppRoute(method="POST", path="/settings", handler=handle_settings),
         AppRoute(method="GET", path="/recall", handler=handle_recall),
+        AppRoute(method="GET", path="/pr-checks", handler=handle_pr_checks),
     ]

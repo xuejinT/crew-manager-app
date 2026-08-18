@@ -26,11 +26,24 @@ export function useNavBadge() {
   return appSdkMocks.setNavBadge
 }
 
-export function ChatEmbed({ onSend }: { onSend?: (message: string) => Promise<void> }) {
+export function ChatEmbed({ onSend, placeholder }: { onSend?: (message: string) => Promise<void> | void; placeholder?: string }) {
   return (
-    <button type="button" onClick={() => void onSend?.('What changed?')}>
-      Ask Conductor
-    </button>
+    <div data-testid="chat-embed">
+      <input
+        aria-label="Message to Conductor"
+        placeholder={placeholder}
+        onChange={event => { (event.target as HTMLInputElement).dataset.value = event.target.value }}
+      />
+      <button
+        type="button"
+        onClick={event => {
+          const input = (event.currentTarget.parentElement?.querySelector('input') as HTMLInputElement | null)
+          void onSend?.(input?.value ?? '')
+        }}
+      >
+        Send
+      </button>
+    </div>
   )
 }
 
