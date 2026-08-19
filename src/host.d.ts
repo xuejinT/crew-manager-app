@@ -33,6 +33,7 @@ declare module '@kirocrew/app-sdk' {
     placeholder?: string
     frameless?: boolean
     startAtBottom?: boolean
+    slotControls?: boolean
     onSend?: (message: string) => Promise<unknown> | void
   }>
 }
