@@ -576,17 +576,23 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(document.querySelectorAll('.ow-permission')).toHaveLength(0)
   })
 
-  it('a PR card carries the real title, folds when healthy, and expands to the sidebar-style detail', async () => {
+  it('a PR row names the repo, states one verdict, and lists what is holding it up', async () => {
     localStorage.clear()
     const now = new Date().toISOString()
     appSdkMocks.post.mockImplementation(async (path: string) => {
       if (path === '/api/source/pull-request') {
         return {
-          title: 'feat: one card anatomy in Goal view', state: 'merged', draft: false,
+          title: 'feat: one card anatomy in Goal view', state: 'open', draft: false,
           headBranch: 'feat/goal-digest', baseBranch: 'main',
           author: 'xuejinT', updatedAt: new Date(Date.now() - 3600_000).toISOString(),
           additions: 594, deletions: 396, changedFiles: 6,
-          checks: [{ bucket: 'passed' }],
+          mergeStateStatus: 'dirty', mergeable: 'conflicting',
+          checks: [{ bucket: 'passed' }, { bucket: 'failed' }, { bucket: 'failed' }],
+          comments: [
+            { kind: 'inline', resolvable: true, resolved: false, threadId: 't1' },
+            { kind: 'inline', resolvable: true, resolved: false, threadId: 't1' },
+            { kind: 'inline', resolvable: true, resolved: true, threadId: 't2' },
+          ],
           files: [{ path: 'src/index.tsx', additions: 64, deletions: 13 }],
         }
       }
@@ -596,7 +602,7 @@ describe('Crew Manager Conductor boundaries', () => {
       if (path === '/api/chat/slots') {
         return [{
           key: 's1', title: 'Ship goal grouping', messages: 4, running: true, last_ts: now,
-          source_links: [{ kind: 'change', number: 4, url: 'https://github.com/x/y/pull/4', ci: 'passed' }],
+          source_links: [{ kind: 'change', number: 4, url: 'https://github.com/x/crew-manager-app/pull/4', ci: 'passed' }],
         }]
       }
       if (path === '/api/approvals') return []
@@ -609,26 +615,43 @@ describe('Crew Manager Conductor boundaries', () => {
     })
     renderApp()
 
-    // No group-by click needed: the PRs card lives in the bottom stack now.
-    // The header mirrors the sidebar PR view: badge + branch flow, the real
-    // title with the id demoted to a suffix, then author / diffstat / checks.
     expect(await screen.findByText('feat: one card anatomy in Goal view')).toBeInTheDocument()
     const head = within(document.querySelector('.ow-pr-head') as HTMLElement)
-    expect(head.getByText('Merged')).toBeInTheDocument()
-    expect(head.getByText('feat/goal-digest → main')).toBeInTheDocument()
+    // Which repo, whose PR, how recent — the identity line. The branch is not
+    // here: at rail width it crowded out the title, and the link goes to it.
+    expect(head.getByText('crew-manager-app')).toBeInTheDocument()
     expect(head.getByText('xuejinT')).toBeInTheDocument()
-    expect(head.getByText('All checks passed 1/1')).toBeInTheDocument()
-    // The files section stays behind the fold: nothing on this PR needs the user.
+    // One verdict. A conflict outranks the failing checks: rebasing re-runs them.
+    expect(head.getByText('Conflict')).toBeInTheDocument()
+    // The blocker line names every real obstacle, threads counted once each.
+    expect(document.querySelector('.ow-pr-status-line')?.textContent).toBe(
+      '2 checks failing · merge conflict with main · 1 unresolved comment',
+    )
+    // The diff itself is the forge's job — no file list, at rest or expanded.
     expect(screen.queryByText('src/index.tsx')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Files Changed/)).not.toBeInTheDocument()
 
-    // Expanding by clicking the title reveals the Files Changed section —
-    // and the sessions shrink to reference CTAs that just open the session.
-    fireEvent.click(screen.getByText('feat: one card anatomy in Goal view'))
-    expect(await screen.findByText('src/index.tsx')).toBeInTheDocument()
-    expect(screen.getByText('6 Files Changed')).toBeInTheDocument()
+    // The card header already names the list and counts it, so the section's own
+    // heading only repeated both. It keeps its accessible name.
+    expect(screen.queryByText('Work by PR')).not.toBeInTheDocument()
+    expect(document.querySelector('section[aria-label="Work by PR"]')).not.toBeNull()
+
+    // The status filter sits OUTSIDE the scroll container: a filter that scrolls
+    // away from the list it filters can only be reached by scrolling back.
+    const card = document.querySelector('.ow-main > details[data-panel="prs"]') as HTMLElement
+    const tools = card.querySelector('.ow-pr-tools') as HTMLElement
+    expect(tools.querySelector('[aria-label="Filter by PR status"]')).not.toBeNull()
+    expect(card.querySelector('.ow-stack-body')?.contains(tools)).toBe(false)
+
+    // A conflicting PR arrives open, and what it reveals is the sessions —
+    // which is the thing a PR groups on this board.
     const chips = within(document.querySelector('.ow-pr-sessions') as HTMLElement)
     fireEvent.click(chips.getByRole('button', { name: /Ship goal grouping/ }))
     expect(appSdkMocks.navigate).toHaveBeenCalledWith('/chat?sid=s1')
+
+    // Clicking the title still folds it away.
+    fireEvent.click(screen.getByText('feat: one card anatomy in Goal view'))
+    await waitFor(() => expect(document.querySelector('.ow-pr-sessions')).toBeNull())
   })
 
   it('shows the verb, not an Issue badge, on a blocked change in Needs you', async () => {
@@ -680,12 +703,11 @@ describe('Crew Manager Conductor boundaries', () => {
   })
 })
 
-describe('bottom stack cards', () => {
-  // The previous attempt at this shipped a chevron whose onToggle prop was never
-  // passed by the call site, so it rendered and did nothing. These assert the
-  // open STATE, not the presence of a control.
+describe('utility rail cards', () => {
   function stackCards() {
-    return Array.from(document.querySelectorAll('details.ow-stack-card')) as HTMLDetailsElement[]
+    return Array.from(
+      document.querySelectorAll('details.ow-stack-card[data-primary="false"]'),
+    ) as HTMLDetailsElement[]
   }
 
   function cardTitled(label: string) {
@@ -693,54 +715,368 @@ describe('bottom stack cards', () => {
   }
 
   it('opens exactly one card at rest', async () => {
-    localStorage.removeItem('crew-manager.open-stack')
+    localStorage.removeItem('crew-manager.stack-open-v2')
     renderApp()
     await waitFor(() => expect(stackCards().length).toBe(3))
 
-    // PRs is the default: it is the only one of the three that routinely holds
-    // work needing a decision.
     const open = stackCards().filter(card => card.open)
     expect(open).toHaveLength(1)
     expect(open[0].querySelector('summary')?.textContent).toContain('PRs')
   })
 
   it('opening one card closes the others', async () => {
-    localStorage.removeItem('crew-manager.open-stack')
+    localStorage.removeItem('crew-manager.stack-open-v2')
     renderApp()
     await waitFor(() => expect(stackCards().length).toBe(3))
 
-    const loops = cardTitled('Loops')
-    expect(loops).toBeDefined()
-    fireEvent.click(loops!.querySelector('summary') as HTMLElement)
+    const loops = cardTitled('Loops')!
+    fireEvent.click(loops.querySelector('summary') as HTMLElement)
 
-    await waitFor(() => expect(loops!.open).toBe(true))
-    // The whole point: PRs must have closed. Two open cards put the list you
-    // wanted between two others.
+    await waitFor(() => expect(loops.open).toBe(true))
     expect(stackCards().filter(card => card.open)).toHaveLength(1)
     expect(cardTitled('PRs')!.open).toBe(false)
   })
 
   it('clicking the open card closes it, leaving none open', async () => {
-    localStorage.removeItem('crew-manager.open-stack')
+    localStorage.removeItem('crew-manager.stack-open-v2')
     renderApp()
     await waitFor(() => expect(stackCards().length).toBe(3))
 
     const prs = cardTitled('PRs')!
-    expect(prs.open).toBe(true)
     fireEvent.click(prs.querySelector('summary') as HTMLElement)
 
-    // Collapse-everything stays reachable; always-open would trap the user with
-    // one card they cannot dismiss.
     await waitFor(() => expect(prs.open).toBe(false))
     expect(stackCards().filter(card => card.open)).toHaveLength(0)
   })
 
   it('remembers which card was open', async () => {
-    localStorage.setItem('crew-manager.open-stack', JSON.stringify('loops'))
+    localStorage.setItem('crew-manager.stack-open-v2', JSON.stringify('loops'))
     renderApp()
     await waitFor(() => expect(stackCards().length).toBe(3))
 
     expect(cardTitled('Loops')!.open).toBe(true)
     expect(cardTitled('PRs')!.open).toBe(false)
+  })
+
+})
+
+describe('promotable primary column', () => {
+  function panels() {
+    return Array.from(document.querySelectorAll('.ow-main > details.ow-stack-card')) as HTMLDetailsElement[]
+  }
+
+  function panel(id: string) {
+    return document.querySelector(`.ow-main > details[data-panel="${id}"]`) as HTMLDetailsElement
+  }
+
+  function primaryPanel() {
+    return document.querySelector('.ow-main > details[data-primary="true"]') as HTMLDetailsElement
+  }
+
+  function railPanels() {
+    return Array.from(
+      document.querySelectorAll('.ow-main > details[data-primary="false"]'),
+    ) as HTMLDetailsElement[]
+  }
+
+  // HTML5 drag carries the payload on the event's dataTransfer, which jsdom does
+  // not construct — one shared stub stands in for it.
+  function dragTransfer() {
+    const data = new Map<string, string>()
+    return {
+      setData: (key: string, value: string) => { data.set(key, value) },
+      getData: (key: string) => data.get(key) ?? '',
+      setDragImage: vi.fn(),
+      effectAllowed: 'move',
+    }
+  }
+
+  async function ready() {
+    renderApp()
+    await waitFor(() => expect(panels()).toHaveLength(4))
+  }
+
+  it('starts with Work primary, PRs open in the rail, Conductor on the right', async () => {
+    await ready()
+
+    expect(primaryPanel().dataset.panel).toBe('work')
+    expect(primaryPanel().open).toBe(true)
+    const open = railPanels().filter(card => card.open)
+    expect(open).toHaveLength(1)
+    expect(open[0].dataset.panel).toBe('prs')
+    // Conductor is a sibling of .ow-main, not a panel inside it.
+    expect(document.querySelector('.ow-main > .ow-conductor')).toBeNull()
+    expect(document.querySelector('.ow-layout > .ow-conductor')).not.toBeNull()
+  })
+
+  it('promotes the dropped card and demotes the current primary into the rail', async () => {
+    await ready()
+
+    const dataTransfer = dragTransfer()
+    fireEvent.dragStart(panel('loops'), { dataTransfer })
+    fireEvent.dragOver(primaryPanel(), { dataTransfer })
+    expect(primaryPanel().dataset.dragover).toBe('true')
+
+    fireEvent.drop(primaryPanel(), { dataTransfer })
+
+    await waitFor(() => expect(panel('loops').dataset.primary).toBe('true'))
+    expect(panel('work').dataset.primary).toBe('false')
+    expect(panel('loops').dataset.dragover).toBeUndefined()
+    // Demoted Work is a rail card now: same shell, collapsed, with a label
+    // instead of the tab row.
+    expect(panel('work').open).toBe(false)
+    expect(panel('work').querySelector('summary')?.textContent).toContain('Goals / Sessions')
+  })
+
+  it('dropping the current primary on itself changes nothing', async () => {
+    await ready()
+
+    const dataTransfer = dragTransfer()
+    fireEvent.dragStart(panel('work'), { dataTransfer })
+    fireEvent.drop(panel('work'), { dataTransfer })
+
+    await waitFor(() => expect(panel('work').dataset.dragover).toBeUndefined())
+    expect(panel('work').dataset.primary).toBe('true')
+    expect(railPanels().map(card => card.dataset.panel)).toEqual(['prs', 'loops', 'schedule'])
+  })
+
+  it('keeps exactly one card in column 1 and three in column 2 through promotions', async () => {
+    await ready()
+
+    for (const id of ['prs', 'schedule', 'work', 'loops']) {
+      const dataTransfer = dragTransfer()
+      fireEvent.dragStart(panel(id), { dataTransfer })
+      fireEvent.drop(primaryPanel(), { dataTransfer })
+      await waitFor(() => expect(panel(id).dataset.primary).toBe('true'))
+
+      expect(document.querySelectorAll('.ow-main > details[data-primary="true"]')).toHaveLength(1)
+      expect(railPanels()).toHaveLength(3)
+      // Rail rows are 0,1,2 with no gaps, so no card lands off the grid.
+      expect(railPanels().map(card => card.dataset.railIndex)).toEqual(['0', '1', '2'])
+    }
+  })
+
+  it('drags the ghost of one card, not the whole rail', async () => {
+    await ready()
+
+    const dataTransfer = dragTransfer()
+    fireEvent.dragStart(panel('loops'), { dataTransfer })
+
+    // Left to pick its own drag image the browser painted the entire column, so
+    // moving one card looked like moving all three. The image is this card's
+    // own header, and nothing above or below it.
+    const [image] = dataTransfer.setDragImage.mock.calls[0]
+    expect(image).toBe(panel('loops').querySelector('summary'))
+    expect(panel('work').contains(image as Node)).toBe(false)
+    expect(panel('schedule').contains(image as Node)).toBe(false)
+  })
+
+  it('keeps one board refresh control on whichever card is primary', async () => {
+    await ready()
+
+    // Board state, not one panel's. Upstream put it in the Work card's header;
+    // Work can now be demoted into the rail, which would have taken the only
+    // refresh control with it.
+    expect(screen.getAllByRole('button', { name: 'Refresh' })).toHaveLength(1)
+    expect(panel('work').querySelector('.ow-refreshbar')).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Move Loops to the first column/ }))
+    await waitFor(() => expect(panel('loops').dataset.primary).toBe('true'))
+
+    expect(screen.getAllByRole('button', { name: 'Refresh' })).toHaveLength(1)
+    expect(panel('loops').querySelector('.ow-refreshbar')).not.toBeNull()
+    expect(panel('work').querySelector('.ow-refreshbar')).toBeNull()
+  })
+
+  it('refetches the board without promoting the card it sits on', async () => {
+    await ready()
+    appSdkMocks.get.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    await waitFor(() => expect(appSdkMocks.get).toHaveBeenCalledWith('/api/chat/slots'))
+    // The control lives inside a <summary>, so it must not toggle or promote.
+    expect(panel('work').dataset.primary).toBe('true')
+  })
+
+  it('reveals Split on hover, and keeps it reachable by keyboard', async () => {
+    await ready()
+    const css = (document.querySelector('.ow-root style') as HTMLStyleElement).textContent as string
+
+    // Split is a correction, not a primary action: hidden at rest, shown on
+    // card hover, and still reachable without a mouse (focus-within / focus).
+    expect(css).toMatch(/\.ow-goal-split \{[^}]*opacity: 0/)
+    expect(css).toContain('.ow-goalcard:hover .ow-goal-split')
+    expect(css).toContain('.ow-goalcard:focus-within .ow-goal-split')
+    expect(css).toContain('.ow-goal-split:focus-visible')
+  })
+
+  it('marks the whole page as Beta in the header', async () => {
+    await ready()
+    const beta = document.querySelector('.ow-titlebar .ow-beta') as HTMLElement
+    expect(beta).not.toBeNull()
+    expect(beta.textContent).toBe('Beta')
+    // Sits inline right after the name so the two read as one label.
+    expect(beta.closest('.ow-title-line')?.textContent).toBe('Crew ManagerBeta')
+    expect(beta.closest('h1')?.textContent).toContain('Crew Manager')
+  })
+
+  it('offers two keyboard-focusable column resizers with min/max bounds', async () => {
+    await ready()
+    const resizers = Array.from(document.querySelectorAll('.ow-resizer')) as HTMLElement[]
+    expect(resizers).toHaveLength(2)
+    for (const r of resizers) {
+      expect(r.getAttribute('role')).toBe('separator')
+      expect(r.getAttribute('aria-orientation')).toBe('vertical')
+      expect(r.tabIndex).toBe(0)
+      expect(r.getAttribute('aria-label')).toBeTruthy()
+    }
+    // The work handle sits inside .ow-main; the Conductor handle is a direct
+    // child of .ow-layout, between the main column and the aside.
+    expect(document.querySelector('.ow-main > .ow-resizer')).not.toBeNull()
+    expect(document.querySelector('.ow-layout > .ow-resizer')).not.toBeNull()
+    // Bounds are wired so a drag can never collapse the neighbour to nothing.
+    const css = (document.querySelector('.ow-root style') as HTMLStyleElement).textContent as string
+    expect(css).toContain('grid-template-columns: var(--ow-work-w, minmax(0, 1fr)) 6px minmax(0, 1fr)')
+    expect(css).toContain('var(--ow-conductor-w, 30%)')
+  })
+
+  it('does not double-label a session card: the needs-you count and the lane verb', async () => {
+    await ready()
+    fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }))
+    await waitFor(() => expect(document.querySelector('.ow-goalcard[data-grouped]')).not.toBeNull())
+
+    // Find an expanded session card that has a needs-you lane (UNBLOCK / FOLLOW UP).
+    const cards = Array.from(document.querySelectorAll('.ow-goalcard[data-grouped]')) as HTMLElement[]
+    const withLane = cards.find(c =>
+      c.dataset.open === 'true' && c.querySelector('.ow-lane-unblock, .ow-lane-followup'))
+    expect(withLane).toBeTruthy()
+
+    // The lane badge carries the signal, so the header must not ALSO show the
+    // "N need you" flag — that is the duplication the user flagged.
+    expect(withLane!.querySelector('.ow-goalcard-summary .ow-goal-flag-warn')).toBeNull()
+
+    // Collapse it: the lanes go away, so the rollup flag returns as the only signal.
+    fireEvent.click(withLane!.querySelector('.ow-goalcard-chevron') as HTMLElement)
+    await waitFor(() => expect(withLane!.dataset.open).toBeUndefined())
+    expect(withLane!.querySelector('.ow-goalcard-summary .ow-goal-flag-warn')?.textContent)
+      .toMatch(/need you/)
+  })
+
+  it('gives every card body its own bounded scroll area', async () => {
+    await ready()
+    const css = (document.querySelector('.ow-root style') as HTMLStyleElement).textContent as string
+
+    // Chrome wraps a details' non-summary children in a ::details-content BLOCK
+    // box. Without this rule the card's flex column holds only the summary and
+    // that wrapper, so a body asking to flex grew to its own content and the
+    // card clipped the overflow with nothing able to scroll to it.
+    const rule = css.slice(css.indexOf('.ow-stack-card::details-content'))
+    expect(rule).toContain('.ow-stack-card::details-content')
+    expect(rule.slice(0, 200)).toContain('display: flex')
+    expect(rule.slice(0, 200)).toContain('min-height: 0')
+    expect(rule.slice(0, 200)).toContain('flex: 1 1 auto')
+  })
+
+  it('promotes from the card header without a drag', async () => {
+    await ready()
+
+    fireEvent.click(screen.getByRole('button', { name: /Move Scheduled tasks to the first column/ }))
+
+    await waitFor(() => expect(panel('schedule').dataset.primary).toBe('true'))
+    expect(panel('schedule').open).toBe(true)
+    // The primary card offers no promote action — it is already there.
+    expect(screen.queryByRole('button', { name: /Move Scheduled tasks to the first column/ })).toBeNull()
+  })
+
+  it('leaves the Conductor chat mounted across a promotion', async () => {
+    await ready()
+    const embed = await waitFor(() => screen.getByTestId('chat-embed'))
+
+    fireEvent.click(screen.getByRole('button', { name: /Move Loops to the first column/ }))
+    await waitFor(() => expect(panel('loops').dataset.primary).toBe('true'))
+
+    // Same node, not a re-created one: a remount would lose transcript scroll
+    // and any in-flight stream.
+    expect(screen.getByTestId('chat-embed')).toBe(embed)
+    expect(document.querySelector('.ow-layout > .ow-conductor')).not.toBeNull()
+  })
+
+  it('hands the rail its open slot when the open card is promoted', async () => {
+    await ready()
+    expect(panel('prs').open).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: /Move PRs to the first column/ }))
+
+    await waitFor(() => expect(panel('prs').dataset.primary).toBe('true'))
+    // PRs left the rail, so the next candidate in order takes the open slot.
+    const open = railPanels().filter(card => card.open)
+    expect(open).toHaveLength(1)
+    expect(open[0].dataset.panel).toBe('loops')
+    expect(JSON.parse(localStorage.getItem('crew-manager.stack-open-v2') as string)).toBe('loops')
+  })
+
+  it('persists the primary and the open card, and never lets them name the same panel', async () => {
+    await ready()
+    fireEvent.click(screen.getByRole('button', { name: /Move Loops to the first column/ }))
+    await waitFor(() => expect(panel('loops').dataset.primary).toBe('true'))
+
+    expect(JSON.parse(localStorage.getItem('crew-manager.primary-v1') as string)).toBe('loops')
+
+    cleanup()
+    await ready()
+    expect(primaryPanel().dataset.panel).toBe('loops')
+    expect(railPanels().filter(card => card.open)[0].dataset.panel).toBe('prs')
+  })
+
+  it('repairs a stored open card that names the stored primary', async () => {
+    localStorage.setItem('crew-manager.primary-v1', JSON.stringify('schedule'))
+    localStorage.setItem('crew-manager.stack-open-v2', JSON.stringify('schedule'))
+    await ready()
+
+    expect(primaryPanel().dataset.panel).toBe('schedule')
+    const open = railPanels().filter(card => card.open)
+    expect(open).toHaveLength(1)
+    expect(open[0].dataset.panel).toBe('prs')
+  })
+
+  it('ignores a stored primary that is not a panel', async () => {
+    localStorage.setItem('crew-manager.primary-v1', JSON.stringify('nonsense'))
+    await ready()
+
+    expect(primaryPanel().dataset.panel).toBe('work')
+  })
+
+  it('declares resizable columns with a single-column fallback under 1100px', async () => {
+    await ready()
+    const css = (document.querySelector('.ow-root style') as HTMLStyleElement).textContent as string
+
+    // Outer split: Conductor width is user-set (var), main takes the rest;
+    // default 30% keeps the prior ~70/30 balance.
+    expect(css).toContain('grid-template-columns: minmax(0, 1fr) 6px var(--ow-conductor-w, 30%)')
+    expect(css).toMatch(/\.ow-main \{[^}]*grid-template-columns: var\(--ow-work-w, minmax\(0, 1fr\)\) 6px minmax\(0, 1fr\)/)
+    const narrow = css.slice(css.indexOf('@media (max-width: 1100px)'))
+    expect(narrow).toContain('.ow-main { grid-template-columns: minmax(0, 1fr); }')
+    expect(narrow).toContain('grid-row: auto')
+    expect(narrow).toContain('overflow-y: auto')
+    // Rows sized to content, not split from the viewport height: a stretched row
+    // let .ow-main's panels paint over the Conductor.
+    expect(narrow).toContain('grid-template-rows: min-content min-content')
+    expect(narrow).toContain('align-content: start')
+    // Handles collapse away once the columns stack.
+    expect(narrow).toContain('.ow-resizer { display: none; }')
+  })
+
+  it('names the row that takes the leftover height in column 2', async () => {
+    await ready()
+    const main = document.querySelector('.ow-main') as HTMLElement
+    // PRs is rail row 0 by default.
+    expect(main.dataset.openRow).toBe('0')
+
+    fireEvent.click(panel('schedule').querySelector('summary') as HTMLElement)
+    await waitFor(() => expect(main.dataset.openRow).toBe('2'))
+
+    fireEvent.click(panel('schedule').querySelector('summary') as HTMLElement)
+    await waitFor(() => expect(main.dataset.openRow).toBe('none'))
   })
 })
