@@ -158,7 +158,10 @@ describe('Crew Manager Conductor boundaries', () => {
     // to test the filter before the tab, so any active pill sent the Goals tab
     // into the single filtered section and its goal cards vanished.
     fireEvent.click(screen.getByRole('tab', { name: 'Goals' }))
-    expect(await screen.findByText('Work by goal')).toBeInTheDocument()
+    // The goal list carries no visible heading — the card's own Goals tab already
+    // names it — so the region's accessible name is what proves the branch rendered.
+    expect(await screen.findByRole('region', { name: 'Work by goal' })).toBeInTheDocument()
+    expect(screen.queryByText('Work by goal')).not.toBeInTheDocument()
     // And the full set is back, unnarrowed by the pill left behind on Sessions.
     await screen.findByTestId('work-item-session:session-1')
   })

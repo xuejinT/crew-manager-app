@@ -1266,6 +1266,7 @@ function WorkSection({
   selectedGoalKey,
   onSelectGoal,
   subtitle,
+  hideHeader,
   emptyLabel,
 }: {
   title: string
@@ -1305,6 +1306,14 @@ function WorkSection({
   selectedGoalKey?: string | null
   onSelectGoal?: (key: string) => void
   subtitle?: string
+  /**
+   * Drop the visible title/count/subtitle band. The Goal list already sits under
+   * the card's own Goals/Sessions tab header, so a second heading named the same
+   * thing the selected tab already says is chrome the user has to read past. The
+   * section keeps `aria-label={title}`, so the region stays named for a screen
+   * reader even with nothing drawn.
+   */
+  hideHeader?: boolean
   emptyLabel: string
 }) {
   const blocks = clusterBy(items, groupBy, goalVerdicts)
@@ -1533,7 +1542,9 @@ function WorkSection({
 
   return (
     <section className="ow-section" aria-label={title}>
-      {onToggleCollapsed
+      {hideHeader
+        ? null
+        : onToggleCollapsed
         ? (
           <Clickable onActivate={onToggleCollapsed} className="ow-section-toggle">
             <PanelSectionHeader label={title} count={headerCount} subtitle={subtitle} />
@@ -2435,7 +2446,7 @@ export default function CrewOverviewApp() {
                           // sessions — "S1 is on it, S2 left it open" is one thing.
                           <WorkSection
                             title="Work by goal"
-                            subtitle="The same job across sessions, merged into one card"
+                            hideHeader
                             items={items}
                             selectedId={selectedId}
                             onSelect={selectItem}
