@@ -24,6 +24,7 @@ import {
   explainGoal,
   goalPairKey,
   goalRouteTarget,
+  HARD_GOAL_MATCHES,
   initiativeCandidates,
   initiativeFor,
   markDuplicates,
@@ -515,6 +516,84 @@ describe('intent summaries', () => {
 
     expect(off[0].id).toBe('session:session-1')
     expect(missing[0].id).toBe('session:session-1')
+  })
+
+  it('gives an intent only the links its own text names', () => {
+    // The over-merge this fixes: every intent used to carry every link of its
+    // session, so two sessions that both touch PR #6 matched `same_change` on
+    // EVERY cross-session pair of their intents and collapsed into one blob.
+    const items = normalizeWorkItemsWithCopy(
+      sources({ slots: [slot({
+        running: true,
+        source_links: [
+          { provider: 'github', number: 6, url: 'https://github.com/o/r/pull/6', kind: 'change' },
+          { provider: 'github', number: 8, url: 'https://github.com/o/r/pull/8', kind: 'change' },
+        ],
+      })] }),
+      key => key,
+      summarized([
+        { title: 'Rebase PR #6 after #8 merged', state: 'in-progress', last_touched_turn: 5 },
+        { title: 'Redesign the pet cards', state: 'in-progress', last_touched_turn: 4 },
+      ]),
+    )
+
+    const rebase = items.find(item => item.title.startsWith('Rebase'))
+    const redesign = items.find(item => item.title.startsWith('Redesign'))
+    // Both numbers are named, so both links are this goal's.
+    expect(rebase?.references.filter(ref => ref.kind === 'change').map(ref => ref.label))
+      .toEqual(['github #6', 'github #8'])
+    // The other goal names neither, so it carries no change at all.
+    expect(redesign?.references.map(ref => ref.kind)).toEqual(['session'])
+  })
+
+  it('reads a link number out of progress and next steps, not only the title', () => {
+    const items = normalizeWorkItemsWithCopy(
+      sources({ slots: [slot({
+        running: true,
+        source_links: [
+          { provider: 'github', number: 6, url: 'https://github.com/o/r/pull/6', kind: 'change' },
+          { provider: 'github', number: 60, url: 'https://github.com/o/r/pull/60', kind: 'change' },
+          { provider: 'github', number: 42, url: 'https://github.com/o/r/issues/42', kind: 'issue' },
+        ],
+      })] }),
+      key => key,
+      summarized([{
+        title: 'Ship the upload gate',
+        state: 'in-progress',
+        last_touched_turn: 5,
+        progress: ['opened # 6 against main'],
+        next_steps: [{ what: 'close issue #42 once it lands' }],
+      }, {
+        title: 'Chase the flaky suite',
+        state: 'in-progress',
+        last_touched_turn: 4,
+        progress: ['blocked on #60'],
+      }]),
+    )
+
+    // "# 6" is how some summaries write it, and a next step counts as the goal's
+    // own text — the title alone would have missed both links.
+    const gate = items.find(item => item.title.startsWith('Ship'))
+    expect(gate?.references.map(ref => ref.label))
+      .toEqual(['Crew Companion polish', 'github #6', 'issue #42'])
+    // The right-hand boundary is load-bearing: #6 must not answer for #60.
+    const flaky = items.find(item => item.title.startsWith('Chase'))
+    expect(flaky?.references.map(ref => ref.label))
+      .toEqual(['Crew Companion polish', 'github #60'])
+  })
+
+  it('keeps every link on the session-level item, which is not scoped to a goal', () => {
+    // Scoping belongs to goals. The session really is on all of its links, and
+    // the PR view fans out from this row.
+    const [item] = normalizeWorkItems(sources({ slots: [slot({
+      source_links: [
+        { provider: 'github', number: 6, url: 'https://github.com/o/r/pull/6', kind: 'change' },
+        { provider: 'github', number: 8, url: 'https://github.com/o/r/pull/8', kind: 'change' },
+      ],
+    })] }))
+
+    expect(item.id).toBe('session:session-1')
+    expect(item.references.filter(ref => ref.kind === 'change')).toHaveLength(2)
   })
 
   it('does not call an abandoned goal an issue', () => {
@@ -1293,10 +1372,18 @@ describe('grouping by goal', () => {
     expect(clusterBy([a, b], 'goal')).toHaveLength(1)
   })
 
-  it('merges on title overlap and on next-step overlap', () => {
+  it('does not merge on loose title or next-step overlap, but still reports it', () => {
+    // Loose overlap divides by the SMALLER title, so two shared words pair two
+    // items — and union-find is transitive, so those pairs chain until the board
+    // is one card. Deterministic clustering therefore keeps HARD signals only.
+    // sameGoal still reports them, because the duplicate warning and the merge
+    // hint are advice and want every resemblance they can find.
+    expect(HARD_GOAL_MATCHES).toEqual(['same_change', 'same_artifact', 'same_deliverable'])
+
     const a = goal('a', 's1', { title: 'group crew manager by goal' })
     const b = goal('b', 's2', { title: 'crew manager goal grouping logic' })
     expect(sameGoal(a, b)).toBe('same_topic')
+    expect(clusterBy([a, b], 'goal')).toHaveLength(2)
 
     const c = goal('c', 's1', { title: 'morning cleanup', nextSteps: [
       { what: 'verify the goal grouping renders merged cards' },
@@ -1305,7 +1392,40 @@ describe('grouping by goal', () => {
       { what: 'check merged cards in the goal grouping view' },
     ] })
     expect(sameGoal(c, d)).toBe('same_step')
-    expect(clusterBy([c, d], 'goal')).toHaveLength(1)
+    expect(clusterBy([c, d], 'goal')).toHaveLength(2)
+  })
+
+  it('merges a loose-overlap pair when the semantic pass names it', () => {
+    // The judgement did not disappear, it moved: the model pass supplies its
+    // merges as enumerated pairs, so one decision cannot chain into a third item.
+    const a = goal('a', 's1', { title: 'group crew manager by goal' })
+    const b = goal('b', 's2', { title: 'crew manager goal grouping logic' })
+    const c = goal('c', 's3', { title: 'crew manager goal cards spacing' })
+
+    const semantic = new Set([goalPairKey(a, b)])
+    const blocks = clusterBy([a, b, c], 'goal', EMPTY_VERDICTS, semantic)
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
+    expect(blocks[0].header).toBe('goal')
+    // c overlaps both titles, but no pair names it — so it stays its own row.
+    expect(blocks[1].items.map(i => i.id)).toEqual(['c'])
+  })
+
+  it('a hard change match still merges across sessions with no semantic pairs', () => {
+    // The hard signals are what deterministic clustering keeps: a shared change
+    // merges on its own, while a merely similar title in the same board does not.
+    const change = { kind: 'change' as const, id: 'https://x/pull/6', label: 'github #6' }
+    const a = goal('a', 's1', { title: 'one thing entirely', references: [
+      { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' }, change,
+    ] })
+    const b = goal('b', 's2', { title: 'another matter altogether', references: [
+      { kind: 'session', id: 's2', label: 's2', sessionKey: 's2' }, change,
+    ] })
+    const looseLeft = goal('c', 's3', { title: 'polish the papyrus export flow' })
+    const looseRight = goal('d', 's4', { title: 'papyrus export flow polish' })
+
+    const blocks = clusterBy([a, b, looseLeft, looseRight], 'goal')
+    expect(blocks.map(block => block.items.map(i => i.id))).toEqual([['a', 'b'], ['c'], ['d']])
   })
 
   it('never merges two goals inside one session', () => {
@@ -1316,9 +1436,15 @@ describe('grouping by goal', () => {
   })
 
   it('the user split ruling beats every signal, and merge beats no-signal', () => {
-    const a = goal('a', 's1')
-    const b = goal('b', 's2')
-    // Signals say same (titles overlap); the user said no.
+    const change = { kind: 'change' as const, id: 'https://x/pull/9', label: 'github #9' }
+    const a = goal('a', 's1', { references: [
+      { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' }, change,
+    ] })
+    const b = goal('b', 's2', { references: [
+      { kind: 'session', id: 's2', label: 's2', sessionKey: 's2' }, change,
+    ] })
+    // A hard signal says same job (one shared change); the user said no.
+    expect(sameGoal(a, b)).toBe('same_change')
     const split = clusterBy([a, b], 'goal', { merged: [], split: [goalPairKey(a, b)] })
     expect(split).toHaveLength(2)
 
@@ -1330,11 +1456,23 @@ describe('grouping by goal', () => {
     expect(merged[0].header).toBe('goal')
   })
 
+  it('the user split ruling beats a semantic pair too', () => {
+    // The model pass is a new source of merges, so it needs the same subordination
+    // every other signal has: a pair the user pulled apart stays apart.
+    const a = goal('a', 's1', { title: 'one thing entirely' })
+    const b = goal('b', 's2', { title: 'another matter altogether' })
+    const semantic = new Set([goalPairKey(a, b)])
+    expect(clusterBy([a, b], 'goal', EMPTY_VERDICTS, semantic)).toHaveLength(1)
+    const blocks = clusterBy([a, b], 'goal', { merged: [], split: [goalPairKey(a, b)] }, semantic)
+    expect(blocks).toHaveLength(2)
+  })
+
   it('lone goals stay plain rows; a merged block anchors at its first member', () => {
     const lone = goal('x', 's3', { title: 'entirely unrelated business' })
     const a = goal('a', 's1')
     const b = goal('b', 's2')
-    const blocks = clusterBy([a, lone, b], 'goal')
+    const semantic = new Set([goalPairKey(a, b)])
+    const blocks = clusterBy([a, lone, b], 'goal', EMPTY_VERDICTS, semantic)
     // The a+b cluster keeps a's position (first), lone stays a headerless row.
     expect(blocks.map(block => block.key)).toEqual(['goal:a', 'goal:x'])
     expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
@@ -1408,14 +1546,31 @@ describe('initiatives (the big-goal level)', () => {
     expect(units[1].blocks[0].items[0].id).toBe('x')
   })
 
-  it('loose items still dedup among themselves', () => {
+  it('loose items dedup among themselves, on the same signals as anywhere else', () => {
     const a = goal('a', 's1', { title: 'polish the papyrus export flow' })
     const b = goal('b', 's2', { title: 'papyrus export flow polish' })
-    const units = clusterByInitiative([a, b], buckets)
+    // Loose title overlap no longer merges, so these are two units on their own.
+    expect(clusterByInitiative([a, b], buckets)).toHaveLength(2)
+    // The semantic pass reaches the loose tail too, not just bucketed work.
+    const units = clusterByInitiative([a, b], buckets, EMPTY_VERDICTS, [], new Set([goalPairKey(a, b)]))
     expect(units).toHaveLength(1)
     expect(units[0].name).toBeNull()
     expect(units[0].blocks[0].header).toBe('goal')
     expect(units[0].blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
+  })
+
+  it('threads the semantic pairs into a bucket as well as the loose tail', () => {
+    const left = goal('a', 's1', { title: 'overwatch verb badges' })
+    const right = goal('b', 's2', { title: 'crew-manager badge wording' })
+    const bucketed = clusterByInitiative([left, right], buckets)
+    expect(bucketed[0].name).toBe('Crew Manager')
+    // Same bucket, two goals — until the model says they are one job.
+    expect(bucketed[0].blocks).toHaveLength(2)
+    const merged = clusterByInitiative(
+      [left, right], buckets, EMPTY_VERDICTS, [], new Set([goalPairKey(left, right)]),
+    )
+    expect(merged[0].blocks).toHaveLength(1)
+    expect(merged[0].blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
   })
 
   it('suggests candidates from project dirs no bucket claims', () => {
@@ -2211,5 +2366,33 @@ describe('goal extraction', () => {
 
     // A single item was never grouped, so it has nothing to explain.
     expect(explainGoal([pinnedA])).toBeNull()
+  })
+
+  it('uses the model\'s sentence only where no hard edge explains the card', () => {
+    // The semantic pass owns the merges deterministic clustering gave up, so it
+    // has to own the sentence too — otherwise a card merged by the model can only
+    // say nothing about why.
+    const a = goal('a', 's1', { title: 'group crew manager by goal' })
+    const b = goal('b', 's2', { title: 'crew manager goal grouping logic' })
+    const why = new Map([[goalPairKey(a, b), 'both are rebuilding the goal grouping pipeline']])
+    expect(explainGoal([a, b], EMPTY_VERDICTS, why))
+      .toBe('both are rebuilding the goal grouping pipeline')
+
+    // A hard edge is a fact about the items, so it outranks the model's prose.
+    const change = { kind: 'change' as const, id: '42', label: 'PR 42' }
+    const left = goal('c', 's1', { title: 'group crew manager by goal', references: [change] })
+    const right = goal('d', 's2', { title: 'crew manager goal grouping logic', references: [change] })
+    const hardWhy = new Map([[goalPairKey(left, right), 'the model would have said this']])
+    expect(explainGoal([left, right], EMPTY_VERDICTS, hardWhy))
+      .toBe('these sessions work on the same change')
+
+    // Loose overlap can no longer have caused a grouping, so it is never the
+    // reason given — with no semantic entry there is simply nothing to say.
+    expect(explainGoal([a, b])).toBeNull()
+    const steppy = [
+      goal('e', 's1', { title: 'morning cleanup', nextSteps: [{ what: 'verify the goal grouping renders merged cards' }] }),
+      goal('f', 's2', { title: 'afternoon errands', nextSteps: [{ what: 'check merged cards in the goal grouping view' }] }),
+    ]
+    expect(explainGoal(steppy)).toBeNull()
   })
 })

@@ -9,6 +9,7 @@ import {
   Package as FileText,
   ExternalLink as GitPullRequest,
   MessageSquare,
+  RefreshCw,
   Shield,
   Waves as Radar,
   Search,
@@ -124,6 +125,47 @@ const DONE_COLLAPSED_KEY = 'crew-manager.done-collapsed'
 const GOAL_VERDICTS_KEY = 'crew-manager.goal-verdicts'
 /* Last run's goal membership, so a goal keeps one identity across polls. */
 const GOAL_MEMORY_KEY = 'crew-manager.goal-memory'
+/* The semantic pass's verdicts: merge pairs, per-pair reasons, and the board
+   stamp they were computed against. Cached so an unchanged board never re-pays
+   for a model call, and so a reload keeps its grouping. The `.v2` suffix is a
+   schema-buster: it discards a cache written by an earlier prompt so an improved
+   naming pass actually re-runs instead of short-circuiting on the stale stamp. */
+const GOAL_SEMANTIC_KEY = 'crew-manager.goal-semantic.v3'
+/* Model-written goal names, keyed by goal key. Sticky by design: a name the
+   user has seen must not churn because a member joined. */
+const GOAL_NAMES_KEY = 'crew-manager.goal-names'
+/* Below this confidence an assignment is ignored and the item stays ungrouped.
+   The spec's core ruling: a wrong grouping is worse than no grouping, because
+   it hides an item somewhere the user will not look for it. */
+const SEMANTIC_CONFIDENCE_FLOOR = 0.7
+
+/** The semantic pass's verdicts, in memory: merge pairs, per-pair reasons, and
+ *  the board stamp they answered. */
+interface SemanticPass {
+  pairs: Set<string>
+  why: Map<string, string>
+  stamp: string
+}
+
+/** The same, as it sits in localStorage. */
+interface StoredSemantic {
+  pairs?: string[]
+  why?: [string, string][]
+  stamp?: string
+}
+
+/** What POST /goal-pass answers. `available: false` means the model could not
+ *  be reached (no gateway, timeout, junk reply) — deterministic grouping stands. */
+interface GoalPassResponse {
+  available: boolean
+  assignments?: { item_id?: string; cluster?: string; confidence?: number; why?: string }[]
+  names?: { cluster?: string; name?: string }[]
+}
+
+function persistSemantic(next: SemanticPass): SemanticPass {
+  writeStore(GOAL_SEMANTIC_KEY, { pairs: [...next.pairs], why: [...next.why.entries()], stamp: next.stamp })
+  return next
+}
 const INITIATIVE_COLLAPSED_KEY = 'crew-manager.initiative-collapsed'
 const OPEN_STACK_KEY = 'crew-manager.open-stack'
 const SPLIT_KEY = 'crew-manager.split'
@@ -1516,6 +1558,8 @@ function WorkSection({
   initiativeBlocks,
   initiatives: goalInitiatives,
   onRenameSession,
+  semanticWhy,
+  goalNames,
   collapsedInitiatives,
   onToggleInitiative,
   selectedGoalKey,
@@ -1559,6 +1603,10 @@ function WorkSection({
   initiativeBlocks?: InitiativeBlock[]
   initiatives?: Initiative[]
   onRenameSession?: (sessionKey: string, title: string) => void
+  /** The semantic pass's one-line reason per merged pair, for the why line. */
+  semanticWhy?: Map<string, string>
+  /** Model-written names by goal key; sticky, preferred over the derived name. */
+  goalNames?: Record<string, string>
   collapsedInitiatives?: Record<string, boolean>
   onToggleInitiative?: (key: string, next: boolean) => void
   selectedGoalKey?: string | null
@@ -1782,15 +1830,17 @@ function WorkSection({
           pairs.push(goalPairKey(block.items[i], block.items[j]))
         }
       }
-      // What to CALL this goal, derived from what its members share (a
-      // deliverable, a change, or the words their titles have in common). The
-      // count-label is the FALLBACK, not the default: "3 sessions, one goal"
-      // describes the grouping rather than the work, so it is what a card says
-      // only when the members share nothing nameable. The count is not lost —
-      // the composition meta below carries it. A single-session cluster with no
-      // shared name falls back to its session, never to "1 sessions, one goal".
+      // What to CALL this goal. A model-written name wins: it can say the
+      // OUTCOME ("Ship the neutral icon set") where the derived name can only
+      // quote a substring the titles share. It is sticky by key, so it does not
+      // churn when a member joins. Then the derived name; then the count-label
+      // FALLBACK — which describes the grouping rather than the work, so it is
+      // what a card says only when the members share nothing nameable. The
+      // count is not lost — the composition meta below carries it. A
+      // single-session cluster with no shared name falls back to its session,
+      // never to "1 sessions, one goal".
       const sessionCount = new Set(block.items.map(i => i.sessionKey).filter(Boolean)).size
-      const goalLabel = goalName(block.items) ?? (sessionCount > 1
+      const goalLabel = goalNames?.[block.key] ?? goalName(block.items) ?? (sessionCount > 1
         ? `${sessionCount} sessions, one goal`
         : lead.references.find(ref => ref.kind === 'session')?.label ?? lead.title)
       return (
@@ -1802,7 +1852,7 @@ function WorkSection({
           flag={comp.needsYou > 0 ? `${comp.needsYou} need you` : stateLabels[init.status]}
           flagWarn={comp.needsYou > 0}
           meta={goalMetaLine(block.items)}
-          why={explainGoal(block.items, goalVerdicts)}
+          why={explainGoal(block.items, goalVerdicts, semanticWhy)}
           header={
             <Clickable
               onActivate={() => onSelectGoal?.(block.key)}
@@ -1831,28 +1881,30 @@ function WorkSection({
         </GoalCard>
       )
     }
-    // A lone goal, named by its SESSION -- the group it belongs to -- so the card
-    // carries a header like every other. Two items of care:
+    // A lone goal. Prefer the MODEL's outcome title (from the semantic pass, keyed
+    // by this block) so two lone cards from the same session no longer collide on
+    // the session name -- each reads as its own goal. Falls back to the session
+    // name, then to a plain row when neither says more than the item's own title.
     //
     // A session with no summarized intents titles its work after the session
-    // itself, so header and row would print the identical string twice. Such a
-    // card has nothing to say above its row, and a band that either sits empty
-    // or repeats the row is worse than no band, so the item renders as a plain
-    // row instead. Same for an item with no session at all (a bare approval, an
-    // orphaned run): there is no group to name.
+    // itself, so header and row would print the identical string twice; such a
+    // card renders as a plain row instead. Same for an item with no session and
+    // no model name (a bare approval, an orphaned run): there is no group to name.
     const item = block.items[0]
+    const modelName = goalNames?.[`item:${item.id}`]
     const sessionName = item.references.find(ref => ref.kind === 'session')?.label
-    if (!sessionName || sessionName === item.title) return goalRow(item)
+    const loneLabel = modelName ?? sessionName
+    if (!loneLabel || loneLabel === item.title) return goalRow(item)
     const comp = goalComposition(block.items)
     return (
       <GoalCard
         key={init.key}
         open
-        label={sessionName}
+        label={loneLabel}
         flag={comp.needsYou > 0 ? `${comp.needsYou} need you` : stateLabels[item.state]}
         flagWarn={comp.needsYou > 0}
         meta={goalMetaLine(block.items)}
-        header={<span className="ow-truncate ow-block-name ow-goalcard-title">{sessionName}</span>}
+        header={<span className="ow-truncate ow-block-name ow-goalcard-title">{loneLabel}</span>}
       >
         {goalRow(item)}
       </GoalCard>
@@ -2013,6 +2065,25 @@ export default function CrewOverviewApp() {
   const [handled, setHandled] = useState<Record<string, number>>(() => readStore(HANDLED_KEY))
   const [goalVerdicts, setGoalVerdicts] = useState<GoalVerdicts>(() => readStore(GOAL_VERDICTS_KEY, { merged: [], split: [] }))
   const priorGoals = useRef<PriorGoal[]>(readStore<PriorGoal[]>(GOAL_MEMORY_KEY, []))
+  // The semantic pass's verdicts. Pairs merge clusters (always below the user's
+  // own Split pins); why lines feed the card's "Grouped because" copy. Cached
+  // with the board stamp they answered, so an unchanged board never re-pays for
+  // a model call — across reloads too.
+  const [semantic, setSemantic] = useState<SemanticPass>(() => {
+    const stored = readStore<StoredSemantic | null>(GOAL_SEMANTIC_KEY, null)
+    return {
+      pairs: new Set(stored?.pairs ?? []),
+      why: new Map(stored?.why ?? []),
+      stamp: stored?.stamp ?? '',
+    }
+  })
+  // Model-written goal names by goal key. Sticky: once the user has seen a
+  // name, a new member joining must not churn it.
+  const [goalNames, setGoalNames] = useState<Record<string, string>>(() => readStore(GOAL_NAMES_KEY, {}))
+  // Names the pass proposed for clusters that did not exist yet: they resolve
+  // to a goal key only after the new pairs have re-clustered the board.
+  const pendingNames = useRef<{ ids: string[]; name: string }[]>([])
+  const passBusy = useRef(false)
   const [initiatives, setInitiatives] = useState<Initiative[]>([])
   const [collapsedInitiatives, setCollapsedInitiatives] = useState<Record<string, boolean>>(() => readStore(INITIATIVE_COLLAPSED_KEY))
   const [selectedGoalKey, setSelectedGoalKey] = useState<string | null>(null)
@@ -2030,6 +2101,11 @@ export default function CrewOverviewApp() {
   const stallProbeRef = useRef(true)
   const [sourcesLoading, setSourcesLoading] = useState(true)
   const [sourcesError, setSourcesError] = useState<Error | null>(null)
+  // When the board's data last loaded successfully, and whether a manual refresh
+  // is in flight. Set on success only, so a failing poll lets the label age --
+  // that ageing IS the staleness signal the timestamp exists to show.
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
   const [conductorCreated, setConductorCreated] = useState(false)
   const [conductorError, setConductorError] = useState<string | null>(null)
   const mountedRef = useRef(true)
@@ -2081,6 +2157,7 @@ export default function CrewOverviewApp() {
       })
       setCronRuns(Array.isArray(runEnvelope?.runs) ? runEnvelope.runs : [])
       setSourcesError(null)
+      setLastUpdated(Date.now())
     } catch (error) {
       if (mountedRef.current && request === sourceRequestRef.current) {
         setSourcesError(error instanceof Error ? error : new Error('Unable to load Crew Manager sources'))
@@ -2101,6 +2178,16 @@ export default function CrewOverviewApp() {
     setSourcesError(null)
     void loadSources()
   }
+
+  // Manual refresh from the tab row. Does not toggle the full-card loading state
+  // (that would blank the list); it just spins the icon until the fetch settles.
+  const refreshSources = useCallback(() => {
+    if (refreshing) return
+    setRefreshing(true)
+    void loadSources().finally(() => {
+      if (mountedRef.current) setRefreshing(false)
+    })
+  }, [loadSources, refreshing])
 
   // Intent summaries: read per session, cached on last activity so an
   // unchanged session is never re-read, and abandoned entirely on a gateway
@@ -2367,8 +2454,8 @@ export default function CrewOverviewApp() {
    * Sessions pill changed.
    */
   const initiativeBlocks = useMemo(
-    () => clusterByInitiative(items, initiatives, goalVerdicts, priorGoals.current),
-    [items, initiatives, goalVerdicts],
+    () => clusterByInitiative(items, initiatives, goalVerdicts, priorGoals.current, semantic.pairs),
+    [items, initiatives, goalVerdicts, semantic],
   )
   // A goal's key is what the fold state is stored against, so it has to survive
   // the goal gaining or losing a member. Carrying the previous run's membership
@@ -2380,6 +2467,173 @@ export default function CrewOverviewApp() {
     priorGoals.current = remembered
     writeStore(GOAL_MEMORY_KEY, remembered)
   }, [initiativeBlocks])
+  // A name the pass proposed for a NEW group can only be spent once that group
+  // actually exists on the board (its pairs may have been blocked by a Split pin
+  // or the same-session guard, in which case the name must not land anywhere).
+  useEffect(() => {
+    if (pendingNames.current.length === 0) return
+    const looseBlocks = initiativeBlocks
+      .filter(init => init.name === null)
+      .flatMap(init => init.blocks)
+    const resolved: Record<string, string> = {}
+    const remaining: { ids: string[]; name: string }[] = []
+    for (const entry of pendingNames.current) {
+      const block = looseBlocks.find(candidate => candidate.items.length > 1
+        && entry.ids.filter(id => candidate.items.some(item => item.id === id)).length >= 2)
+      if (block) resolved[block.key] = entry.name
+      else remaining.push(entry)
+    }
+    pendingNames.current = remaining
+    if (Object.keys(resolved).length > 0) {
+      setGoalNames(prev => {
+        const merged = { ...prev, ...resolved }
+        writeStore(GOAL_NAMES_KEY, merged)
+        return merged
+      })
+    }
+  }, [initiativeBlocks])
+  /*
+   * Stages 4–5, the semantic pass: ONE scoped model call over what deterministic
+   * clustering left ungrouped or unnamed — never over the whole board. It is
+   * assignment-framed on the backend (assign each loose item to an existing
+   * cluster, propose a new group, or omit it when unsure), so the deterministic
+   * stages' work is never overwritten; assignments under the confidence floor
+   * are dropped, so an unsure item stays honestly ungrouped rather than
+   * misfiled. Named initiative buckets are the user's own map and are not sent.
+   */
+  useEffect(() => {
+    const loose = initiativeBlocks
+      .filter(init => init.name === null)
+      .flatMap(init => init.blocks)
+    const clusters = loose.filter(block => block.items.length > 1).map(block => ({
+      key: block.key,
+      // A cluster counts as "named" ONLY when the MODEL has named it — a sticky
+      // outcome title. A deterministic goalName() (a shared PR ref like
+      // "github #6", or the words the titles happen to share) is a display
+      // PLACEHOLDER, not a name, so it must NOT suppress the naming pass: send
+      // null and let the model write an outcome title. Once the model name is
+      // stored it is sent back here as the name, so the model is never asked to
+      // rename it — that is the stickiness the user asked for.
+      name: goalNames[block.key] ?? null,
+      items: block.items.map(item => ({ id: item.id, title: item.title })),
+    }))
+    const ungrouped = loose.filter(block => block.items.length === 1).map(block => ({
+      id: block.items[0].id,
+      title: block.items[0].title,
+      detail: block.items[0].summary ?? '',
+    }))
+    // Nothing to assign and nothing to name: no call to make.
+    if (ungrouped.length === 0 && clusters.every(cluster => cluster.name)) return
+    // The stamp is the QUESTION being asked. An unchanged question keeps its
+    // cached answer — including "unavailable", so a gateway without the route
+    // is not retried every poll. A changed board asks again.
+    const stamp = JSON.stringify([
+      clusters.map(cluster => [cluster.key, cluster.name]),
+      ungrouped.map(entry => entry.id).sort(),
+    ])
+    if (stamp === semantic.stamp || passBusy.current) return
+    passBusy.current = true
+    void (async () => {
+      try {
+        const payload = await apiRef.current.post<GoalPassResponse>(
+          '/api/apps/crew-manager/goal-pass',
+          { clusters, ungrouped },
+        )
+        // NOTE: do NOT cancel this on re-render. initiativeBlocks gets a fresh
+        // reference on every board poll (sources -> derived -> items), so a
+        // per-render `cancelled` flag flipped by effect cleanup would discard
+        // EVERY in-flight pass — the poll cadence always beats the several-second
+        // model call, so the names would never land. Applying a slightly-stale
+        // result is safe: pairs key on stable item ids, names on stable goal keys
+        // (reconcileGoalKeys). Only bail if the component unmounted.
+        if (!mountedRef.current) return
+        if (!payload?.available) {
+          setSemantic(prev => persistSemantic({ pairs: prev.pairs, why: prev.why, stamp }))
+          return
+        }
+        const itemById = new Map<string, WorkItem>()
+        for (const block of loose) for (const item of block.items) itemById.set(item.id, item)
+        const blockByKey = new Map(loose.map(block => [block.key, block]))
+        const pairs = new Set(semantic.pairs)
+        const why = new Map(semantic.why)
+        const newGroups = new Map<string, WorkItem[]>()
+        const whyByItem = new Map<string, string>()
+        for (const entry of payload.assignments ?? []) {
+          if ((entry.confidence ?? 0) < SEMANTIC_CONFIDENCE_FLOOR) continue
+          const item = entry.item_id ? itemById.get(entry.item_id) : undefined
+          // Semantic merges are cross-session only: within one session the
+          // deterministic stages (provenance, refs) already know better.
+          if (!item?.sessionKey || !entry.cluster) continue
+          if (entry.cluster.startsWith('existing:')) {
+            const block = blockByKey.get(entry.cluster.slice('existing:'.length))
+            const partner = block?.items.find(member =>
+              member.sessionKey && member.sessionKey !== item.sessionKey)
+            if (!partner) continue
+            const pair = goalPairKey(item, partner)
+            pairs.add(pair)
+            if (entry.why) why.set(pair, entry.why)
+          } else if (entry.cluster.startsWith('new:')) {
+            const group = newGroups.get(entry.cluster) ?? []
+            group.push(item)
+            newGroups.set(entry.cluster, group)
+            if (entry.why) whyByItem.set(item.id, entry.why)
+          }
+        }
+        const namesByCluster = new Map<string, string>()
+        for (const entry of payload.names ?? []) {
+          if (entry.cluster && entry.name) namesByCluster.set(entry.cluster, entry.name)
+        }
+        const proposed: { ids: string[]; name: string }[] = []
+        for (const [label, members] of newGroups) {
+          if (members.length < 2) continue
+          for (let i = 0; i < members.length; i += 1) {
+            for (let j = i + 1; j < members.length; j += 1) {
+              if (members[i].sessionKey === members[j].sessionKey) continue
+              const pair = goalPairKey(members[i], members[j])
+              pairs.add(pair)
+              const reason = whyByItem.get(members[i].id) ?? whyByItem.get(members[j].id)
+              if (reason) why.set(pair, reason)
+            }
+          }
+          const name = namesByCluster.get(label)
+          if (name) proposed.push({ ids: members.map(member => member.id), name })
+        }
+        pendingNames.current = proposed
+        const named: Record<string, string> = {}
+        for (const [cluster, name] of namesByCluster) {
+          if (cluster.startsWith('new:')) continue
+          if (cluster.startsWith('item:')) {
+            // A solo item the model left ungrouped but still named. Store the
+            // name under the SAME `item:<id>` key (NOT the block key): a lone
+            // block's intrinsic key is `goal:<min-member-id>`, which collides
+            // with a merged block sharing that member -- so a merged card's name
+            // would leak onto the member's lone card after a Split. The item: key
+            // is a separate namespace from cluster (`goal:...`) keys.
+            // STICKINESS: a solo item is re-sent nameless every pass, so only
+            // take the FIRST model name -- never overwrite one already stored.
+            if (!goalNames[cluster] && itemById.has(cluster.slice('item:'.length))) {
+              named[cluster] = name
+            }
+          } else if (blockByKey.has(cluster)) {
+            named[cluster] = name
+          }
+        }
+        if (Object.keys(named).length > 0) {
+          setGoalNames(prev => {
+            const merged = { ...prev, ...named }
+            writeStore(GOAL_NAMES_KEY, merged)
+            return merged
+          })
+        }
+        setSemantic(persistSemantic({ pairs, why, stamp }))
+      } catch {
+        // Degrade silently: deterministic grouping stands, and the stamp is NOT
+        // recorded, so a transient failure retries on the next poll.
+      } finally {
+        passBusy.current = false
+      }
+    })()
+  }, [initiativeBlocks, goalNames, semantic])
   // Re-derived each render: a poll can reshape the clusters, and a quote must
   // describe the board as it is now, not as it was when clicked.
   const selectedGoal = useMemo(() => {
@@ -2769,19 +3023,42 @@ export default function CrewOverviewApp() {
                 {/* Goals and Sessions were the Group by rail's first two modes.
                     They are the same two lenses, promoted to the card's own title
                     row — the third (PR) is the bottom stack's PRs card now. */}
-                <div className="ow-tabs" role="tablist" aria-label="View">
-                  {(['goal', 'session'] as GroupMode[]).map(mode => (
+                <div className="ow-tabrow">
+                  <div className="ow-tabs" role="tablist" aria-label="View">
+                    {(['goal', 'session'] as GroupMode[]).map(mode => (
+                      <Btn
+                        key={mode}
+                        role="tab"
+                        aria-selected={groupBy === mode}
+                        data-selected={groupBy === mode}
+                        className="ow-tab"
+                        onClick={() => setGroupBy(mode)}
+                      >
+                        {mode === 'goal' ? 'Goals' : 'Sessions'}
+                      </Btn>
+                    ))}
+                  </div>
+                  {/* When the board last loaded, and a manual re-fetch. The label
+                      ages when polling fails, which is the staleness signal. */}
+                  <div className="ow-refreshbar">
+                    {lastUpdated && (
+                      <span className="ow-updated" aria-live="polite">
+                        updated {sinceLabel(lastUpdated)}
+                      </span>
+                    )}
                     <Btn
-                      key={mode}
-                      role="tab"
-                      aria-selected={groupBy === mode}
-                      data-selected={groupBy === mode}
-                      className="ow-tab"
-                      onClick={() => setGroupBy(mode)}
+                      className="ow-refresh"
+                      onClick={refreshSources}
+                      disabled={refreshing}
+                      aria-label="Refresh"
+                      title="Refresh"
                     >
-                      {mode === 'goal' ? 'Goals' : 'Sessions'}
+                      <RefreshCw
+                        className={`ow-icon${refreshing ? ' ow-spin' : ''}`}
+                        aria-hidden="true"
+                      />
                     </Btn>
-                  ))}
+                  </div>
                 </div>
                 <div className="ow-listcard-tools">
                   <p className="ow-listcard-sub">
@@ -2860,6 +3137,8 @@ export default function CrewOverviewApp() {
                             initiativeBlocks={initiativeBlocks}
                             initiatives={initiatives}
                             onRenameSession={(key, title) => { void renameSession(key, title) }}
+                            semanticWhy={semantic.why}
+                            goalNames={goalNames}
                             collapsedInitiatives={collapsedInitiatives}
                             onToggleInitiative={toggleInitiative}
                             selectedGoalKey={selectedGoalKey}

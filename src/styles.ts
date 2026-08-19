@@ -110,7 +110,31 @@ export const OVERWATCH_STYLES = String.raw`
     overflow: hidden;
   }
   .ow-listcard-head { flex: none; padding: 12px 14px 0; }
-  .ow-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+  /* Tabs on the left, the updated-label + refresh on the right, sharing one
+     baseline. The underline spans the whole row (moved here from .ow-tabs) so
+     the right-side controls sit on the same rule as the tabs. */
+  .ow-tabrow { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); }
+  .ow-tabs { display: flex; gap: 4px; }
+  .ow-refreshbar { display: flex; align-items: center; gap: 8px; padding-bottom: 6px; }
+  .ow-updated { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  /* Icon-only refresh: no chrome at rest, a subtle tint on hover, matching the
+     other icon buttons. */
+  .ow-refresh {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-md, 8px);
+    background: none;
+    color: var(--muted);
+  }
+  .ow-refresh:hover { background: var(--bg-hover); color: var(--text); }
+  .ow-refresh:disabled { cursor: default; opacity: 0.7; }
+  .ow-spin { animation: ow-spin 0.8s linear infinite; }
+  @keyframes ow-spin { to { transform: rotate(360deg); } }
   /* Underline tabs, not the pill treatment the rail used: these switch what the
      list IS, so they read as the card's own title row rather than a filter. */
   .ow-tab {

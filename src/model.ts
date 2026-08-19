@@ -452,20 +452,47 @@ function sessionAction(slot: ChatSlot): WorkAction {
   return 'open'
 }
 
-function sessionItem(slot: ChatSlot, copy: WorkCopy): WorkItem {
-  const changeRefs: WorkReference[] = (slot.source_links ?? []).map(link => ({
-    // The spec asks the card to show "the issue behind it". A pull request and an
-    // issue arrived here labelled identically, so neither could be told from the
-    // other; the platform has always distinguished them via `kind`.
-    kind: link.kind === 'issue' ? 'issue' : 'change',
-    id: link.url,
-    label: link.kind === 'issue'
-      ? `issue #${link.number}`
-      : `${link.provider} #${link.number}`,
-    url: link.url,
-    sessionKey: slot.key,
-    status: changeStatus(link),
+/** A session's linked change/issue, paired with the number a text can mention. */
+interface SourceReference {
+  ref: WorkReference
+  /** The link's own number, as the provider writes it ("6", "2051"). */
+  number: string
+}
+
+/**
+ * The change/issue references of a session's linked sources.
+ *
+ * Built in ONE place because the session-level item and each of its intents must
+ * describe the same PR identically — two copies of this mapping drifted on the
+ * `kind` distinction once already, and a ref that differs by label is a different
+ * entity to every consumer that groups on it.
+ *
+ * The `number` rides along so a caller can scope refs to the ones a given text
+ * actually mentions; see `intentSourceRefs`.
+ */
+function sourceReferences(slot: ChatSlot): SourceReference[] {
+  return (slot.source_links ?? []).map(link => ({
+    number: String(link.number ?? ''),
+    ref: {
+      // The spec asks the card to show "the issue behind it". A pull request and an
+      // issue arrived here labelled identically, so neither could be told from the
+      // other; the platform has always distinguished them via `kind`.
+      kind: link.kind === 'issue' ? 'issue' : 'change',
+      id: link.url,
+      label: link.kind === 'issue'
+        ? `issue #${link.number}`
+        : `${link.provider} #${link.number}`,
+      url: link.url,
+      sessionKey: slot.key,
+      status: changeStatus(link),
+    },
   }))
+}
+
+function sessionItem(slot: ChatSlot, copy: WorkCopy): WorkItem {
+  // The SESSION-level item keeps every link the session has: the session really
+  // is on all of them, and it is the row the PR view fans out from.
+  const changeRefs: WorkReference[] = sourceReferences(slot).map(entry => entry.ref)
   return {
     id: `session:${slot.key}`,
     title: slot.title || copy('untitled_work'),
@@ -641,6 +668,45 @@ function intentSummaryLine(intent: SummaryIntent, copy: WorkCopy): string {
 /** Most one session may contribute, newest goal first — a long session holds many. */
 const MAX_INTENTS_PER_SESSION = 3
 
+/**
+ * Everywhere an intent could name a change it is actually about: its title, the
+ * request that opened it, what has happened since, and what comes next.
+ */
+function intentText(intent: SummaryIntent): string {
+  return [
+    intent.title ?? '',
+    intent.initial_intent ?? '',
+    ...(intent.progress ?? []),
+    ...(intent.next_steps ?? []).map(step => step.what ?? ''),
+  ].join(' ')
+}
+
+/**
+ * Whether a text names this link by number — "#6", or "# 6" as some summaries
+ * write it. Bounded on the right so #6 does not answer for #60.
+ */
+function mentionsSource(text: string, number: string): boolean {
+  if (!number) return false
+  const escaped = number.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  return new RegExp(`#\\s?${escaped}\\b`, 'u').test(text)
+}
+
+/**
+ * The links THIS goal is about, not every link its session happens to carry.
+ *
+ * A session's `source_links` belong to the session. Copying all of them onto
+ * every intent made a shared change ref out of mere co-residency: two sessions
+ * that each touch PR #6 then matched `same_change` on EVERY cross-session pair of
+ * their intents, so ten unrelated goals collapsed into one card. An intent claims
+ * a link only when its own text names it, which is the evidence that the goal is
+ * about that change. Unmentioned links stay on the session-level item.
+ */
+function intentSourceRefs(sources: SourceReference[], intent: SummaryIntent): WorkReference[] {
+  if (sources.length === 0) return []
+  const text = intentText(intent)
+  return sources.filter(entry => mentionsSource(text, entry.number)).map(entry => entry.ref)
+}
+
 function intentWorkItems(
   slot: ChatSlot,
   summary: SessionSummary | undefined,
@@ -650,19 +716,7 @@ function intentWorkItems(
   const intents = summary.intents ?? []
   if (intents.length === 0) return []
 
-  const changeRefs: WorkReference[] = (slot.source_links ?? []).map(link => ({
-    // The spec asks the card to show "the issue behind it". A pull request and an
-    // issue arrived here labelled identically, so neither could be told from the
-    // other; the platform has always distinguished them via `kind`.
-    kind: link.kind === 'issue' ? 'issue' : 'change',
-    id: link.url,
-    label: link.kind === 'issue'
-      ? `issue #${link.number}`
-      : `${link.provider} #${link.number}`,
-    url: link.url,
-    sessionKey: slot.key,
-    status: changeStatus(link),
-  }))
+  const sources = sourceReferences(slot)
 
   const built: WorkItem[] = []
   // The one goal the session touched last is the only one that can be in motion.
@@ -716,7 +770,7 @@ function intentWorkItems(
       action: 'resume',
       references: [
         { kind: 'session', id: slot.key, label: slot.title || copy('untitled_work'), sessionKey: slot.key },
-        ...changeRefs,
+        ...intentSourceRefs(sources, intent),
       ],
       nextSteps,
       progress: (intent.progress ?? []).filter(entry => entry.trim()),
@@ -752,7 +806,7 @@ function intentWorkItems(
       action: 'open',
       references: [
         { kind: 'session', id: slot.key, label: slot.title || copy('untitled_work'), sessionKey: slot.key },
-        ...changeRefs,
+        ...intentSourceRefs(sources, intent),
       ],
       nextSteps,
       progress: (intent.progress ?? []).filter(entry => entry.trim()),
@@ -1818,13 +1872,20 @@ export interface WorkBlock {
  * with the work underneath it. Work with no PR is NOT shown in the PR view — this
  * view is about PRs, so unlinked work stays in the Session view only.
  *
- * GOAL: the job is the primary entity. Items from DIFFERENT sessions judged to
- * be the same job (sameGoal, corrected by the user's verdicts) merge into one
- * card, so "S1 is on it, S2 left it open" reads as one thing, not two.
+ * GOAL: the job is the primary entity. Items from DIFFERENT sessions that share a
+ * HARD signal (the same change, the same output, the same named deliverable),
+ * corrected by the user's verdicts and extended by the optional `semantic` pair
+ * set from the model pass, merge into one card — so "S1 is on it, S2 left it
+ * open" reads as one thing, not two.
  */
-export function clusterBy(items: WorkItem[], mode: GroupMode, verdicts: GoalVerdicts = EMPTY_VERDICTS): WorkBlock[] {
+export function clusterBy(
+  items: WorkItem[],
+  mode: GroupMode,
+  verdicts: GoalVerdicts = EMPTY_VERDICTS,
+  semantic?: Set<string>,
+): WorkBlock[] {
   if (mode === 'pr') return clusterByPr(items)
-  if (mode === 'goal') return clusterByGoal(items, verdicts)
+  if (mode === 'goal') return clusterByGoal(items, verdicts, semantic)
   const blocks: WorkBlock[] = []
   const byKey = new Map<string, WorkBlock>()
 
@@ -1877,11 +1938,37 @@ function clusterByPr(items: WorkItem[]): WorkBlock[] {
 }
 
 /**
+ * The `GoalMatch` kinds strong enough to MERGE two items on their own.
+ *
+ * `same_topic` and `same_step` are deliberately absent. Both are loose word
+ * overlap measured against the SMALLER title, so two shared distinctive words
+ * are enough to pair items — and clustering is transitive through union-find, so
+ * A~B and B~C drags A and C into one card even though nothing links them. Chained
+ * far enough, the whole board becomes one goal, which is strictly worse than not
+ * grouping at all.
+ *
+ * They keep earning their place everywhere the judgement is ADVICE rather than a
+ * merge: the duplicate warning, the related-sessions list, and the merge hint all
+ * still call `sameGoal` and still read them. What used to merge on them is now the
+ * semantic pass's job, which supplies its merges as an explicit pair set — a
+ * decision per pair, so it cannot chain.
+ */
+export const HARD_GOAL_MATCHES: readonly GoalMatch[] = ['same_change', 'same_artifact', 'same_deliverable']
+
+/**
  * Merge cross-session items that are the same job into one block. A block takes
  * the position of its most-urgent member; singletons stay plain rows, because
  * every item here already IS a goal — only the cross-session merge is news.
+ *
+ * `semantic` holds `goalPairKey` strings the model pass judged to be one job.
+ * They merge like a deterministic hard match, but they are enumerated pairs
+ * rather than a similarity threshold, and the user's `split` still beats them.
  */
-function clusterByGoal(items: WorkItem[], verdicts: GoalVerdicts): WorkBlock[] {
+function clusterByGoal(
+  items: WorkItem[],
+  verdicts: GoalVerdicts,
+  semantic?: Set<string>,
+): WorkBlock[] {
   const ambient = ambientPhrases(items)
   const parent = items.map((_, index) => index)
   const find = (index: number): number => {
@@ -1898,7 +1985,8 @@ function clusterByGoal(items: WorkItem[], verdicts: GoalVerdicts): WorkBlock[] {
       const a = items[i]
       const b = items[j]
       const pair = goalPairKey(a, b)
-      // Stage 0 — the user's ruling beats every later stage, in both directions.
+      // Stage 0 — the user's ruling beats every later stage, in both directions,
+      // the model's pairs included.
       if (verdicts.split.includes(pair)) continue
       // Stage 2 — recorded provenance is a fact, not a guess, so it holds even
       // WITHIN one session: a loop and the session that started it are one goal,
@@ -1907,8 +1995,11 @@ function clusterByGoal(items: WorkItem[], verdicts: GoalVerdicts): WorkBlock[] {
       if (verdicts.merged.includes(pair)) { union(i, j); continue }
       // Two intents inside one session are distinct goals; only sessions merge.
       if (!a.sessionKey || !b.sessionKey || a.sessionKey === b.sessionKey) continue
-      // Stages 3 — deterministic key matching, then loose title/step overlap.
-      if (sameGoal(a, b, ambient)) union(i, j)
+      // Stage 3 — the model's judgement on this specific pair.
+      if (semantic?.has(pair)) { union(i, j); continue }
+      // Stage 4 — deterministic matching, HARD signals only.
+      const match = sameGoal(a, b, ambient)
+      if (match && HARD_GOAL_MATCHES.includes(match)) union(i, j)
     }
   }
 
@@ -2022,19 +2113,32 @@ function escapeForPattern(word: string): string {
  * merges two sessions has to be able to say what it merged them on, or the user
  * has no basis to trust it — or to press Split. Reports the STRONGEST edge in the
  * cluster, since that is the one that would survive if the others went away.
+ *
+ * `semanticWhy` maps a `goalPairKey` to the model's own one-line reason, used
+ * verbatim when no deterministic edge explains the cluster. Only the signals that
+ * can actually MERGE are reported: loose topic/step overlap no longer groups
+ * anything, so naming it as the reason would credit an edge that did not cause
+ * the grouping.
  */
-export function explainGoal(items: WorkItem[], verdicts: GoalVerdicts = EMPTY_VERDICTS): string | null {
+export function explainGoal(
+  items: WorkItem[],
+  verdicts: GoalVerdicts = EMPTY_VERDICTS,
+  semanticWhy?: Map<string, string>,
+): string | null {
   if (items.length < 2) return null
   let match: GoalMatch | null = null
   let phrase: string | null = null
+  let semantic: string | null = null
   for (let i = 0; i < items.length; i += 1) {
     for (let j = i + 1; j < items.length; j += 1) {
       const a = items[i]
       const b = items[j]
       if (provenanceEdge(a, b)) return `${b.parentId === a.id ? b.title : a.title} was started by this work`
       if (verdicts.merged.includes(goalPairKey(a, b))) return 'you merged these'
+      semantic ??= semanticWhy?.get(goalPairKey(a, b)) ?? null
       const because = sameGoal(a, b)
-      if (!because) continue
+      // Only a hard signal can have caused this cluster.
+      if (!because || !HARD_GOAL_MATCHES.includes(because)) continue
       if (!match || GOAL_MATCH_RANK.indexOf(because) < GOAL_MATCH_RANK.indexOf(match)) {
         match = because
         if (because === 'same_deliverable') {
@@ -2048,12 +2152,12 @@ export function explainGoal(items: WorkItem[], verdicts: GoalVerdicts = EMPTY_VE
       }
     }
   }
-  if (!match) return null
+  // A hard deterministic edge outranks the model's sentence: it is a fact about
+  // the items, and it is the edge that would survive if the pass went away.
   if (match === 'same_change') return 'these sessions work on the same change'
   if (match === 'same_artifact') return 'these sessions share the same output'
   if (match === 'same_deliverable') return phrase ? `both are about ${phrase}` : 'both name the same deliverable'
-  if (match === 'same_step') return 'these sessions have the same next step'
-  return 'these sessions describe the same work'
+  return semantic
 }
 
 /**
@@ -2440,6 +2544,7 @@ export function clusterByInitiative(
   initiatives: Initiative[],
   verdicts: GoalVerdicts = EMPTY_VERDICTS,
   prior: PriorGoal[] = [],
+  semantic?: Set<string>,
 ): InitiativeBlock[] {
   const byName = new Map<string, WorkItem[]>()
   const loose: WorkItem[] = []
@@ -2460,7 +2565,7 @@ export function clusterByInitiative(
   // whether or not a bucket claims it. Their block key IS the card's identity
   // here (a bucket card is named, these are not), so it is reconciled against
   // the previous run to keep one goal's fold state through membership changes.
-  const looseBlocks = reconcileGoalKeys(clusterByGoal(loose, verdicts), prior)
+  const looseBlocks = reconcileGoalKeys(clusterByGoal(loose, verdicts, semantic), prior)
   const looseByLead = new Map<string, WorkBlock>()
   for (const block of looseBlocks) looseByLead.set(block.items[0].id, block)
 
@@ -2478,7 +2583,7 @@ export function clusterByInitiative(
         name,
         status: rollupStatus(members),
         sessions: sessionLabels(members),
-        blocks: clusterByGoal(members, verdicts),
+        blocks: clusterByGoal(members, verdicts, semantic),
       })
       continue
     }
