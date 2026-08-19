@@ -315,3 +315,68 @@ describe('Crew Manager Conductor boundaries', () => {
     })
   })
 })
+
+describe('bottom stack cards', () => {
+  // The previous attempt at this shipped a chevron whose onToggle prop was never
+  // passed by the call site, so it rendered and did nothing. These assert the
+  // open STATE, not the presence of a control.
+  function stackCards() {
+    return Array.from(document.querySelectorAll('details.ow-stack-card')) as HTMLDetailsElement[]
+  }
+
+  function cardTitled(label: string) {
+    return stackCards().find(card => card.querySelector('summary')?.textContent?.includes(label))
+  }
+
+  it('opens exactly one card at rest', async () => {
+    localStorage.removeItem('crew-manager.open-stack')
+    renderApp()
+    await waitFor(() => expect(stackCards().length).toBe(3))
+
+    // PRs is the default: it is the only one of the three that routinely holds
+    // work needing a decision.
+    const open = stackCards().filter(card => card.open)
+    expect(open).toHaveLength(1)
+    expect(open[0].querySelector('summary')?.textContent).toContain('PRs')
+  })
+
+  it('opening one card closes the others', async () => {
+    localStorage.removeItem('crew-manager.open-stack')
+    renderApp()
+    await waitFor(() => expect(stackCards().length).toBe(3))
+
+    const loops = cardTitled('Loops')
+    expect(loops).toBeDefined()
+    fireEvent.click(loops!.querySelector('summary') as HTMLElement)
+
+    await waitFor(() => expect(loops!.open).toBe(true))
+    // The whole point: PRs must have closed. Two open cards put the list you
+    // wanted between two others.
+    expect(stackCards().filter(card => card.open)).toHaveLength(1)
+    expect(cardTitled('PRs')!.open).toBe(false)
+  })
+
+  it('clicking the open card closes it, leaving none open', async () => {
+    localStorage.removeItem('crew-manager.open-stack')
+    renderApp()
+    await waitFor(() => expect(stackCards().length).toBe(3))
+
+    const prs = cardTitled('PRs')!
+    expect(prs.open).toBe(true)
+    fireEvent.click(prs.querySelector('summary') as HTMLElement)
+
+    // Collapse-everything stays reachable; always-open would trap the user with
+    // one card they cannot dismiss.
+    await waitFor(() => expect(prs.open).toBe(false))
+    expect(stackCards().filter(card => card.open)).toHaveLength(0)
+  })
+
+  it('remembers which card was open', async () => {
+    localStorage.setItem('crew-manager.open-stack', JSON.stringify('loops'))
+    renderApp()
+    await waitFor(() => expect(stackCards().length).toBe(3))
+
+    expect(cardTitled('Loops')!.open).toBe(true)
+    expect(cardTitled('PRs')!.open).toBe(false)
+  })
+})
