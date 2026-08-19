@@ -23,6 +23,9 @@ import {
   goalRouteTarget,
   initiativeCandidates,
   initiativeFor,
+  memberDot,
+  memberKind,
+  goalComposition,
   rollupStatus,
   sameGoal,
   suggestGoalNames,
@@ -1435,6 +1438,55 @@ describe('initiatives (the big-goal level)', () => {
     const a = goal('a', 's1', { title: 'overwatch verb badges' })
     const b = goal('b', 's2', { title: 'overwatch stall backend' })
     expect(suggestGoalNames([a, b], buckets)).toEqual([])
+  })
+})
+
+describe('goal-card member presentation', () => {
+  function item(id: string, extra: Partial<WorkItem> = {}): WorkItem {
+    return {
+      id, title: 't', summary: 's', state: 'running', issue: false,
+      updatedAt: 10, sessionKey: 's1', provenance: 'p',
+      references: [{ kind: 'session', id: 's1', label: 's1', sessionKey: 's1' }],
+      ...extra,
+    } as WorkItem
+  }
+
+  it('the dot follows the same state language as the badge', () => {
+    expect(memberDot(item('a', { state: 'needs-you', issue: true }))).toBe('crit')
+    expect(memberDot(item('b', { state: 'running', issue: true }))).toBe('crit')
+    expect(memberDot(item('c', { state: 'needs-you', action: 'reply' }))).toBe('warn')
+    expect(memberDot(item('d', { state: 'needs-you', unattendedGoals: 1, action: 'resume' }))).toBe('idle')
+    expect(memberDot(item('e', { state: 'running' }))).toBe('good')
+    expect(memberDot(item('f', { state: 'done' }))).toBe('good')
+  })
+
+  it('the kind names the response owed when it needs you, else the entity', () => {
+    expect(memberKind(item('a', { state: 'needs-you', action: 'reply' }))).toBe('unblock')
+    expect(memberKind(item('b', { state: 'needs-you', unattendedGoals: 1, action: 'resume' }))).toBe('follow-up')
+    expect(memberKind(item('monitor:x', { state: 'running' }))).toBe('cron')
+    expect(memberKind(item('workflow:x', { state: 'running' }))).toBe('loop')
+    expect(memberKind(item('agent:x', { state: 'running' }))).toBe('agent')
+    expect(memberKind(item('artifact:x', { state: 'done' }))).toBe('artifact')
+    expect(memberKind(item('intent:s1:0', { state: 'running' }))).toBe('session')
+  })
+
+  it('composition counts only entities that actually exist among members', () => {
+    const a = item('intent:s1:0', { sessionKey: 's1', updatedAt: 5, references: [
+      { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' },
+      { kind: 'change', id: 'https://x/pull/4', label: 'PR 4' },
+    ] })
+    const b = item('intent:s2:0', { sessionKey: 's2', state: 'needs-you', action: 'reply', updatedAt: 30, references: [
+      { kind: 'session', id: 's2', label: 's2', sessionKey: 's2' },
+      { kind: 'change', id: 'https://x/pull/4', label: 'PR 4' },
+    ] })
+    const cron = item('monitor:c', { sessionKey: undefined, references: [] })
+    const comp = goalComposition([a, b, cron])
+    expect(comp.sessions).toBe(2)
+    expect(comp.prs).toBe(1)
+    expect(comp.crons).toBe(1)
+    expect(comp.loops).toBe(0)
+    expect(comp.needsYou).toBe(1)
+    expect(comp.lastActivityAt).toBe(30)
   })
 })
 

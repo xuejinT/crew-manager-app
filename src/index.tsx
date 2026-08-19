@@ -52,9 +52,11 @@ import {
   explainRank,
   fleetBriefing,
   clusterByInitiative,
+  goalComposition,
   goalPairKey,
   goalRouteTarget,
   initiativeCandidates,
+  memberDot,
   normalizeWorkItems,
   rankWorkItem,
   sameGoal,
@@ -69,6 +71,7 @@ import {
   type Initiative,
   type InitiativeBlock,
   type InstructedItems,
+  type MemberDot,
   type PendingPermission,
   type ResponseVerb,
   type WorkBlock,
@@ -146,6 +149,34 @@ function sinceLabel(ms: number, now: number = Date.now()): string | null {
 function clockLabel(ms: number): string {
   if (!ms) return ''
   return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+/** "1 session" / "3 sessions" — a count with its noun, or null at zero so the
+ *  composition line drops the part rather than printing "0 PRs". */
+function countPart(n: number, one: string, many: string): string | null {
+  if (n <= 0) return null
+  return `${n} ${n === 1 ? one : many}`
+}
+
+/**
+ * The one-line "what this goal is made of" meta, e.g.
+ * "2 sessions · 3 PRs · last active 2h ago". Built from goalComposition, which
+ * counts only members that actually exist — no start date is invented (the model
+ * has no per-goal creation stamp), so it reports last activity instead.
+ */
+function goalMetaLine(items: WorkItem[], now: number = Date.now()): string {
+  const c = goalComposition(items)
+  const parts = [
+    countPart(c.sessions, 'session', 'sessions'),
+    countPart(c.prs, 'PR', 'PRs'),
+    countPart(c.issues, 'issue', 'issues'),
+    countPart(c.loops, 'loop', 'loops'),
+    countPart(c.crons, 'cron', 'crons'),
+    countPart(c.agents, 'agent', 'agents'),
+  ].filter((part): part is string => Boolean(part))
+  const since = sinceLabel(c.lastActivityAt, now)
+  if (since) parts.push(`last active ${since}`)
+  return parts.join(' · ')
 }
 
 const CONDUCTOR_SLOT = 'crew-manager-conductor'
@@ -481,6 +512,60 @@ function GoalDigest({ members }: { members: WorkItem[] }) {
   )
 }
 
+/**
+ * The shared chrome for a goal card, matching the dashboard mockup: a collapse
+ * chevron, the goal's name (a plain label for a user bucket, a routing Clickable
+ * for an auto cluster or lone goal), an optional trailing `action` (Split), a
+ * "N need you" flag, and a one-line composition meta. `children` is whatever the
+ * caller renders below — the fold digest, or the member rows. Chevron and header
+ * are split so the title can still route to the Conductor while the chevron folds.
+ */
+function GoalCard({
+  open,
+  onToggle,
+  label,
+  flag,
+  flagWarn,
+  meta,
+  header,
+  action,
+  children,
+}: {
+  open: boolean
+  onToggle?: () => void
+  /** Names the goal in the fold chevron's aria-label, so it is unique per card. */
+  label?: string
+  flag: string
+  flagWarn?: boolean
+  meta: string
+  header: ReactNode
+  action?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <div className="ow-block ow-goalcard" data-grouped="true" data-open={open ? 'true' : undefined}>
+      <div className="ow-goalcard-summary">
+        {onToggle && (
+          <button
+            type="button"
+            className="ow-goalcard-chevron"
+            aria-expanded={open}
+            aria-label={`${open ? 'Collapse' : 'Expand'} ${label ?? 'goal'}`}
+            onClick={onToggle}
+          >
+            <ChevronRight className="ow-icon ow-init-chevron" data-open={open ? 'true' : undefined} aria-hidden="true" />
+          </button>
+        )}
+        {header}
+        {action}
+        <span className={`ow-goal-flag${flagWarn ? ' ow-goal-flag-warn' : ''}`}>{flag}</span>
+      </div>
+      <div className="ow-goal-meta">{meta}</div>
+      {children}
+    </div>
+  )
+}
+
 function GoalBlockHeader({ block, status, folded, onToggle, onSplit, selected, onSelect }: {
   block: WorkBlock
   status?: WorkState
@@ -763,6 +848,8 @@ function WorkRow({
   hideBadge,
   compact,
   headless,
+  dot,
+  simple,
 }: {
   item: WorkItem
   selected: boolean
@@ -770,6 +857,15 @@ function WorkRow({
   compact?: boolean
   /** The card header already states this row's badge+title — do not repeat. */
   headless?: boolean
+  /** Goal mode: a leading status dot echoing the card's state language. */
+  dot?: MemberDot
+  /**
+   * Goal mode: collapse the row to a status dot + label + chevron. Summary, meta,
+   * the why line and expansions are hidden until the row is selected. A headless
+   * row (its title already in the card header) renders nothing at rest and only
+   * its detail on select — so it never leaves a blank strip.
+   */
+  simple?: boolean
   onAnswerPermission?: (id: string, approve: boolean) => void
   permissionBusy?: boolean
   onRetry?: (path: string) => void
@@ -810,16 +906,17 @@ function WorkRow({
         <div className="ow-row-content">
           {!headless && (
           <div className="ow-row-heading">
-            {hideBadge
+            {dot && <span className={`ow-dot ow-dot-${dot}`} aria-hidden="true" />}
+            {!simple && (hideBadge
               ? (item.state === 'done' && <Check className="ow-icon ow-row-check" aria-hidden="true" />)
-              : stateBadge(item)}
+              : stateBadge(item))}
             <span className="ow-row-title">{item.title}</span>
           </div>
           )}
           {/* Compact rows show the title only at rest; selecting one expands its
               summary here, so a click always reveals content (every item has a
               summary) rather than only the ones that happen to carry next-steps. */}
-          {(!compact || selected) && item.summary && !(item.nextSteps ?? []).some(step => step.what?.trim() === item.summary) && (
+          {((!compact && !simple) || selected) && item.summary && !(item.nextSteps ?? []).some(step => step.what?.trim() === item.summary) && (
             <p className="ow-row-summary">{item.summary}</p>
           )}
           {/*
@@ -827,7 +924,7 @@ function WorkRow({
             already on this" changes whether the rest of the card matters, and it
             links straight to the other session so the comparison is one click.
           */}
-          {item.duplicateOf && (
+          {item.duplicateOf && (!simple || selected) && (
             <Clickable
               className="ow-row-duplicate"
               onActivate={() => onOpenSession(item.duplicateOf!.sessionKey)}
@@ -879,12 +976,12 @@ function WorkRow({
             Done are plain recency, where this line would cost a row and say
             nothing.
           */}
-          {whyRanked && <div className="ow-row-why">{whyRanked}</div>}
+          {whyRanked && (!simple || selected) && <div className="ow-row-why">{whyRanked}</div>}
           {/*
             Inside a session block the header already carries the session, the
             project and the linked changes, so repeating them per row is noise.
           */}
-          {!continuation && (
+          {!continuation && (!simple || selected) && (
             <div className="ow-row-meta">
               <span className="ow-truncate">{item.provenance}</span>
               {metaReferences(item).length > 0 && <span aria-hidden="true">·</span>}
@@ -1309,16 +1406,16 @@ function WorkSection({
             </div>
   )
 
-  // Goal mode renders ONE card anatomy, per the Session view precedent: every
-  // top-level unit is a card with a header tab and WorkRow rows. A bucket, an
-  // auto-merged cluster, and a lone goal differ only in what the header says —
-  // never in what KIND of thing they look like.
-  const goalRow = (item: WorkItem, headerTitle: string | null) => (
+  // Goal mode: every member is a self-labelling simple row (dot + title +
+  // chevron), so no item is hidden behind a header and none renders blank. The
+  // card header names the GOAL, never a member — so it must not repeat a title.
+  const goalRow = (item: WorkItem) => (
     <Fragment key={item.id}>
       <WorkRow
         item={item}
         selected={selectedId === item.id}
-        headless={headerTitle !== null && item.title === headerTitle}
+        dot={memberDot(item)}
+        simple
         whyRanked={
           item.state === 'needs-you' && item.action !== 'resume'
             ? explainRank(rankWorkItem(item), workCopy)
@@ -1341,69 +1438,96 @@ function WorkSection({
   )
 
   const renderInitiative = (init: InitiativeBlock) => {
-    // A user-defined goal: header names it, carries the rollup status and the
-    // sessions on it, and folds — quiet groups collapse, owed decisions do not.
+    // A user-defined goal: header names it + a "N need you" flag; a composition
+    // meta line sits below; folded shows the digest, open shows simple rows.
     if (init.name) {
       const folded = collapsedInitiatives?.[init.key] ?? (init.status !== 'needs-you')
       const members = init.blocks.flatMap(block => block.items)
+      const comp = goalComposition(members)
       return (
-        <div key={init.key} className="ow-block" data-grouped="true">
-          <Clickable
-            onActivate={() => onToggleInitiative?.(init.key, !folded)}
-            className="ow-block-tab"
-            aria-expanded={!folded}
-          >
-            <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
-            <span className="ow-truncate ow-block-name">{init.name}</span>
-            <span className="ow-init-status" data-status={init.status}>{stateLabels[init.status]}</span>
-            {/* A count, not a name list: the digest and the rows already name
-                sessions where there is room to read them. */}
-            <span className="ow-block-tab-meta">
-              <span aria-hidden="true">·</span>
-              <span className="ow-truncate">{init.sessions.length} session{init.sessions.length === 1 ? '' : 's'}</span>
-            </span>
-          </Clickable>
-          {folded ? <GoalDigest members={members} /> : members.map(item => goalRow(item, null))}
-        </div>
+        <GoalCard
+          key={init.key}
+          open={!folded}
+          onToggle={() => onToggleInitiative?.(init.key, !folded)}
+          label={init.name}
+          flag={comp.needsYou > 0 ? `${comp.needsYou} need you` : stateLabels[init.status]}
+          flagWarn={comp.needsYou > 0}
+          meta={goalMetaLine(members)}
+          header={<span className="ow-truncate ow-block-name ow-goalcard-title">{init.name}</span>}
+        >
+          {folded ? <GoalDigest members={members} /> : members.map(item => goalRow(item))}
+        </GoalCard>
       )
     }
     const block = init.blocks[0]
-    // An auto-detected cross-session goal: same card, plus Split and routing.
+    // An auto-detected cross-session goal: the header keeps the goal's name (the
+    // lead item's title) + Split; every member — the lead included — is a simple
+    // row (the lead renders headless, so its title is not repeated).
     if (block.header === 'goal') {
       const folded = collapsedInitiatives?.[init.key] ?? (init.status !== 'needs-you')
+      const lead = block.items[0]
+      const comp = goalComposition(block.items)
+      const pairs: string[] = []
+      for (let i = 0; i < block.items.length; i += 1) {
+        for (let j = i + 1; j < block.items.length; j += 1) {
+          if (block.items[i].sessionKey !== block.items[j].sessionKey) {
+            pairs.push(goalPairKey(block.items[i], block.items[j]))
+          }
+        }
+      }
       return (
-        <div key={init.key} className="ow-block" data-grouped="true">
-          <GoalBlockHeader
-            block={block}
-            status={init.status}
-            folded={folded}
-            onToggle={onToggleInitiative ? () => onToggleInitiative(init.key, !folded) : undefined}
-            onSplit={onSplitGoal}
-            selected={selectedGoalKey === block.key}
-            onSelect={onSelectGoal ? () => onSelectGoal(block.key) : undefined}
-          />
+        <GoalCard
+          key={init.key}
+          open={!folded}
+          onToggle={() => onToggleInitiative?.(init.key, !folded)}
+          label={`${new Set(block.items.map(i => i.sessionKey).filter(Boolean)).size} sessions, one goal`}
+          flag={comp.needsYou > 0 ? `${comp.needsYou} need you` : stateLabels[init.status]}
+          flagWarn={comp.needsYou > 0}
+          meta={goalMetaLine(block.items)}
+          header={
+            <Clickable
+              onActivate={() => onSelectGoal?.(block.key)}
+              className="ow-goalcard-header ow-goal-tab"
+              aria-pressed={selectedGoalKey === block.key}
+              data-selected={selectedGoalKey === block.key ? 'true' : undefined}
+            >
+              <Users className="ow-icon" aria-hidden="true" />
+              <span className="ow-truncate ow-block-name ow-goalcard-title">{new Set(block.items.map(i => i.sessionKey).filter(Boolean)).size} sessions, one goal</span>
+            </Clickable>
+          }
+          action={onSplitGoal && (
+            <Btn
+              className="ow-block-open"
+              title="Not the same goal — split into separate cards"
+              aria-label={`Split ${lead.title}`}
+              onClick={event => { event.stopPropagation(); onSplitGoal(pairs) }}
+            >
+              Split
+            </Btn>
+          )}
+        >
           {folded
             ? <GoalDigest members={block.items} />
-            : block.items.map(item => goalRow(item, block.items[0].title))}
-        </div>
+            : block.items.map(item => goalRow(item))}
+        </GoalCard>
       )
     }
-    // A lone goal: still the same card — header carries badge + title, the row
-    // keeps the summary, session chip, and expansions without repeating them.
+    // A lone goal: nothing to name above a single item, so the header is just the
+    // grouping chrome (flag + composition); the item carries its own title in its
+    // row.
     const item = block.items[0]
+    const comp = goalComposition(block.items)
     return (
-      <div key={init.key} className="ow-block" data-grouped="true">
-        <Clickable
-          onActivate={() => onSelect(item)}
-          className="ow-block-tab ow-goal-tab"
-          aria-pressed={selectedId === item.id}
-          data-selected={selectedId === item.id ? 'true' : undefined}
-        >
-          {stateBadge(item)}
-          <span className="ow-truncate ow-block-name">{item.title}</span>
-        </Clickable>
-        {goalRow(item, item.title)}
-      </div>
+      <GoalCard
+        key={init.key}
+        open
+        flag={comp.needsYou > 0 ? `${comp.needsYou} need you` : stateLabels[item.state]}
+        flagWarn={comp.needsYou > 0}
+        meta={goalMetaLine(block.items)}
+        header={<span className="ow-goalcard-title ow-goalcard-lone" aria-hidden="true" />}
+      >
+        {goalRow(item)}
+      </GoalCard>
     )
   }
 

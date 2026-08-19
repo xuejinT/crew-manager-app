@@ -76,9 +76,9 @@ describe('Crew Manager Conductor boundaries', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
     // One merged card, folded by default (nothing needs the user): digest shows.
     expect(await screen.findByText('2 sessions, one goal')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Ship the avatar upload flow' }))
-    // Member rows keep the Session-view work-card anatomy (badge left, own
-    // title, session in meta).
+    fireEvent.click(screen.getByRole('button', { name: 'Expand 2 sessions, one goal' }))
+    // Member rows carry a status dot + title; the lead is a row too (the header
+    // names the GROUP, not a member, so nothing is duplicated).
     expect(await screen.findByTestId('work-item-session:s1')).toBeInTheDocument()
     expect(screen.getByTestId('work-item-session:s2')).toBeInTheDocument()
 
@@ -116,24 +116,24 @@ describe('Crew Manager Conductor boundaries', () => {
     renderApp()
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
-    // The bucket card: name + DERIVED status chip in its header. The cluster
-    // header carries the same chip — one anatomy, so two chips render.
+    // The bucket card: name + a status flag in its header. The cluster card
+    // carries the same flag — one chrome, so two "Running" flags render.
     expect(await screen.findByText('Crew Companion')).toBeInTheDocument()
-    expect(screen.getAllByText('Running', { selector: '.ow-init-status' })).toHaveLength(2)
-    // The auto cluster: same card anatomy, header says the span. It arrives
+    expect(screen.getAllByText('Running', { selector: '.ow-goal-flag' })).toHaveLength(2)
+    // The auto cluster: same card chrome, header names the group. It arrives
     // FOLDED (nothing needs the user) showing the digest, not the rows.
     expect(screen.getByText('2 sessions, one goal')).toBeInTheDocument()
     expect(screen.getByText('2 sessions · 1 running · 1 done')).toBeInTheDocument()
     expect(screen.queryByTestId('work-item-session:s2')).not.toBeInTheDocument()
     // The chevron unfolds to the member rows.
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Ship the avatar upload flow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand 2 sessions, one goal' }))
     expect(await screen.findByTestId('work-item-session:s2')).toBeInTheDocument()
     // The add-goal entry is ALWAYS reachable — buckets existing must not hide it.
     expect(screen.getByLabelText('New goal name')).toBeInTheDocument()
 
     // Selecting the cluster header quotes the GOAL and names the routing target —
-    // the ACTIVE session — before anything is sent.
-    fireEvent.click(screen.getByRole('button', { name: /Ship the avatar upload flow.*2 sessions, one goal/ }))
+    // the ACTIVE session — before anything is sent. The header names the group.
+    fireEvent.click(screen.getByRole('button', { name: '2 sessions, one goal' }))
     expect(await screen.findByText('Instructing goal')).toBeInTheDocument()
     expect(screen.getByText(/→ Ship the avatar upload flow \(active\)/)).toBeInTheDocument()
     expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', expect.anything())
