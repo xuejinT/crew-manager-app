@@ -206,6 +206,10 @@ export const OVERWATCH_STYLES = String.raw`
     text-align: left;
   }
   .ow-block-name { font-weight: 600; }
+  /* The NAME is the point of the header — the meta list yields, never the name. */
+  .ow-block-tab .ow-block-name { flex: none; max-width: 40ch; }
+  /* The NAME is the point of the header — the meta list yields, never the name. */
+  .ow-block-tab .ow-block-name { flex: none; max-width: 40ch; }
   .ow-block-tab:hover .ow-block-name { text-decoration: underline; }
   /* Rows give up their own frame: the enclosing card already provides it. */
   .ow-block[data-grouped='true'] .ow-row {
@@ -358,6 +362,29 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-pr-dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .ow-pr-dot[data-bad='true'] { color: var(--danger); }
   .ow-pr-sublabel { padding: 6px 12px 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
+  .ow-goal-digest { padding: 10px 16px 12px; border-top: 1px solid var(--border); }
+  .ow-digest-line {
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 13px;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+  .ow-digest-counts { margin-top: 4px; color: var(--muted); font-size: 12px; }
+  .ow-goal-fold {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    padding: 2px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .ow-goal-fold:hover { background: var(--bg-hover); color: var(--text); }
   .ow-init-chevron { flex: none; transition: transform 0.15s ease; }
   .ow-init-chevron[data-open='true'] { transform: rotate(90deg); }
   .ow-init-status {
