@@ -73,7 +73,7 @@ describe('Crew Manager Conductor boundaries', () => {
     })
     renderApp()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Goal' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
     // One merged card, folded by default (nothing needs the user): digest shows.
     expect(await screen.findByText('2 sessions, one goal')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Expand Ship the avatar upload flow' }))
@@ -115,7 +115,7 @@ describe('Crew Manager Conductor boundaries', () => {
     })
     renderApp()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Goal' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
     // The bucket card: name + DERIVED status chip in its header. The cluster
     // header carries the same chip — one anatomy, so two chips render.
     expect(await screen.findByText('Crew Companion')).toBeInTheDocument()
@@ -139,6 +139,28 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', expect.anything())
     localStorage.removeItem('crew-manager.goal-verdicts')
     localStorage.removeItem('crew-manager.initiative-collapsed')
+  })
+
+  it('keeps the state filter inside the Sessions tab', async () => {
+    renderApp()
+    fireEvent.click(await screen.findByRole('tab', { name: 'Sessions' }))
+    await screen.findByTestId('work-item-session:session-1')
+
+    // Narrow Sessions to Running. session-1 is needs-you (it owns the pending
+    // approval), so its work leaves the Sessions list.
+    fireEvent.click(screen.getByRole('button', { name: /^Running/ }))
+    await waitFor(() => {
+      expect(screen.queryByTestId('work-item-session:session-1')).not.toBeInTheDocument()
+    })
+
+    // Switching to Goals with Running STILL selected must render the goal view,
+    // not the flat "Running" list. This is the regression: the render branch used
+    // to test the filter before the tab, so any active pill sent the Goals tab
+    // into the single filtered section and its goal cards vanished.
+    fireEvent.click(screen.getByRole('tab', { name: 'Goals' }))
+    expect(await screen.findByText('Work by goal')).toBeInTheDocument()
+    // And the full set is back, unnarrowed by the pill left behind on Sessions.
+    await screen.findByTestId('work-item-session:session-1')
   })
 
   it('quotes a work item on selection without sending anything', async () => {
@@ -167,6 +189,9 @@ describe('Crew Manager Conductor boundaries', () => {
 
   it('opens a session only through the one Open button on its title', async () => {
     renderApp()
+    // Goals is the card's default tab now, so a test about session headers has to
+    // ask for the Sessions lens explicitly.
+    fireEvent.click(await screen.findByRole('tab', { name: 'Sessions' }))
     await screen.findByTestId('work-item-session:session-1')
 
     // Exactly one visible way in per session header, and it is a button rather
@@ -262,6 +287,8 @@ describe('Crew Manager Conductor boundaries', () => {
       throw new Error(`Unexpected GET ${path}`)
     })
     renderApp()
+    // The lane head being tested belongs to the Sessions lens.
+    fireEvent.click(await screen.findByRole('tab', { name: 'Sessions' }))
     await screen.findByTestId('work-item-session:session-3')
 
     // The badge names the response, now on the lane head shared by the group.

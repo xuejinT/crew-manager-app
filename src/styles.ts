@@ -29,33 +29,175 @@ export const OVERWATCH_STYLES = String.raw`
    * background.
    */
   .ow-layout {
-    display: grid;
-    grid-template-columns: 156px minmax(0, 1fr) minmax(340px, 420px);
+    display: flex;
     height: 100%;
     min-height: 0;
     overflow: hidden;
     background: var(--bg);
   }
-  .ow-rail {
+  /*
+   * The left column. Group by is gone from a 156px rail: Goal and Session became
+   * the tabs of the list card, and PR became the bottom stack's PRs card, so no
+   * lens was deleted — each just has a permanent home instead of a switch.
+   *
+   * Flex, not viewport maths. This app renders as a flex child of the dashboard
+   * shell (.ow-root{flex:1;min-height:0}), so a calc(100vh - …) height would
+   * ignore the chrome above it and overflow. Height comes from the parent and
+   * every scroll container below repeats min-height:0, which is what lets an
+   * internal scroller actually shrink instead of growing.
+   *
+   * flex-basis is the resizer's live handle; min-width keeps a dragged-shut
+   * column readable rather than collapsed to nothing.
+   */
+  .ow-main {
+    display: flex;
+    flex: 0 0 40%;
+    min-width: 320px;
     min-height: 0;
-    padding: 12px;
-    border-right: 1px solid var(--border);
-    background: var(--bg-hover);
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 0 16px 16px;
   }
-  .ow-rail-inner { display: flex; height: 100%; flex-direction: column; gap: 12px; }
-  .ow-search { width: 100%; min-width: 0; }
+  /* A 10px hit area around a 3px visual line: the line stays hairline-quiet at
+     rest, the target stays large enough to grab. */
+  .ow-resizer {
+    display: flex;
+    flex: 0 0 10px;
+    align-self: stretch;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    padding: 0;
+    background: none;
+    cursor: col-resize;
+  }
+  .ow-resizer::before {
+    content: '';
+    width: 3px;
+    height: 44px;
+    border-radius: 999px;
+    background: var(--border);
+    transition: background 140ms ease;
+  }
+  .ow-resizer:hover::before,
+  .ow-resizer[data-dragging='true']::before { background: var(--muted); }
+  .ow-resizer:focus-visible::before { background: var(--accent); }
+  /* Dragging must not leave the cursor flickering between the I-beam and the
+     resize arrow, nor select the text it sweeps over. */
+  .ow-root[data-resizing='true'] { cursor: col-resize; user-select: none; }
   .ow-filter[data-selected='true'] {
     border-color: var(--accent);
     background: var(--aim-subtle);
     color: var(--accent);
   }
   .ow-count { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-  .ow-work {
-    min-height: 0;
-    overflow-y: auto;
-    border-right: 1px solid var(--border);
+  /* Card shell, shared by the tabbed list and every bottom-stack card. */
+  .ow-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg, 8px);
+    background: var(--card);
   }
-  .ow-work-inner { padding: 16px; }
+  /*
+   * The Goals/Sessions card owns the column's remaining height and scrolls
+   * INSIDE itself, so its tabs, subtitle and filter pills stay put while the
+   * list moves — and so the bottom stack below can never be pushed off screen.
+   */
+  .ow-listcard {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .ow-listcard-head { flex: none; padding: 12px 14px 0; }
+  .ow-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+  /* Underline tabs, not the pill treatment the rail used: these switch what the
+     list IS, so they read as the card's own title row rather than a filter. */
+  .ow-tab {
+    margin-bottom: -1px;
+    padding: 2px 10px 8px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: none;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .ow-tab:hover { background: none; color: var(--text); }
+  .ow-tab[data-selected='true'] {
+    border-bottom-color: var(--text-strong);
+    color: var(--text-strong);
+  }
+  .ow-listcard-tools { display: flex; flex-direction: column; gap: 10px; padding: 10px 0 12px; }
+  .ow-listcard-sub { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+  /* The only scroll container in the column. */
+  .ow-work { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .ow-work-inner { padding: 0 14px 14px; }
+  /* Bottom stack: companion surfaces pinned below the scrolling list. Each is a
+     real <details>, so the browser owns the disclosure state and keyboard. */
+  .ow-stack { display: flex; flex: none; flex-direction: column; gap: 10px; }
+  .ow-stack-card { overflow: hidden; }
+  .ow-stack-card > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 11px 14px;
+    list-style: none;
+    cursor: pointer;
+  }
+  .ow-stack-card > summary::-webkit-details-marker { display: none; }
+  .ow-stack-card > summary:hover { background: var(--bg-hover); }
+  .ow-stack-card > summary:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+  .ow-stack-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-strong);
+    font-size: 13px;
+    font-weight: 650;
+  }
+  .ow-stack-chevron { flex: none; color: var(--muted); transition: transform 140ms ease; }
+  .ow-stack-card[open] .ow-stack-chevron { transform: rotate(90deg); }
+  .ow-stack-sub { margin: 0; padding: 0 14px; color: var(--muted); font-size: 12px; }
+  /* Capped so an open card cannot eat the list above it; scrolls past the cap. */
+  .ow-stack-body { max-height: 40vh; overflow-y: auto; padding: 6px 14px 12px; }
+  .ow-stack-empty { margin: 0; padding: 6px 0 2px; color: var(--muted); font-size: 13px; }
+  /* Loop and cron rows: a type rail, the text block, then the status pill. */
+  .ow-mini {
+    display: grid;
+    grid-template-columns: 3px minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .ow-mini:last-child { border-bottom: none; }
+  .ow-mini-rail { align-self: stretch; border-radius: 999px; }
+  .ow-mini-title { color: var(--text-strong); font-size: 13px; font-weight: 600; }
+  .ow-mini-desc {
+    margin-top: 2px;
+    overflow: hidden;
+    color: var(--text);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ow-mini-when { margin-top: 3px; color: var(--muted); font-size: 11px; }
+  .ow-mini-chip {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+  }
   .ow-section { margin: 0 0 24px; }
   .ow-section-header { display: flex; flex-direction: column; gap: 2px; }
   .ow-section-heading { display: flex; align-items: baseline; gap: 8px; }
@@ -126,7 +268,10 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-row-actions { display: flex; flex-shrink: 0; align-self: center; align-items: center; gap: 4px; }
   .ow-primary-action { flex-shrink: 0; }
   .ow-icon { width: 14px; height: 14px; flex-shrink: 0; }
-  .ow-conductor { display: flex; min-height: 0; flex-direction: column; background: var(--bg); border-left: 1px solid var(--border); }
+  /* Sizing only: the layout moved from a grid track to a flex row, so the column
+     takes its width from flex + the resizer instead of a grid template. Nothing
+     inside the Conductor changed. */
+  .ow-conductor { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; flex-direction: column; background: var(--bg); border-left: 1px solid var(--border); }
   .ow-conductor-header { padding: 10px 16px; border-bottom: 1px solid var(--border); }
   .ow-conductor-title { display: flex; align-items: baseline; gap: 8px; }
   .ow-conductor-title h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 650; }
