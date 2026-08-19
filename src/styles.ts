@@ -10,6 +10,10 @@ export const OVERWATCH_STYLES = String.raw`
   /* Beta pill sits inline right after the name so the two read as one label. */
   .ow-title-line { display: inline-flex; align-items: center; gap: 8px; }
   .ow-beta {
+    /* Size to the label, not the title: line-height:1 drops the tall inherited
+       line box, align-self stops the flex item stretching to the title height. */
+    line-height: 1;
+    align-self: center;
     padding: 2px 9px;
     border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
     border-radius: 999px;
