@@ -683,7 +683,7 @@ describe('Crew Manager Conductor boundaries', () => {
 
     // The badge names the response, now on the lane head shared by the group.
     await waitFor(() => {
-      expect(document.querySelector('.ow-lane-badge')?.textContent).toBe('UNBLOCK')
+      expect(document.querySelector('.ow-lane-badge')?.textContent).toBe('Unblock')
     })
     expect(screen.queryByText('Issue')).not.toBeInTheDocument()
   })

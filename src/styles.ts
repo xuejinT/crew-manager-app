@@ -318,7 +318,7 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-conductor-title h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 650; }
   .ow-conductor-sub { color: var(--muted); font-size: 12px; font-weight: 500; }
   .ow-lane-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 16px 2px; }
-  .ow-lane-badge { flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 3px 7px; border-radius: 5px; }
+  .ow-lane-badge { flex: 0 0 auto; font-size: 10px; font-weight: 700; padding: 3px 7px; border-radius: 5px; }
   .ow-lane-unblock { background: rgba(240, 185, 70, 0.15); color: #f0b946; }
   .ow-lane-followup { background: rgba(110, 168, 254, 0.16); color: #6ea8fe; }
   .ow-lane-reason { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
