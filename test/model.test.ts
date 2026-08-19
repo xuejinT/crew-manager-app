@@ -16,6 +16,13 @@ import {
   pendingPermissions,
   responseVerb,
   fleetBriefing,
+  clusterByInitiative,
+  goalPairKey,
+  goalRouteTarget,
+  initiativeCandidates,
+  initiativeFor,
+  rollupStatus,
+  sameGoal,
   titleOverlap,
   titleWords,
   normalizeWorkItems as normalizeWorkItemsWithCopy,
@@ -325,7 +332,7 @@ describe('intent summaries', () => {
     return { 'session-1': { enabled: true, intents, ...extra } } as never
   }
 
-  it('folds finished goals into the Resume card and keeps them out of Done', () => {
+  it('gives each goal of an idle session its own item, finished ones included', () => {
     const items = normalizeWorkItemsWithCopy(
       sources({ slots: [slot({ running: false })] }),
       key => key,
@@ -335,15 +342,17 @@ describe('intent summaries', () => {
         { title: 'Old spike', state: 'dropped' },
       ]),
     )
-    // One card for the whole idle session, not three.
-    expect(items).toHaveLength(1)
-    const resume = items[0]
-    expect(resume.state).toBe('needs-you')
-    expect(resume.action).toBe('resume')
-    expect(resume.goals).toEqual(['Ship the thing'])
-    // The finished + dropped goals ride along as done, not as peers in Done.
-    expect(resume.doneGoals).toEqual(['Write the spec', 'Old spike'])
-    expect(items.some(item => item.state === 'done')).toBe(false)
+    // Three unrelated goals are three items: one to resume, two finished. A
+    // shared row claimed they were parts of one thing and let one goal's blocker
+    // label the others.
+    expect(items).toHaveLength(3)
+    const resume = items.find(item => item.action === 'resume')
+    expect(resume?.state).toBe('needs-you')
+    expect(resume?.title).toBe('Ship the thing')
+    expect(resume?.unattendedGoals).toBe(1)
+    // Finished goals stand on their own instead of riding along as checkmarks.
+    expect(items.filter(item => item.state === 'done').map(item => item.title))
+      .toEqual(['Write the spec', 'Old spike'])
   })
 
   it('keeps finished goals as their own Done cards when nothing is unfinished', () => {
@@ -428,17 +437,19 @@ describe('intent summaries', () => {
       ]),
     )
 
-    // Nobody is executing, so the only actor who can move these is the user —
-    // and a stopped session poses ONE decision, so it is ONE card.
-    expect(items).toHaveLength(1)
-    expect(items[0].state).toBe('needs-you')
-    expect(items[0].action).toBe('resume')
-    expect(items[0].unattendedGoals).toBe(2)
+    // Nobody is executing, so the only actor who can move these is the user. Two
+    // unfinished goals are two items: they are routinely unrelated work, so each
+    // gets its own selection, its own badge and its own next step.
+    expect(items).toHaveLength(2)
+    expect(items.every(item => item.state === 'needs-you')).toBe(true)
+    expect(items.every(item => item.action === 'resume')).toBe(true)
+    expect(items.every(item => item.unattendedGoals === 1)).toBe(true)
     // Naming them, not just counting them: a card reading "2 unfinished goals"
     // would force the user to open a thread to learn what is being asked.
-    expect(items[0].goals).toEqual(['Explore the layout', 'Wire the backend'])
-    // The card states the concrete next step of the goal touched last.
+    expect(items.map(item => item.title)).toEqual(['Explore the layout', 'Wire the backend'])
+    // Each item states its OWN concrete next step, not the leading goal's.
     expect(items[0].summary).toBe('Pick a direction')
+    expect(items[1].summary).toBe('no_next_step')
   })
 
   it('says so plainly when a stopped session recorded no next step', () => {
@@ -1222,6 +1233,183 @@ describe('grouping the list', () => {
     expect(blocks[0].changeRef?.id).toBe('42')
     expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'c'])
     expect(blocks[1].changeRef?.id).toBe('43')
+  })
+})
+
+describe('grouping by goal', () => {
+  function goal(id: string, session: string, extra: Partial<WorkItem> = {}): WorkItem {
+    return {
+      id, title: `ship the ${id} grouping view`, summary: 's', state: 'running',
+      issue: false, updatedAt: 1, sessionKey: session, provenance: 'p',
+      references: [{ kind: 'session', id: session, label: session, sessionKey: session }],
+      ...extra,
+    } as WorkItem
+  }
+
+  it('merges two sessions on the same linked change', () => {
+    const a = goal('a', 's1', { references: [
+      { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' },
+      { kind: 'change', id: '42', label: 'PR 42' },
+    ] })
+    const b = goal('b', 's2', { references: [
+      { kind: 'session', id: 's2', label: 's2', sessionKey: 's2' },
+      { kind: 'change', id: '42', label: 'PR 42' },
+    ] })
+    const blocks = clusterBy([a, b], 'goal')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].header).toBe('goal')
+    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
+  })
+
+  it('merges two sessions on the same artifact', () => {
+    const a = goal('a', 's1', { title: 'polish the launch page', references: [
+      { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' },
+      { kind: 'artifact', id: 'launch-page', label: 'Launch page' },
+    ] })
+    const b = goal('b', 's2', { title: 'entirely different words here', references: [
+      { kind: 'session', id: 's2', label: 's2', sessionKey: 's2' },
+      { kind: 'artifact', id: 'launch-page', label: 'Launch page' },
+    ] })
+    expect(sameGoal(a, b)).toBe('same_artifact')
+    expect(clusterBy([a, b], 'goal')).toHaveLength(1)
+  })
+
+  it('merges on title overlap and on next-step overlap', () => {
+    const a = goal('a', 's1', { title: 'group crew manager by goal' })
+    const b = goal('b', 's2', { title: 'crew manager goal grouping logic' })
+    expect(sameGoal(a, b)).toBe('same_topic')
+
+    const c = goal('c', 's1', { title: 'morning cleanup', nextSteps: [
+      { what: 'verify the goal grouping renders merged cards' },
+    ] })
+    const d = goal('d', 's2', { title: 'afternoon errands', nextSteps: [
+      { what: 'check merged cards in the goal grouping view' },
+    ] })
+    expect(sameGoal(c, d)).toBe('same_step')
+    expect(clusterBy([c, d], 'goal')).toHaveLength(1)
+  })
+
+  it('never merges two goals inside one session', () => {
+    // Two intents in one session are distinct goals the session view already holds.
+    const blocks = clusterBy([goal('a', 's1'), goal('b', 's1')], 'goal')
+    expect(blocks).toHaveLength(2)
+    expect(blocks.every(b => b.header === null)).toBe(true)
+  })
+
+  it('the user split ruling beats every signal, and merge beats no-signal', () => {
+    const a = goal('a', 's1')
+    const b = goal('b', 's2')
+    // Signals say same (titles overlap); the user said no.
+    const split = clusterBy([a, b], 'goal', { merged: [], split: [goalPairKey(a, b)] })
+    expect(split).toHaveLength(2)
+
+    const c = goal('c', 's1', { title: 'one thing entirely' })
+    const d = goal('d', 's2', { title: 'another matter altogether' })
+    expect(sameGoal(c, d)).toBeNull()
+    const merged = clusterBy([c, d], 'goal', { merged: [goalPairKey(c, d)], split: [] })
+    expect(merged).toHaveLength(1)
+    expect(merged[0].header).toBe('goal')
+  })
+
+  it('lone goals stay plain rows; a merged block anchors at its first member', () => {
+    const lone = goal('x', 's3', { title: 'entirely unrelated business' })
+    const a = goal('a', 's1')
+    const b = goal('b', 's2')
+    const blocks = clusterBy([a, lone, b], 'goal')
+    // The a+b cluster keeps a's position (first), lone stays a headerless row.
+    expect(blocks.map(block => block.key)).toEqual(['goal:a', 'goal:x'])
+    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
+    expect(blocks[1].header).toBeNull()
+  })
+})
+
+describe('initiatives (the big-goal level)', () => {
+  const buckets = [
+    { name: 'Crew Manager', aliases: ['Crew Manager', 'overwatch', 'crew-manager'] },
+    { name: 'Crew Companion', aliases: ['Crew Companion', 'mochi', 'the pet'] },
+  ]
+
+  function goal(id: string, session: string, extra: Partial<WorkItem> = {}): WorkItem {
+    return {
+      id, title: `work on ${id}`, summary: 's', state: 'running', issue: false,
+      updatedAt: 1, sessionKey: session, provenance: 'p',
+      references: [{ kind: 'session', id: session, label: session, sessionKey: session }],
+      ...extra,
+    } as WorkItem
+  }
+
+  it('matches by alias against title, session label, and provenance', () => {
+    const byTitle = goal('a', 's1', { title: 'ship the overwatch grouping' })
+    const bySession = goal('b', 's2', { references: [
+      { kind: 'session', id: 's2', label: 'Crew Companion bug triage', sessionKey: 's2' },
+    ] })
+    const nowhere = goal('c', 's3', { title: 'unrelated errand' })
+    expect(initiativeFor(byTitle, buckets)).toBe('Crew Manager')
+    expect(initiativeFor(bySession, buckets)).toBe('Crew Companion')
+    expect(initiativeFor(nowhere, buckets)).toBeNull()
+  })
+
+  it('the item title outranks the session name it happens to live in', () => {
+    // "Redesign the Crew Manager cards" inside "Crew Companion Open Bugs" is
+    // Crew Manager work — the title says what it is, the session says where.
+    const crossed = goal('a', 's1', {
+      title: 'Redesign the Crew Manager cards',
+      references: [{ kind: 'session', id: 's1', label: 'Crew Companion Open Bugs', sessionKey: 's1' }],
+    })
+    expect(initiativeFor(crossed, buckets)).toBe('Crew Manager')
+  })
+
+  it('rolls status up: owed to the user beats motion beats done', () => {
+    const done = goal('a', 's1', { state: 'done' })
+    const running = goal('b', 's2', { state: 'running' })
+    const needs = goal('c', 's3', { state: 'needs-you' })
+    expect(rollupStatus([done, running, needs])).toBe('needs-you')
+    expect(rollupStatus([done, running])).toBe('running')
+    expect(rollupStatus([done])).toBe('done')
+  })
+
+  it('routes an instruction to the moving member, else the freshest', () => {
+    const idle = goal('a', 's1', { state: 'needs-you', updatedAt: 100 })
+    const active = goal('b', 's2', { state: 'running', moving: true, updatedAt: 50 })
+    expect(goalRouteTarget([idle, active]).id).toBe('b')
+    // Nobody moving: the most recently touched member, so sending resumes it.
+    const older = goal('c', 's1', { state: 'needs-you', updatedAt: 10 })
+    const newer = goal('d', 's2', { state: 'needs-you', updatedAt: 90 })
+    expect(goalRouteTarget([older, newer]).id).toBe('d')
+  })
+
+  it('buckets claim items, the bucket anchors at its most-urgent member', () => {
+    const cm1 = goal('a', 's1', { title: 'overwatch: verb badges' })
+    const loose = goal('x', 's9', { title: 'random errand' })
+    const cm2 = goal('b', 's2', { title: 'crew-manager stall backend' })
+    const units = clusterByInitiative([cm1, loose, cm2], buckets)
+    expect(units.map(unit => unit.name)).toEqual(['Crew Manager', null])
+    expect(units[0].blocks.flatMap(block => block.items.map(i => i.id))).toEqual(['a', 'b'])
+    expect(units[0].sessions).toEqual(['s1', 's2'])
+    expect(units[1].blocks[0].items[0].id).toBe('x')
+  })
+
+  it('loose items still dedup among themselves', () => {
+    const a = goal('a', 's1', { title: 'polish the papyrus export flow' })
+    const b = goal('b', 's2', { title: 'papyrus export flow polish' })
+    const units = clusterByInitiative([a, b], buckets)
+    expect(units).toHaveLength(1)
+    expect(units[0].name).toBeNull()
+    expect(units[0].blocks[0].header).toBe('goal')
+    expect(units[0].blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
+  })
+
+  it('suggests candidates from project dirs no bucket claims', () => {
+    const slots = [
+      { key: 's1', project: '/Users/x/Developer/papyrus-app' },
+      { key: 's2', project: '/Users/x/Developer/papyrus-app/' },
+      { key: 's3', project: '/Users/x/Developer/overwatch' },
+      { key: 's4' },
+      { key: 'crew-manager-conductor', project: '/Users/x/Developer/papyrus-app' },
+    ] as never[]
+    const candidates = initiativeCandidates(slots, buckets)
+    // overwatch is already a Crew Manager alias; the conductor never counts.
+    expect(candidates).toEqual([{ name: 'papyrus-app', sessions: 2 }])
   })
 })
 

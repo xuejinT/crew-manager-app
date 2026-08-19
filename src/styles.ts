@@ -131,6 +131,20 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-conductor-title { display: flex; align-items: baseline; gap: 8px; }
   .ow-conductor-title h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 650; }
   .ow-conductor-sub { color: var(--muted); font-size: 12px; font-weight: 500; }
+  .ow-lane-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 16px 2px; }
+  .ow-lane-badge { flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 3px 7px; border-radius: 5px; }
+  .ow-lane-unblock { background: rgba(240, 185, 70, 0.15); color: #f0b946; }
+  .ow-lane-followup { background: rgba(110, 168, 254, 0.16); color: #6ea8fe; }
+  .ow-lane-reason { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+  .ow-row-check { color: #5bbf7a; }
+  /* The card's collapsed ledger: this session's finished goals, offered as
+     context under the lanes rather than only in the Done section. */
+  .ow-lane-done { padding: 8px 16px; }
+  .ow-goals-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+  .ow-goals-toggle:hover { color: var(--text); }
+  .ow-goals-toggle .ow-icon { width: 12px; height: 12px; transition: transform 0.15s ease; }
+  .ow-goals-toggle .ow-icon[data-open="true"] { transform: rotate(90deg); }
+  .ow-done-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
   .ow-eyebrow { color: var(--muted); font-size: 12px; font-weight: 550; }
     min-width: 0;
     overflow: hidden;
@@ -196,10 +210,15 @@ export const OVERWATCH_STYLES = String.raw`
   /* Rows give up their own frame: the enclosing card already provides it. */
   .ow-block[data-grouped='true'] .ow-row {
     border: 0;
-    border-top: 1px solid var(--border);
     border-radius: 0;
     background: none;
   }
+  /* A lane is the group inside a session card: its verb head labels the rows
+     directly beneath it with NO line between them. Dividers fall between lanes,
+     and between stacked rows within a lane — never right under a head, which is
+     what made the badge read as part of the session header instead of its rows. */
+  .ow-block[data-grouped='true'] .ow-lane + .ow-lane { border-top: 1px solid var(--border); }
+  .ow-block[data-grouped='true'] .ow-lane .ow-row + .ow-row { border-top: 1px solid var(--border); }
   .ow-block[data-grouped='true'] .ow-row:hover { background: var(--bg-hover); }
   .ow-block[data-grouped='true'] .ow-row[data-selected='true'] {
     background: var(--aim-subtle);
@@ -303,7 +322,7 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-next-step-why { display: block; color: var(--muted); font-size: 12px; }
   .ow-chat { display: flex; min-height: 0; flex: 1; }
   .ow-chat-loading { width: 100%; padding: 16px; }
-  .ow-chat-panel { display: flex; min-height: 0; width: 100%; flex-direction: column; padding: 12px 16px; gap: 8px; }
+  .ow-chat-panel { position: relative; display: flex; min-height: 0; width: 100%; flex-direction: column; padding: 12px 16px; gap: 8px; }
   .ow-chat-panel > .ow-quote,
   .ow-chat-panel > .ow-permissions,
   .ow-chat-panel > .ow-conductor-receipt,
@@ -339,6 +358,80 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-pr-dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .ow-pr-dot[data-bad='true'] { color: var(--danger); }
   .ow-pr-sublabel { padding: 6px 12px 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
+  .ow-init-chevron { flex: none; transition: transform 0.15s ease; }
+  .ow-init-chevron[data-open='true'] { transform: rotate(90deg); }
+  .ow-init-status {
+    flex: none;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted-strong);
+    background: var(--bg-hover);
+  }
+  .ow-init-status[data-status='needs-you'] { color: var(--warn); background: var(--warn-subtle, rgba(251,191,36,.12)); }
+  .ow-init-status[data-status='running'] { color: var(--info); background: var(--accent-subtle); }
+  .ow-goal-tab { cursor: pointer; }
+  .ow-goal-tab .ow-block-open { flex: none; }
+  .ow-goal-tab[data-selected='true'] {
+    background: var(--aim-subtle);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .ow-quote-route { flex: none; min-width: 0; color: var(--muted); font-size: 12px; }
+  .ow-quote-goal { flex-direction: column; align-items: stretch; gap: 2px; }
+  .ow-quote-line { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+  .ow-quote-docked .ow-eyebrow { flex: none; white-space: nowrap; }
+  .ow-bootstrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+    padding: 12px 14px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-lg, 8px);
+    color: var(--muted);
+  }
+  .ow-bootstrap[data-prominent='true'] { border-style: solid; background: var(--bg-elevated); }
+  .ow-bootstrap-head { color: var(--text-strong); font-size: 13px; font-weight: 600; }
+  .ow-bootstrap-sub { font-size: 12px; }
+  .ow-bootstrap-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ow-bootstrap-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--card);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .ow-bootstrap-chip:hover { border-color: var(--accent); }
+  .ow-bootstrap-chip:disabled { opacity: 0.6; cursor: default; }
+  .ow-bootstrap-count { color: var(--muted); font-size: 11px; }
+  .ow-bootstrap-custom { display: flex; gap: 8px; }
+  .ow-bootstrap-custom input { flex: 1; min-width: 0; }
+  .ow-merge-hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 4px 12px 2px;
+    font-size: 12px;
+  }
+  .ow-merge-hint-label { color: var(--muted); flex: none; }
+  .ow-merge-hint-btn {
+    max-width: 46ch;
+    border: 0;
+    background: none;
+    padding: 2px 0;
+    font-size: 12px;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+  }
+  .ow-merge-hint-btn:hover { text-decoration: underline; }
   .ow-srow { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--border); cursor: pointer; }
   .ow-srow[data-selected='true'] { background: var(--aim-subtle); }
   .ow-srow-body { min-width: 0; flex: 1; }
@@ -357,7 +450,8 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-expand { display: grid; animation: ow-expand 160ms ease; }
   .ow-expand-inner { min-height: 0; overflow: hidden; }
   .ow-steps-head { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
-  .ow-steps-more { color: var(--muted); font-size: 12px; }
+  .ow-steps-more { padding: 2px 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+  .ow-steps-more:hover { color: var(--text); text-decoration: underline; }
   .ow-row-steps { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 10px 0 2px; }
   /* Reveal-on-hover, top-right. Hidden and non-interactive at rest so the card
      is clean; shown on hover OR keyboard focus so it is not mouse-only. Floated
@@ -409,6 +503,18 @@ export const OVERWATCH_STYLES = String.raw`
   }
   /* One line: eyebrow, gap, title. The spans previously abutted ("InstructingCrew…"). */
   .ow-quote-body { display: flex; min-width: 0; flex: 1; align-items: baseline; gap: 8px; }
+  /* The instructing target floats just above the composer. ChatEmbed exposes no
+     slot inside itself, so this is pinned to the panel with an offset roughly the
+     composer's height; opaque background so the transcript foot does not bleed. */
+  .ow-quote-docked {
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    bottom: 64px;
+    z-index: 3;
+    background: var(--card);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+  }
   .ow-quote-title { overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
   /* Full text, wrapped. These are sentences the user is deciding whether to
      SEND — a suggestion cut to "Implement the receipt + scope chip in the Cond…"

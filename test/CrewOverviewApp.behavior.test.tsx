@@ -51,6 +51,88 @@ beforeEach(() => {
 })
 
 describe('Crew Manager Conductor boundaries', () => {
+  it('goal view merges same-titled sessions into one card and split undoes it', async () => {
+    localStorage.removeItem('crew-manager.goal-verdicts')
+    // Two sessions whose slot titles clearly say the same job. Timestamps must be
+    // recent: an idle session's card falls out of the done window otherwise.
+    const now = new Date().toISOString()
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots') {
+        return [
+          { key: 's1', title: 'Ship the avatar upload flow', messages: 4, running: true, last_ts: now },
+          { key: 's2', title: 'Avatar upload flow shipping', messages: 2, running: false, last_ts: now },
+        ]
+      }
+      if (path === '/api/approvals') return []
+      if (path === '/api/spawn') return { agents: [] }
+      if (path === '/api/workflows/runs') return { runs: [] }
+      if (path === '/api/crons') return { jobs: [] }
+      if (path === '/api/artifacts') return { artifacts: [] }
+      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Goal' }))
+    // One merged card: the goal header names the job, member rows keep the
+    // Session-view work-card anatomy (badge left, own title, session in meta).
+    expect(await screen.findByText('2 sessions, one goal')).toBeInTheDocument()
+    expect(screen.getByTestId('work-item-session:s1')).toBeInTheDocument()
+    expect(screen.getByTestId('work-item-session:s2')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Split Ship the avatar upload flow' }))
+    // The ruling takes effect immediately: two plain cards, no merged header.
+    await waitFor(() => expect(screen.queryByText('2 sessions, one goal')).not.toBeInTheDocument())
+    localStorage.removeItem('crew-manager.goal-verdicts')
+  })
+
+  it('initiative buckets and auto clusters share one card anatomy; goal quote routes to the active session', async () => {
+    localStorage.removeItem('crew-manager.goal-verdicts')
+    localStorage.removeItem('crew-manager.initiative-collapsed')
+    const now = new Date().toISOString()
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots') {
+        return [
+          // An unbucketed same-job pair: becomes a standalone cluster card.
+          { key: 's1', title: 'Ship the avatar upload flow', messages: 4, running: true, last_ts: now },
+          { key: 's2', title: 'Avatar upload flow shipping', messages: 2, running: false, last_ts: now },
+          // A bucketed session: folds into the Crew Companion goal card.
+          { key: 's3', title: 'Mochi bug triage', messages: 1, running: true, last_ts: now },
+        ]
+      }
+      if (path === '/api/apps/crew-manager/initiatives') {
+        return { initiatives: [{ name: 'Crew Companion', aliases: ['Crew Companion', 'mochi'] }] }
+      }
+      if (path === '/api/approvals') return []
+      if (path === '/api/spawn') return { agents: [] }
+      if (path === '/api/workflows/runs') return { runs: [] }
+      if (path === '/api/crons') return { jobs: [] }
+      if (path === '/api/artifacts') return { artifacts: [] }
+      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Goal' }))
+    // The bucket card: name + DERIVED status chip in its header. The cluster
+    // header carries the same chip — one anatomy, so two chips render.
+    expect(await screen.findByText('Crew Companion')).toBeInTheDocument()
+    expect(screen.getAllByText('Running', { selector: '.ow-init-status' })).toHaveLength(2)
+    // The auto cluster: same card anatomy, header says the span.
+    expect(screen.getByText('2 sessions, one goal')).toBeInTheDocument()
+    // The add-goal entry is ALWAYS reachable — buckets existing must not hide it.
+    expect(screen.getByLabelText('New goal name')).toBeInTheDocument()
+
+    // Selecting the cluster header quotes the GOAL and names the routing target —
+    // the ACTIVE session — before anything is sent.
+    fireEvent.click(screen.getByRole('button', { name: /Ship the avatar upload flow.*2 sessions, one goal/ }))
+    expect(await screen.findByText('Instructing goal')).toBeInTheDocument()
+    expect(screen.getByText(/→ Ship the avatar upload flow \(active\)/)).toBeInTheDocument()
+    expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', expect.anything())
+    localStorage.removeItem('crew-manager.goal-verdicts')
+    localStorage.removeItem('crew-manager.initiative-collapsed')
+  })
+
   it('quotes a work item on selection without sending anything', async () => {
     renderApp()
 
@@ -174,9 +256,9 @@ describe('Crew Manager Conductor boundaries', () => {
     renderApp()
     await screen.findByTestId('work-item-session:session-3')
 
-    // The badge names the response. "Issue" is a state, and it belongs to Done.
+    // The badge names the response, now on the lane head shared by the group.
     await waitFor(() => {
-      expect(document.querySelector('.ow-verb')?.textContent).toBe('UNBLOCK')
+      expect(document.querySelector('.ow-lane-badge')?.textContent).toBe('UNBLOCK')
     })
     expect(screen.queryByText('Issue')).not.toBeInTheDocument()
   })

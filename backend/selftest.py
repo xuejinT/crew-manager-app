@@ -464,6 +464,78 @@ check(
     repr(focused_real[:90]),
 )
 
+# --- initiatives: this app's own goal store + the one-time projects.md import --
+import os  # noqa: E402
+import tempfile  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+import initiatives as _init  # noqa: E402
+
+_PROJECTS_SAMPLE = """
+<!-- comment the parser must skip -->
+- **Crew Companion** — macOS desktop pet; aliases: Desktop Buddy, mochi, the pet
+- **Design Critique** — UI critique skill
+- not a bucket line
+- **Crew Companion** — duplicate must be dropped
+"""
+_buckets = _init.parse_projects(_PROJECTS_SAMPLE)
+check("import parses one bucket per bold line", len(_buckets) == 2, repr([b["name"] for b in _buckets]))
+check(
+    "the display name always leads the alias list",
+    _buckets[0]["aliases"][0] == "Crew Companion",
+    repr(_buckets[0]["aliases"]),
+)
+check(
+    "aliases split on commas",
+    "mochi" in _buckets[0]["aliases"] and "the pet" in _buckets[0]["aliases"],
+    repr(_buckets[0]["aliases"]),
+)
+check("empty text degrades to no buckets", _init.parse_projects("") == [])
+
+# The store round-trips through THROWAWAY dirs — never the real app dir or home.
+with tempfile.TemporaryDirectory() as _tmp:
+    _prior_goals_file = _init.goals_file
+    _prior_home = os.environ.get("KIROCREW_HOME")
+    _init.goals_file = lambda: _Path(_tmp) / "data" / "goals.json"  # type: ignore[assignment]
+    os.environ["KIROCREW_HOME"] = str(_Path(_tmp) / "home")
+    try:
+        # First run with a projects.md present: buckets are imported once.
+        _memory = _Path(_tmp) / "home" / "workspace" / "memory"
+        _memory.mkdir(parents=True)
+        (_memory / "projects.md").write_text(_PROJECTS_SAMPLE, encoding="utf-8")
+        _first = _init.load_initiatives()
+        check("first run imports projects.md as the initial goals",
+              any(b["name"] == "Crew Companion" for b in _first), repr([b["name"] for b in _first]))
+        # After import the store is Crew Manager's own: edits to projects.md
+        # must NOT leak in.
+        (_memory / "projects.md").write_text("- **Later Project** — added after\n", encoding="utf-8")
+        check("projects.md changes never leak in after the import",
+              not any(b["name"] == "Later Project" for b in _init.load_initiatives()))
+
+        _added = _init.add_initiative("Crew Manager", ["overwatch", "crew-manager"])
+        check("add_initiative persists and returns the bucket",
+              any(b["name"] == "Crew Manager" for b in _added))
+        _cm = next((b for b in _init.load_initiatives() if b["name"] == "Crew Manager"), None)
+        check("the stored goal round-trips with its aliases",
+              _cm is not None and "overwatch" in _cm["aliases"], repr(_cm))
+        _again = _init.add_initiative("crew manager", [])
+        check("adding the same name again is idempotent",
+              sum(1 for b in _again if b["name"].lower() == "crew manager") == 1)
+        _bad = False
+        try:
+            _init.add_initiative("   ")
+        except ValueError:
+            _bad = True
+        check("a blank name is refused", _bad)
+        _left = _init.remove_initiative("Crew Manager")
+        check("remove_initiative drops the goal",
+              not any(b["name"] == "Crew Manager" for b in _left))
+    finally:
+        _init.goals_file = _prior_goals_file  # type: ignore[assignment]
+        if _prior_home is None:
+            os.environ.pop("KIROCREW_HOME", None)
+        else:
+            os.environ["KIROCREW_HOME"] = _prior_home
+
 print()
 if FAILURES:
     print(f"{len(FAILURES)} failing check(s): {', '.join(FAILURES)}")
