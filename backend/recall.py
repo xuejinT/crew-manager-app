@@ -211,7 +211,9 @@ def _clip(text: object) -> str:
     return out
 
 
-def _search_blocking(query: str, limit: int, workspace: str | None) -> list[dict]:
+def _search_blocking(
+    query: str, limit: int, workspace: str | None, all_workspaces: bool = False
+) -> list[dict]:
     """One recall pass. Synchronous file I/O — never call this on the event loop."""
     loaded = _load_backend()
     if loaded is None:
@@ -247,8 +249,19 @@ def _search_blocking(query: str, limit: int, workspace: str | None) -> list[dict
             continue
         if is_private is not None and (is_private(full_meta) or is_private(meta)):
             continue
-        if workspace is not None and bucket is not None:
-            if bucket(full_meta.get("workspace")) != workspace:
+        row_workspace = ""
+        if bucket is not None:
+            try:
+                row_workspace = str(bucket(full_meta.get("workspace")) or "")
+            except Exception:
+                row_workspace = ""
+        # all_workspaces is a DELIBERATE widening, requested per query, and it is
+        # the only thing that may skip this filter. `workspace is None` still
+        # means "the gateway could not tell us the bucket", which must not be
+        # allowed to read as "show everything" -- that distinction is the whole
+        # point of the fail-closed rule, so the two cases stay separate.
+        if not all_workspaces and workspace is not None and bucket is not None:
+            if row_workspace != workspace:
                 continue
 
         snippet = ""
@@ -277,6 +290,10 @@ def _search_blocking(query: str, limit: int, workspace: str | None) -> list[dict
                 "snippet": _clip(snippet),
                 "modified": meta.get("modified") or 0,
                 "created": meta.get("created") or "",
+                # Named on every row, not only in cross-workspace mode: a result
+                # the user cannot place is a result they have to go and identify
+                # by hand, which is the cost recall exists to remove.
+                "workspace": row_workspace,
             }
         )
     return out
@@ -287,6 +304,7 @@ async def search_past_work(
     *,
     limit: object = RECALL_LIMIT_DEFAULT,
     workspace: str | None = None,
+    all_workspaces: bool = False,
 ) -> dict:
     """Recall past work matching *query*.
 
@@ -302,18 +320,34 @@ async def search_past_work(
     text = normalize_query(query)
     count = clamp_limit(limit)
     if not query_is_searchable(text):
-        return {"enabled": _load_backend() is not None, "query": text, "results": []}
+        return {
+            "enabled": _load_backend() is not None,
+            "query": text,
+            "scope": "all" if all_workspaces else "workspace",
+            "results": [],
+        }
 
     try:
-        results = await asyncio.to_thread(_search_blocking, text, count, workspace)
+        results = await asyncio.to_thread(
+            _search_blocking, text, count, workspace, all_workspaces
+        )
     except asyncio.CancelledError:
         raise
     except Exception:
         logger.debug("crew-manager: recall failed", exc_info=True)
-        return {"enabled": False, "query": text, "results": []}
+        return {
+            "enabled": False,
+            "query": text,
+            "scope": "all" if all_workspaces else "workspace",
+            "results": [],
+        }
 
     return {
         "enabled": _load_backend() is not None,
         "query": text,
+        # Reported back so the UI states which scope answered, rather than
+        # leaving the user to assume. A widened search that looks identical to a
+        # narrow one is how someone misreads another workspace's work as theirs.
+        "scope": "all" if all_workspaces else "workspace",
         "results": results,
     }

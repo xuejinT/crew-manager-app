@@ -297,11 +297,27 @@ def detect_error_loops(
 
         counts: dict[str, int] = {}
         tools: dict[str, str] = {}
+        # One tool CALL may contribute at most one failure. An auto-approved call
+        # is written to the transcript twice -- once when it is granted and again
+        # when it completes -- and both rows carry the same output. Counting rows
+        # instead of calls therefore reaches min_repeats on two real failures and
+        # reports a loop that is not happening. Rows without a call id are still
+        # counted: an unidentifiable row is not evidence of a duplicate.
+        seen_calls: set[str] = set()
         for row in messages[-tail_messages:]:
             if not isinstance(row, dict) or row.get("role") != "tool":
                 continue
             meta = row.get("meta")
             meta = meta if isinstance(meta, dict) else {}
+            # A call still in flight has no verdict yet, and its partial output
+            # can carry a marker the finished call never reports as a failure.
+            if not meta.get("done"):
+                continue
+            call_id = str(meta.get("tool_call_id") or "")
+            if call_id:
+                if call_id in seen_calls:
+                    continue
+                seen_calls.add(call_id)
             output = str(meta.get("output") or "")
             if not looks_like_failure(output):
                 continue

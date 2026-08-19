@@ -103,6 +103,12 @@ export interface RecallHit {
   snippet?: string
   modified?: number
   created?: string
+  /**
+   * Which workspace this session belongs to. Load-bearing once a query may reach
+   * beyond the current one: an unplaceable result is one the user has to go and
+   * identify by hand.
+   */
+  workspace?: string
 }
 
 export interface RecallReport {
@@ -113,6 +119,8 @@ export interface RecallReport {
    */
   enabled?: boolean
   query?: string
+  /** Which scope actually answered: 'workspace' (default) or 'all'. */
+  scope?: string
   results?: RecallHit[]
 }
 
@@ -138,6 +146,38 @@ export interface CronJob {
   running_since?: string | number | null
   last_run_ts?: string | number | null
   created_ts?: string | number | null
+  /**
+   * When this job fires next, as the platform computes it
+   * (`handlers/cron.py::compute_next_run_ts`). Absent for a job with no future
+   * run, so the card must omit the countdown rather than render a blank one.
+   */
+  next_run_ts?: number | null
+  paused?: boolean
+}
+
+/**
+ * One auto-nudge loop: a session re-prompting ITSELF on an idle timer until its
+ * cycle or runtime budget runs out, or until someone stops it
+ * (platform: `autonudge.NudgeLoop`, served by `GET /api/autonudge`).
+ *
+ * This is the one kind of work on the board that continues without anyone
+ * deciding it should. Nothing else here spends budget unattended, which is why a
+ * live loop is worth a row even though nobody is waiting on it.
+ */
+export interface MonitorLoop {
+  id: string
+  slot_key: string
+  message?: string
+  idle_secs?: number
+  /** 0 means unlimited, which is the case worth surfacing. */
+  max_cycles?: number
+  cycle_count?: number
+  active?: boolean
+  last_fire_ts?: number
+  created_ts?: number
+  /** 0 means unlimited. */
+  max_runtime_secs?: number
+  agent?: string
 }
 
 export interface Artifact {

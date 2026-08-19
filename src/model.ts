@@ -2,6 +2,7 @@ import type {
   Artifact,
   ChatSlot,
   CronJob,
+  MonitorLoop,
   SessionSummary,
   ErrorLoopFinding,
   StallFinding,
@@ -48,6 +49,10 @@ export type WorkCopyKey =
   | 'workflow_finished'
   | 'monitor_failed'
   | 'monitor_running'
+  | 'monitor_next_check'
+  | 'loop'
+  | 'loop_watching'
+  | 'loop_watching_capped'
   | 'artifact_ready'
   | 'stalled_for'
   | 'stalled_because'
@@ -55,6 +60,14 @@ export type WorkCopyKey =
   | 'duplicate_same_artifact'
   | 'duplicate_same_topic'
   | 'duplicate_same_step'
+  | 'related_sessions'
+  | 'related_same_change'
+  | 'related_same_artifact'
+  | 'related_same_topic'
+  | 'related_same_step'
+  | 'related_more'
+  | 'recall_scope_workspace'
+  | 'recall_scope_all'
   | 'rank_approval_owed'
   | 'rank_subagent_gate'
   | 'rank_input_requested'
@@ -157,6 +170,13 @@ export interface WorkItem {
    * the item or changes its state.
    */
   duplicateOf?: { sessionKey: string; title: string; because: GoalMatch }
+  /**
+   * Other live sessions on the same job, both directions. Advice only: it never
+   * moves the item, changes its state, or affects its rank.
+   */
+  relatedSessions?: RelatedSession[]
+  /** How many further related sessions were found beyond the ones named. */
+  relatedMore?: number
   /** Seconds of silence, when the backend watcher flagged this as stalled. */
   stalledFor?: number
   /** Repeat count, when the backend watcher flagged a repeating failure. */
@@ -175,6 +195,13 @@ export interface WorkItem {
   runFailed?: boolean
   /** Where to re-run it. Absent when the platform cannot retry this kind. */
   retryPath?: string
+  /**
+   * Where to STOP this work, for the kinds that run on their own until told
+   * otherwise. Deliberately separate from `retryPath`: retrying is repeatable and
+   * harmless, whereas stopping discards a loop's remaining budget and cannot be
+   * undone from here, so the two must never share one affordance.
+   */
+  stopPath?: string
   /** Prompts queued behind this session's active turn (same session only). */
   queuedBehind?: number
   /** A linked change has a failing check or a conflict. */
@@ -249,6 +276,8 @@ export interface AgentRow {
   error?: string
   outcome?: string
   last_tool?: string
+  /** Tool calls spent so far, as the platform reports it (`info.turns`). */
+  turns?: number
 }
 
 export interface WorkflowRow {
@@ -267,6 +296,20 @@ export interface WorkSources {
   workflows: WorkflowRow[]
   crons: CronJob[]
   artifacts: Artifact[]
+  /**
+   * Optional because the platform serves loops from a route this app has only
+   * just started asking for: a gateway that answers it with nothing, or an
+   * install whose auto-nudge service is off, must still produce a full board
+   * rather than an error.
+   */
+  loops?: MonitorLoop[]
+}
+
+/** Another live session on the same job. See `markRelatedSessions`. */
+export interface RelatedSession {
+  sessionKey: string
+  title: string
+  because: GoalMatch
 }
 
 const STATE_RANK: Record<WorkState, number> = {
@@ -280,6 +323,23 @@ function epoch(value?: string | number | null): number {
   if (!value) return 0
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+/**
+ * How long until a scheduled job runs again, phrased by `describeSilence` so a
+ * countdown and a silence duration never read differently on the same screen.
+ * Empty when the platform reported no next run, when the job is paused (pausing
+ * does not clear the stored time, so a paused job would otherwise advertise a
+ * check that is never coming), or when the time has already passed -- a run that
+ * is due says nothing rather than claiming it is about to happen.
+ */
+function nextRunIn(cron: CronJob, now: number): string {
+  if (cron.paused) return ''
+  const next = epoch(cron.next_run_ts)
+  if (!next) return ''
+  const seconds = Math.round((next - now) / 1000)
+  if (seconds <= 0) return ''
+  return describeSilence(seconds)
 }
 
 const TITLE_LIMIT = 72
@@ -954,6 +1014,58 @@ export function markDuplicates(items: WorkItem[], verdicts: GoalVerdicts = EMPTY
       }
     }
   }
+
+  markRelatedSessions(live, verdicts)
+}
+
+/** How many related sessions a card names before it starts counting them. */
+export const RELATED_LIMIT = 3
+
+/** `GoalMatch` in its declared strength order, for ranking related rows. */
+const GOAL_MATCH_RANK: GoalMatch[] = ['same_change', 'same_artifact', 'same_topic', 'same_step']
+
+/**
+ * Which OTHER live sessions are on the same job — the cross-session view.
+ *
+ * Deliberately not a change to `duplicateOf`, which answers a different question.
+ * `duplicateOf` warns the session that arrived SECOND, once, because a warning
+ * reaching the session that started first would arrive too late to prevent the
+ * overlap. Visibility is the opposite shape: whoever is looking at either card
+ * wants to know the other session exists, and the first-arriving session needs it
+ * most, since nothing else on its card mentions that company has arrived.
+ *
+ * So this is SYMMETRIC (both sessions learn about each other), COMPLETE (every
+ * match, not the first), and still ADVICE — it changes no state, no order, and no
+ * ranking. The platform does not model one session blocking another, so this says
+ * only "these are on the same thing", never "this one is waiting for that one".
+ *
+ * Capped in the model rather than in the view so the list, the card and the
+ * Conductor's briefing all name the same sessions.
+ */
+function markRelatedSessions(live: WorkItem[], verdicts: GoalVerdicts): void {
+  for (const item of live) {
+    const related: RelatedSession[] = []
+    const seen = new Set<string>()
+    for (const other of live) {
+      const key = other.sessionKey as string
+      if (key === item.sessionKey || seen.has(key)) continue
+      // The user ruled this pair apart. Relating them anyway would re-litigate
+      // their call in a second place, which is what one shared judge prevents.
+      if (verdicts.split.includes(goalPairKey(item, other))) continue
+
+      const because = sameGoal(item, other)
+      if (!because) continue
+
+      seen.add(key)
+      related.push({ sessionKey: key, title: other.title, because })
+    }
+    if (related.length === 0) continue
+    // GoalMatch is declared strongest-first, so a card that names only some of
+    // them names the ones most worth opening.
+    related.sort((a, b) => GOAL_MATCH_RANK.indexOf(a.because) - GOAL_MATCH_RANK.indexOf(b.because))
+    item.relatedSessions = related.slice(0, RELATED_LIMIT)
+    if (related.length > RELATED_LIMIT) item.relatedMore = related.length - RELATED_LIMIT
+  }
 }
 
 /**
@@ -1212,6 +1324,7 @@ export function normalizeWorkItems(
   stalls: Record<string, StallFinding> = {},
   loops: Record<string, ErrorLoopFinding> = {},
   verdicts: GoalVerdicts = EMPTY_VERDICTS,
+  now: number = Date.now(),
 ): WorkItem[] {
   const items = new Map<string, WorkItem>()
   const bySession = new Map<string, WorkItem>()
@@ -1371,10 +1484,17 @@ export function normalizeWorkItems(
   for (const cron of sources.crons) {
     if (!cron.is_running && cron.last_status !== 'error') continue
     const failed = cron.last_status === 'error'
+    // A failed check that will run again on its own reads very differently from
+    // one that will not: the same red card either resolves itself in ten minutes
+    // or waits for a person forever. Only shown when the platform gave a time.
+    const nextCheck = nextRunIn(cron, now)
+    const monitorSummary = failed ? copy('monitor_failed') : copy('monitor_running')
     items.set(`monitor:${cron.id}`, {
       id: `monitor:${cron.id}`,
       title: cron.name,
-      summary: failed ? copy('monitor_failed') : copy('monitor_running'),
+      summary: nextCheck
+        ? `${monitorSummary} ${copy('monitor_next_check', { duration: nextCheck })}`
+        : monitorSummary,
       state: failed ? 'needs-you' : 'running',
       issue: failed,
       runFailed: failed || undefined,
@@ -1383,6 +1503,47 @@ export function normalizeWorkItems(
       provenance: copy('monitor'),
       action: failed ? 'discuss' : undefined,
       references: [{ kind: 'monitor', id: cron.id, label: cron.name }],
+    })
+  }
+
+  // A live auto-nudge loop is the only work here that keeps going without anyone
+  // choosing to continue it, so it gets a row while it is active and disappears
+  // the moment it is not. It is never `needs-you`: nothing is owed to the user,
+  // and putting it in the queue would be asking for a decision nobody requested.
+  for (const loop of sources.loops || []) {
+    if (!loop.active) continue
+    const id = String(loop.id || '')
+    if (!id) continue
+    const cycles = Math.max(0, Number(loop.cycle_count) || 0)
+    const cap = Math.max(0, Number(loop.max_cycles) || 0)
+    const onSession = loop.slot_key && bySession.has(loop.slot_key) ? loop.slot_key : undefined
+    items.set(`loop:${id}`, {
+      id: `loop:${id}`,
+      title: deriveWorkTitle(loop.message || '', copy('loop')),
+      // An uncapped loop is named as such rather than shown as "3/∞": unbounded
+      // is the fact that decides whether to leave it running.
+      summary: cap
+        ? copy('loop_watching_capped', { cycles: String(cycles), cap: String(cap) })
+        : copy('loop_watching', { cycles: String(cycles) }),
+      state: 'running',
+      issue: false,
+      updatedAt: epoch(loop.last_fire_ts || loop.created_ts),
+      sessionKey: onSession,
+      provenance: copy('loop'),
+      // Stopping is the whole point of surfacing it, and it is not a retry.
+      stopPath: `/api/autonudge/${encodeURIComponent(id)}`,
+      action: onSession ? 'open' : undefined,
+      references: [
+        { kind: 'monitor', id, label: copy('loop'), sessionKey: onSession },
+        ...(onSession
+          ? [{
+            kind: 'session' as const,
+            id: onSession,
+            label: bySession.get(onSession)?.title || onSession,
+            sessionKey: onSession,
+          }]
+          : []),
+      ],
     })
   }
 

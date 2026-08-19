@@ -47,6 +47,7 @@
       "/api/workflows",
       "/api/crons",
       "/api/artifacts",
+      "/api/autonudge",
       "/api/apps/crew-manager"
     ],
     "events": [

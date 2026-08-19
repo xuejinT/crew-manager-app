@@ -121,13 +121,19 @@ async def handle_settings(request: web.Request, ctx: Any) -> web.Response:
 
 
 async def handle_recall(request: web.Request, ctx: Any) -> web.Response:
-    """GET /recall?q=...&limit=... -- past work matching a query.
+    """GET /recall?q=...&limit=...&scope=workspace|all -- past work matching a query.
 
-    Scoped to the CALLER's workspace by default, fail-closed: an unresolvable
+    Scoped to the CALLER's workspace by DEFAULT, fail-closed: an unresolvable
     workspace is treated as "default" rather than as "search everything", so a
-    misread never widens what the user can see. There is deliberately no
-    all-workspaces switch here — the board shows one workspace, and recall
-    answering from another would be a different product.
+    misread never widens what the user can see.
+
+    ``scope=all`` lifts the workspace filter, and only that filter. It is opt-in
+    per query and never sticky, because the widening has to be a thing the user
+    did rather than a mode they are silently left in. Everything else holds
+    unchanged: incognito and temporary sessions still never surface, transcripts
+    of private sessions are still never read, vanished files still produce no
+    ghost rows, and snippets are still redacted. Each result names the workspace
+    it came from so a cross-workspace hit cannot be mistaken for a local one.
     """
     denied = _unauthorized(request)
     if denied is not None:
@@ -138,6 +144,9 @@ async def handle_recall(request: web.Request, ctx: Any) -> web.Response:
         request.query.get("q"),
         limit=request.query.get("limit"),
         workspace=workspace,
+        # Anything other than the literal "all" means the default scope: an
+        # unrecognised value must narrow, never widen.
+        all_workspaces=(request.query.get("scope") == "all"),
     )
     return web.json_response(payload)
 

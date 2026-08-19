@@ -67,7 +67,24 @@ describe('recall', () => {
     expect(readRecallReport({ enabled: true, results: [hit()] })).toEqual({
       unsupported: false,
       hits: [hit()],
+      scope: 'workspace',
     })
+  })
+
+  it('reports the scope the backend actually searched, not the one we asked for', () => {
+    expect(readRecallReport({ enabled: true, scope: 'all', results: [hit()] }).scope).toBe('all')
+    // A gateway that ignores the parameter, or predates it, must not have its
+    // results labelled as cross-workspace. The label is a claim about reach.
+    expect(readRecallReport({ enabled: true, results: [hit()] }).scope).toBe('workspace')
+    expect(readRecallReport({ enabled: true, scope: 'nonsense', results: [] }).scope).toBe('workspace')
+  })
+
+  it('asks for the default scope without a parameter at all', () => {
+    // The default query stays byte-identical to the one that shipped, so a
+    // widening is always visible in the request itself.
+    expect(recallUrl('ack contention', 8)).not.toContain('scope')
+    expect(recallUrl('ack contention', 8, 'workspace')).not.toContain('scope')
+    expect(recallUrl('ack contention', 8, 'all')).toContain('scope=all')
   })
 
   it('ignores rows with no session to open', () => {
