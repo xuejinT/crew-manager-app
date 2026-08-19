@@ -58,6 +58,9 @@ def parse_projects(text: str) -> list[dict]:
     whose projects.md is organised as headings -- the store was then written
     empty, and every work item fell to the unnamed tail of the Goals view.
     """
+    # Strip HTML comment blocks first: the file's header comment carries a
+    # FORMAT EXAMPLE bullet ("- **Display Name** ...") that must not import.
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
     buckets: list[dict] = []
     seen: set[str] = set()
 

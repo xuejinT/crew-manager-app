@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CrewOverviewApp from '../src/index'
 import { appSdkMocks } from './mocks/app-sdk'
@@ -11,6 +11,9 @@ afterEach(cleanup)
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // The view mode persists now, so a prior test's Goal click must not leak
+  // into tests that assume the default Session view.
+  localStorage.clear()
   appSdkMocks.get.mockImplementation(async (path: string) => {
     if (path === '/api/chat/slots') {
       return [
@@ -348,33 +351,129 @@ describe('Crew Manager Conductor boundaries', () => {
     })
   })
 
-  it('answers a permission in the list instead of quoting it', async () => {
+  it('routes to the Conductor, not the session, when the scope toggle is switched', async () => {
     renderApp()
-    // session-1 is blocked on an approval, so selecting it must offer the
-    // decision — not a message box for a yes/no.
-    fireEvent.click(await screen.findByTestId('work-item-session:session-1'))
+    fireEvent.click(await screen.findByTestId('work-item-session:session-2'))
+
+    // The quote bar names the session by default; switching the toggle changes
+    // the destination explicitly before anything is typed.
+    const toggle = await screen.findByRole('button', { name: /Activate to send to the Conductor/ })
+    fireEvent.click(toggle)
+    expect(screen.getByRole('button', { name: /Activate to send to this session/ })).toHaveTextContent('To Conductor')
+
+    const input = screen.getByLabelText('Message to Conductor')
+    fireEvent.change(input, { target: { value: 'What is blocking this?' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
 
     await waitFor(() => {
-      expect(document.querySelector('.ow-row .ow-permission')).not.toBeNull()
-      expect(document.querySelector('.ow-quote')).toBeNull()
+      // The message reaches the Conductor slot even though a session is quoted.
+      expect(appSdkMocks.post).toHaveBeenCalledWith('/api/chat', {
+        message: 'What is blocking this?',
+        slot: 'crew-manager-conductor',
+      })
     })
-
-    fireEvent.click(screen.getAllByRole('button', { name: 'Approve' })[0])
-    await waitFor(() => {
-      expect(appSdkMocks.post).toHaveBeenCalledWith('/api/approvals/approval-1/approve', {})
+    expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', {
+      message: 'What is blocking this?',
+      slot: 'session-2',
     })
   })
 
-  it('asks for the permission once, in the row, not twice on one screen', async () => {
+  it('selecting a permission item expands the formal approval card inside it', async () => {
+    renderApp()
+    // session-1 is blocked on an approval. Selecting it must expand the SAME
+    // approval UI as the session view — details, Allow once, Trust, Reject —
+    // INSIDE the card, never a stripped-down pair, never a quote for a yes/no.
+    fireEvent.click(await screen.findByTestId('work-item-session:session-1'))
+
+    await waitFor(() => {
+      expect(document.querySelector('.ow-row .ow-formal-approval')).not.toBeNull()
+    })
+    const card = within(document.querySelector('.ow-formal-approval') as HTMLElement)
+    expect(card.getByText('Waiting for approval')).toBeInTheDocument()
+    expect(card.getByRole('button', { name: /Trust/ })).toBeInTheDocument()
+    expect(document.querySelector('.ow-quote')).toBeNull()
+    // The Conductor stays put — the approval never hijacks the side panel.
+    expect(screen.queryByText(/Approval in/)).not.toBeInTheDocument()
+
+    // Allow once resolves through the SLOT endpoint — the one that can also
+    // express trust — not the bare approvals path.
+    fireEvent.click(card.getByRole('button', { name: 'Allow once' }))
+    await waitFor(() => {
+      expect(appSdkMocks.post).toHaveBeenCalledWith('/api/chat/slots/session-1/approve', {
+        action: 'approved',
+        request_id: 'approval-1',
+      })
+    })
+    // The click must not bubble into the row's select toggle: the card stays
+    // selected and expanded instead of collapsing out from under the decision.
+    expect(screen.getByTestId('work-item-session:session-1')).toHaveAttribute('aria-pressed', 'true')
+    expect(document.querySelector('.ow-row .ow-formal-approval')).not.toBeNull()
+  })
+
+  it('the approval is asked in one place: the expanded card', async () => {
     renderApp()
     fireEvent.click(await screen.findByTestId('work-item-session:session-1'))
 
-    // The row answers it. The Conductor block is for the other case: an
-    // instruction was sent and the session went quiet on a permission.
     await waitFor(() => {
-      expect(document.querySelectorAll('.ow-permission')).toHaveLength(1)
+      expect(document.querySelectorAll('.ow-formal-approval')).toHaveLength(1)
     })
-    expect(document.querySelector('.ow-row .ow-permission')).not.toBeNull()
+    // No bare PermissionDecision beside it anywhere on screen.
+    expect(document.querySelectorAll('.ow-permission')).toHaveLength(0)
+  })
+
+  it('a PR card carries the real title, folds when healthy, and expands to the sidebar-style detail', async () => {
+    localStorage.clear()
+    const now = new Date().toISOString()
+    appSdkMocks.post.mockImplementation(async (path: string) => {
+      if (path === '/api/source/pull-request') {
+        return {
+          title: 'feat: one card anatomy in Goal view', state: 'merged', draft: false,
+          headBranch: 'feat/goal-digest', baseBranch: 'main',
+          author: 'xuejinT', updatedAt: new Date(Date.now() - 3600_000).toISOString(),
+          additions: 594, deletions: 396, changedFiles: 6,
+          checks: [{ bucket: 'passed' }],
+          files: [{ path: 'src/index.tsx', additions: 64, deletions: 13 }],
+        }
+      }
+      throw new Error(`Unexpected POST ${path}`)
+    })
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots') {
+        return [{
+          key: 's1', title: 'Ship goal grouping', messages: 4, running: true, last_ts: now,
+          source_links: [{ kind: 'change', number: 4, url: 'https://github.com/x/y/pull/4', ci: 'passed' }],
+        }]
+      }
+      if (path === '/api/approvals') return []
+      if (path === '/api/spawn') return { agents: [] }
+      if (path === '/api/workflows/runs') return { runs: [] }
+      if (path === '/api/crons') return { jobs: [] }
+      if (path === '/api/artifacts') return { artifacts: [] }
+      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+    renderApp()
+
+    // No group-by click needed: the PRs card lives in the bottom stack now.
+    // The header mirrors the sidebar PR view: badge + branch flow, the real
+    // title with the id demoted to a suffix, then author / diffstat / checks.
+    expect(await screen.findByText('feat: one card anatomy in Goal view')).toBeInTheDocument()
+    const head = within(document.querySelector('.ow-pr-head') as HTMLElement)
+    expect(head.getByText('Merged')).toBeInTheDocument()
+    expect(head.getByText('feat/goal-digest → main')).toBeInTheDocument()
+    expect(head.getByText('xuejinT')).toBeInTheDocument()
+    expect(head.getByText('All checks passed 1/1')).toBeInTheDocument()
+    // The files section stays behind the fold: nothing on this PR needs the user.
+    expect(screen.queryByText('src/index.tsx')).not.toBeInTheDocument()
+
+    // Expanding by clicking the title reveals the Files Changed section —
+    // and the sessions shrink to reference CTAs that just open the session.
+    fireEvent.click(screen.getByText('feat: one card anatomy in Goal view'))
+    expect(await screen.findByText('src/index.tsx')).toBeInTheDocument()
+    expect(screen.getByText('6 Files Changed')).toBeInTheDocument()
+    const chips = within(document.querySelector('.ow-pr-sessions') as HTMLElement)
+    fireEvent.click(chips.getByRole('button', { name: /Ship goal grouping/ }))
+    expect(appSdkMocks.navigate).toHaveBeenCalledWith('/chat?sid=s1')
   })
 
   it('shows the verb, not an Issue badge, on a blocked change in Needs you', async () => {

@@ -202,6 +202,8 @@ export interface WorkItem {
   permissionId?: string
   permissionTool?: string
   permissionPurpose?: string
+  /** Full formatted tool input, for the formal approval card. */
+  permissionInput?: string
   /** A run that ended failed. Unfinished work, so it belongs in the queue. */
   runFailed?: boolean
   /** Where to re-run it. Absent when the platform cannot retry this kind. */
@@ -229,6 +231,8 @@ export interface ApprovalRow {
   ts?: number
   /** The tool's own stated reason. This is what makes an approval decidable here. */
   tool_purpose?: string
+  /** The full formatted input — the same detail the session view's card shows. */
+  tool_input?: string
 }
 
 export interface PendingPermission {
@@ -511,6 +515,7 @@ function mergeApproval(item: WorkItem, approval: ApprovalRow, copy: WorkCopy): v
   item.permissionId = approval.id
   item.permissionTool = approval.tool || approval.source
   item.permissionPurpose = approval.tool_purpose
+  item.permissionInput = approval.tool_input
   upsertReference(item, {
     kind: 'approval',
     id: approval.id,
@@ -1548,6 +1553,7 @@ export function normalizeWorkItems(
       permissionId: approval.id,
       permissionTool: approval.tool || approval.source,
       permissionPurpose: approval.tool_purpose,
+      permissionInput: approval.tool_input,
       references: [{
         kind: 'approval',
         id: approval.id,
@@ -2188,14 +2194,50 @@ export interface InitiativeBlock {
 export function initiativeFor(item: WorkItem, initiatives: Initiative[]): string | null {
   const sessionLabel = item.references.find(ref => ref.kind === 'session')?.label ?? ''
   for (const field of [item.title, sessionLabel, item.provenance]) {
-    const haystack = field.toLowerCase()
-    for (const bucket of initiatives) {
-      if (bucket.aliases.some(alias => alias && haystack.includes(alias.toLowerCase()))) {
-        return bucket.name
-      }
-    }
+    const bucket = bucketMatching(field, initiatives)
+    if (bucket) return bucket
   }
   return null
+}
+
+function bucketMatching(text: string, initiatives: Initiative[]): string | null {
+  const haystack = text.toLowerCase()
+  // The LONGEST matching alias wins, not the first bucket in file order: a
+  // short generic alias ("Crew") must never shadow a longer, more specific
+  // one ("Crew Manager") that also matches.
+  let best: { name: string; length: number } | null = null
+  for (const bucket of initiatives) {
+    for (const alias of bucket.aliases) {
+      if (!alias || !haystack.includes(alias.toLowerCase())) continue
+      if (!best || alias.length > best.length) best = { name: bucket.name, length: alias.length }
+    }
+  }
+  return best?.name ?? null
+}
+
+/**
+ * A session whose NAME only mentions some other goal, carrying work that is
+ * this goal's. The name was set by the session's first topic and now speaks
+ * for work it does not cover — the one case where the goal grouping and the
+ * session chip visibly contradict. Renaming the session to mention both
+ * topics resolves it, and this returns null once the name covers the work.
+ */
+export function sessionNameMismatch(
+  item: WorkItem,
+  initiatives: Initiative[],
+): { itemGoal: string; sessionGoal: string } | null {
+  const label = item.references.find(ref => ref.kind === 'session')?.label ?? ''
+  if (!label) return null
+  const itemGoal = bucketMatching(item.title, initiatives)
+  if (!itemGoal) return null
+  // The name already mentions this work's goal: nothing to flag.
+  const covered = initiatives.find(bucket => bucket.name === itemGoal)
+  if (covered && covered.aliases.some(alias => alias && label.toLowerCase().includes(alias.toLowerCase()))) {
+    return null
+  }
+  const sessionGoal = bucketMatching(label, initiatives)
+  if (!sessionGoal || sessionGoal === itemGoal) return null
+  return { itemGoal, sessionGoal }
 }
 
 /**

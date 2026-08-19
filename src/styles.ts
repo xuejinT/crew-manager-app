@@ -502,11 +502,57 @@ export const OVERWATCH_STYLES = String.raw`
   }
   .ow-pr-head { padding: 10px 12px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--text) 6%, var(--card)); }
   .ow-pr-head-top { display: flex; align-items: center; gap: 8px; }
+  .ow-pr-head-click { display: block; width: 100%; cursor: pointer; }
   .ow-pr-status-line { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 12px; }
   .ow-pr-dot { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); }
   .ow-pr-dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .ow-pr-dot[data-bad='true'] { color: var(--danger); }
   .ow-pr-sublabel { padding: 6px 12px 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
+  .ow-pr-number { flex: none; color: var(--muted); font-size: 12px; }
+  .ow-pr-branches { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; }
+  .ow-pr-title-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    padding-top: 2px;
+  }
+  .ow-pr-title-line .ow-block-name { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+  .ow-pr-files-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding-bottom: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+  .ow-pr-files-head > span:first-child { flex: 1; }
+  .ow-pr-detail { padding: 8px 16px 4px; }
+  .ow-pr-adds { flex: none; color: var(--ok); font-size: 12px; }
+  .ow-pr-dels { flex: none; color: var(--danger); font-size: 12px; }
+  .ow-pr-files { margin-top: 2px; }
+  .ow-pr-file {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    padding: 3px 0;
+    font-size: 12px;
+    color: var(--text);
+  }
+  .ow-pr-file > .ow-truncate { flex: 1; min-width: 0; }
+  .ow-pr-more { color: var(--muted); }
+  .ow-pr-sessions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px 12px;
+  }
+  .ow-pr-sublabel-inline { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
+  .ow-pr-session-chip { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; }
   .ow-goal-digest { padding: 10px 16px 12px; border-top: 1px solid var(--border); }
   .ow-digest-line {
     display: -webkit-box;
@@ -530,6 +576,95 @@ export const OVERWATCH_STYLES = String.raw`
     cursor: pointer;
   }
   .ow-goal-fold:hover { background: var(--bg-hover); color: var(--text); }
+  .ow-row-mismatch {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--warn);
+  }
+  .ow-mismatch-fix {
+    flex: none;
+    border: 0;
+    background: none;
+    padding: 0;
+    font-size: 12px;
+    color: var(--accent);
+    cursor: pointer;
+  }
+  .ow-mismatch-fix:hover { text-decoration: underline; }
+  .ow-focus-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .ow-focus-head strong { color: var(--text-strong); }
+  .ow-focus-back { margin-left: auto; flex: none; }
+  .ow-formal-approval {
+    flex: none;
+    margin: 10px 12px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--warn);
+    border-radius: var(--radius-lg, 8px);
+    background: var(--card);
+  }
+  .ow-formal-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border: 1px solid var(--warn);
+    border-radius: 999px;
+    color: var(--warn);
+    font-size: 12px;
+  }
+  .ow-formal-detail {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: var(--bg-elevated);
+  }
+  .ow-formal-kv { display: flex; gap: 12px; min-width: 0; padding: 2px 0; font-size: 12px; }
+  .ow-formal-key { flex: none; width: 15ch; color: var(--accent); font-family: ui-monospace, monospace; }
+  .ow-formal-val { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+  .ow-formal-mono { font-family: ui-monospace, monospace; }
+  .ow-formal-actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
+  .ow-formal-reject:hover { color: var(--danger); border-color: var(--danger); }
+  .ow-trust-wrap { position: relative; display: inline-flex; }
+  .ow-trust-caret { transition: transform 0.15s ease; }
+  .ow-trust-caret[data-open='true'] { transform: rotate(90deg); }
+  .ow-trust-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 4px);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    min-width: 220px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    box-shadow: 0 6px 20px rgba(0,0,0,.3);
+  }
+  .ow-trust-item {
+    border: 0;
+    background: none;
+    padding: 6px 10px;
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ow-trust-item:hover { background: var(--bg-hover); }
   .ow-init-chevron { flex: none; transition: transform 0.15s ease; }
   .ow-init-chevron[data-open='true'] { transform: rotate(90deg); }
 
@@ -599,6 +734,15 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-quote-goal { flex-direction: column; align-items: stretch; gap: 2px; }
   .ow-quote-line { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
   .ow-quote-docked .ow-eyebrow { flex: none; white-space: nowrap; }
+  /* Looks like the eyebrow but reads as a control: accent colour + pointer signal
+     the destination is switchable. Text carries the active target. */
+  .ow-scope-toggle {
+    flex: none; white-space: nowrap;
+    padding: 0; border: 0; background: none;
+    color: var(--accent); font-family: inherit; font-size: 12px; font-weight: 550;
+    cursor: pointer;
+  }
+  .ow-scope-toggle:hover { text-decoration: underline; }
   .ow-bootstrap {
     display: flex;
     flex-direction: column;

@@ -513,7 +513,10 @@ from pathlib import Path as _Path  # noqa: E402
 import initiatives as _init  # noqa: E402
 
 _PROJECTS_SAMPLE = """
-<!-- comment the parser must skip -->
+<!-- comment the parser must skip,
+     including this FORMAT EXAMPLE bullet:
+       - **Display Name** — short note; aliases: alt1, alt2
+-->
 - **Crew Companion** — macOS desktop pet; aliases: Desktop Buddy, mochi, the pet
 - **Design Critique** — UI critique skill
 - not a bucket line
@@ -521,6 +524,8 @@ _PROJECTS_SAMPLE = """
 """
 _buckets = _init.parse_projects(_PROJECTS_SAMPLE)
 check("import parses one bucket per bold line", len(_buckets) == 2, repr([b["name"] for b in _buckets]))
+check("the format example inside the comment never imports",
+      not any(b["name"] == "Display Name" for b in _buckets))
 check(
     "the display name always leads the alias list",
     _buckets[0]["aliases"][0] == "Crew Companion",
