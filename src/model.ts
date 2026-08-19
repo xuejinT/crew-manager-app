@@ -1901,6 +1901,83 @@ export function rollupStatus(items: WorkItem[]): WorkState {
 }
 
 /**
+ * The dot colour a goal member shows, mirroring the card's own state language:
+ * a fault (a failing check, a stall, an error loop, a failed run — all carry
+ * `issue`) is CRITICAL; a response the user owes is WARN; a quiet follow-up the
+ * user could pick up but nothing is broken is IDLE; healthy motion or a finished
+ * item is GOOD. Derived from the same fields the badge and ranking read, so the
+ * dot can never disagree with the row it sits on.
+ */
+export type MemberDot = 'crit' | 'warn' | 'good' | 'idle'
+
+export function memberDot(item: WorkItem, now: number = Date.now()): MemberDot {
+  if (item.issue) return 'crit'
+  if (item.state === 'needs-you') {
+    return responseVerb(item, now) === 'followup' ? 'idle' : 'warn'
+  }
+  return 'good'
+}
+
+/**
+ * The short kind tag a goal member represents. When the item needs the user, the
+ * useful fact is the RESPONSE owed (unblock / follow-up); otherwise it is the
+ * ENTITY, read from the item's own id namespace (the prefixes buildWorkItems
+ * mints), so a healthy cron reads "cron" and a workflow run reads "loop".
+ */
+export function memberKind(item: WorkItem, now: number = Date.now()): string {
+  if (item.state === 'needs-you') {
+    return responseVerb(item, now) === 'followup' ? 'follow-up' : 'unblock'
+  }
+  if (item.id.startsWith('monitor:')) return 'cron'
+  if (item.id.startsWith('workflow:')) return 'loop'
+  if (item.id.startsWith('agent:')) return 'agent'
+  if (item.id.startsWith('artifact:')) return 'artifact'
+  return 'session'
+}
+
+/**
+ * What a goal is MADE OF, for the card's one-line composition meta. Counts only
+ * the entities its members actually represent — distinct sessions, the PRs and
+ * issues they link, and any loop / cron / agent members — plus the most recent
+ * activity across them. Every field is read from real data; there is no per-goal
+ * creation timestamp, so the meta reports last activity rather than a start date.
+ */
+export interface GoalComposition {
+  sessions: number
+  prs: number
+  issues: number
+  loops: number
+  crons: number
+  agents: number
+  needsYou: number
+  lastActivityAt: number
+}
+
+export function goalComposition(items: WorkItem[]): GoalComposition {
+  const sessions = new Set<string>()
+  const prs = new Set<string>()
+  const issues = new Set<string>()
+  let loops = 0
+  let crons = 0
+  let agents = 0
+  let needsYou = 0
+  let lastActivityAt = 0
+  for (const item of items) {
+    if (item.sessionKey) sessions.add(item.sessionKey)
+    for (const ref of item.references) {
+      if (ref.kind === 'change') prs.add(ref.id)
+      else if (ref.kind === 'issue') issues.add(ref.id)
+    }
+    if (item.id.startsWith('workflow:')) loops += 1
+    else if (item.id.startsWith('monitor:')) crons += 1
+    else if (item.id.startsWith('agent:')) agents += 1
+    if (item.state === 'needs-you') needsYou += 1
+    if (item.updatedAt > lastActivityAt) lastActivityAt = item.updatedAt
+  }
+  return { sessions: sessions.size, prs: prs.size, issues: issues.size, loops, crons, agents, needsYou, lastActivityAt }
+}
+
+/**
  * Where an instruction to a cross-session goal goes: the session actively ON
  * the job — it already holds the context, so it is the cheapest executor. With
  * nobody moving, the most recently touched member (sending resumes it). Never

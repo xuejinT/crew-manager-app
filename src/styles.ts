@@ -532,6 +532,51 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-goal-fold:hover { background: var(--bg-hover); color: var(--text); }
   .ow-init-chevron { flex: none; transition: transform 0.15s ease; }
   .ow-init-chevron[data-open='true'] { transform: rotate(90deg); }
+
+  /* ── Goal cards — the dashboard-mockup anatomy ──
+     A plain bordered card: a collapse chevron + the goal name + an optional Split
+     + a "N need you" flag, then a one-line composition meta, then the member rows
+     (each a dot + label + chevron that expands on select). */
+  .ow-goalcard { display: flex; flex-direction: column; gap: 0; padding: 12px 14px; }
+  .ow-goalcard-summary { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .ow-goalcard-chevron {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer;
+  }
+  .ow-goalcard-chevron:hover { color: var(--text); }
+  .ow-goalcard-header {
+    display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1;
+    padding: 0; background: none; border: 0; text-align: left; cursor: pointer;
+  }
+  .ow-goalcard-header .ow-icon { color: var(--muted); }
+  .ow-goalcard-header:hover .ow-goalcard-title { text-decoration: underline; }
+  .ow-goalcard-header[data-selected='true'] .ow-goalcard-title { color: var(--accent); }
+  .ow-goalcard-title { flex: 1; min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; max-width: none; }
+  .ow-goalcard .ow-block-open { flex: none; margin: 0; }
+  .ow-goal-flag {
+    flex: none; margin-left: auto; padding: 1px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+    color: var(--muted); background: var(--bg-hover); border: 1px solid var(--border);
+  }
+  .ow-goal-flag-warn { color: var(--warn); background: var(--warn-subtle, rgba(251,191,36,.12)); border-color: transparent; }
+  /* A lone goal has no name above its single item — this empty span just holds
+     the summary row's height so the chevron area and flag sit on one clean line. */
+  .ow-goalcard-lone { flex: 1; min-height: 18px; }
+  .ow-goal-meta { margin: 4px 0 0 26px; color: var(--muted); font-size: 11px; }
+  /* Member rows: indent under the title, a divider between them, lighter label. */
+  .ow-goalcard .ow-row { padding: 7px 4px 7px 26px; }
+  .ow-goalcard .ow-row + .ow-row { border-top: 1px solid var(--border); }
+  .ow-goalcard .ow-row-title { color: var(--text); font-weight: 500; }
+  .ow-goalcard .ow-row-actions .ow-icon { transition: transform 0.15s ease; }
+  .ow-goalcard .ow-row[data-selected='true'] .ow-row-actions .ow-icon { transform: rotate(90deg); }
+  .ow-goalcard .ow-row[data-selected='true'] .ow-row-title { color: var(--text-strong); font-weight: 700; }
+  .ow-goalcard .ow-goal-digest { border-top: 0; padding: 8px 0 0 26px; }
+  /* Status dot on a goal member row (mockup goal-item language). */
+  .ow-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .ow-dot-good { background: var(--ok); }
+  .ow-dot-warn { background: var(--warn); }
+  .ow-dot-crit { background: var(--danger); }
+  .ow-dot-idle { background: var(--muted); }
   .ow-init-status {
     flex: none;
     padding: 1px 8px;
