@@ -1481,8 +1481,8 @@ function WorkRow({
 type LaneKey = 'unblock' | 'followup' | 'running' | 'done'
 const LANE_ORDER: LaneKey[] = ['unblock', 'followup', 'running', 'done']
 const LANE_BADGE: Record<'unblock' | 'followup', { label: string; cls: string }> = {
-  unblock: { label: 'UNBLOCK', cls: 'ow-lane-unblock' },
-  followup: { label: 'FOLLOW UP', cls: 'ow-lane-followup' },
+  unblock: { label: 'Unblock', cls: 'ow-lane-unblock' },
+  followup: { label: 'Follow up', cls: 'ow-lane-followup' },
 }
 
 function laneKeyOf(item: WorkItem): LaneKey {
