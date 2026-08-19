@@ -19,6 +19,7 @@ import {
   clusterByInitiative,
   goalPairKey,
   goalRouteTarget,
+  initiativeCandidates,
   initiativeFor,
   rollupStatus,
   sameGoal,
@@ -1346,6 +1347,16 @@ describe('initiatives (the big-goal level)', () => {
     expect(initiativeFor(byTitle, buckets)).toBe('Crew Manager')
     expect(initiativeFor(bySession, buckets)).toBe('Crew Companion')
     expect(initiativeFor(nowhere, buckets)).toBeNull()
+  })
+
+  it('the item title outranks the session name it happens to live in', () => {
+    // "Redesign the Crew Manager cards" inside "Crew Companion Open Bugs" is
+    // Crew Manager work — the title says what it is, the session says where.
+    const crossed = goal('a', 's1', {
+      title: 'Redesign the Crew Manager cards',
+      references: [{ kind: 'session', id: 's1', label: 'Crew Companion Open Bugs', sessionKey: 's1' }],
+    })
+    expect(initiativeFor(crossed, buckets)).toBe('Crew Manager')
   })
 
   it('rolls status up: owed to the user beats motion beats done', () => {

@@ -358,28 +358,8 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-pr-dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .ow-pr-dot[data-bad='true'] { color: var(--danger); }
   .ow-pr-sublabel { padding: 6px 12px 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
-  /* The big goal shell. Deliberately NOT a card: a soft left rail + indented
-     body keeps one visual language — cards stay the item/goal level. */
-  .ow-initiative { display: flex; flex-direction: column; gap: 8px; }
-  .ow-init-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    padding: 8px 10px;
-    border: 0;
-    border-radius: var(--radius-lg, 8px);
-    background: none;
-    color: var(--text);
-    font-size: 13px;
-    cursor: pointer;
-    text-align: left;
-  }
-  .ow-init-head:hover { background: var(--bg-hover); }
   .ow-init-chevron { flex: none; transition: transform 0.15s ease; }
   .ow-init-chevron[data-open='true'] { transform: rotate(90deg); }
-  /* The NAME is the point of the header — it never yields to the session list. */
-  .ow-init-name { flex: none; max-width: 40ch; font-weight: 650; color: var(--text-strong); }
   .ow-init-status {
     flex: none;
     padding: 1px 8px;
@@ -391,15 +371,6 @@ export const OVERWATCH_STYLES = String.raw`
   }
   .ow-init-status[data-status='needs-you'] { color: var(--warn); background: var(--warn-subtle, rgba(251,191,36,.12)); }
   .ow-init-status[data-status='running'] { color: var(--info); background: var(--accent-subtle); }
-  .ow-init-sessions { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; }
-  .ow-init-body {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-left: 10px;
-    padding-left: 12px;
-    border-left: 2px solid var(--border);
-  }
   .ow-goal-tab { cursor: pointer; }
   .ow-goal-tab .ow-block-open { flex: none; }
   .ow-goal-tab[data-selected='true'] {

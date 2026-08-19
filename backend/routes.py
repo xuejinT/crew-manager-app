@@ -175,10 +175,10 @@ async def handle_pr_checks(request: web.Request, ctx: Any) -> web.Response:
 
 
 async def handle_initiatives(request: web.Request, ctx: Any) -> web.Response:
-    """GET /initiatives — the user's project buckets from projects.md.
+    """GET /initiatives — the user's big goals, from this app's own goals.json.
 
-    Missing or unparseable files degrade to an empty list; the Goal view then
-    shows no initiative cards, which is the pre-initiative behavior.
+    First run imports any existing projects.md once as a courtesy; after that
+    the store is Crew Manager's alone. Missing/corrupt store degrades to [].
     """
     denied = _unauthorized(request)
     if denied is not None:
@@ -187,11 +187,7 @@ async def handle_initiatives(request: web.Request, ctx: Any) -> web.Response:
 
 
 async def handle_add_initiative(request: web.Request, ctx: Any) -> web.Response:
-    """POST /initiatives {name, aliases?} — define a bucket from the UI.
-
-    Appends to projects.md in the format Crew Companion also reads, so a goal
-    defined here labels notifications too. Idempotent on the name.
-    """
+    """POST /initiatives {name, aliases?} — define a big goal from the UI."""
     denied = _unauthorized(request)
     if denied is not None:
         return denied
@@ -207,8 +203,25 @@ async def handle_add_initiative(request: web.Request, ctx: Any) -> web.Response:
     except ValueError as error:
         return web.json_response({"error": str(error)}, status=400)
     except OSError:
-        logger.exception("crew-manager: could not write projects.md")
-        return web.json_response({"error": "could not write projects.md"}, status=500)
+        logger.exception("crew-manager: could not write goals.json")
+        return web.json_response({"error": "could not write goals"}, status=500)
+    return web.json_response({"initiatives": buckets})
+
+
+async def handle_remove_initiative(request: web.Request, ctx: Any) -> web.Response:
+    """POST /initiatives/remove {name} — drop a big goal. Unknown name: no-op."""
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+    try:
+        payload = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    try:
+        buckets = remove_initiative(payload.get("name", ""))
+    except OSError:
+        logger.exception("crew-manager: could not write goals.json")
+        return web.json_response({"error": "could not write goals"}, status=500)
     return web.json_response({"initiatives": buckets})
 
 
@@ -229,4 +242,5 @@ def register_routes(ctx: Any) -> list:
         AppRoute(method="GET", path="/pr-checks", handler=handle_pr_checks),
         AppRoute(method="GET", path="/initiatives", handler=handle_initiatives),
         AppRoute(method="POST", path="/initiatives", handler=handle_add_initiative),
+        AppRoute(method="POST", path="/initiatives/remove", handler=handle_remove_initiative),
     ]

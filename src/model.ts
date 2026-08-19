@@ -1634,16 +1634,19 @@ export interface InitiativeBlock {
 }
 
 /**
- * Which bucket claims this item. Same matching contract projects.md documents
- * for Crew Companion: case-insensitive substring over what the item says about
- * itself (title, session label, provenance), first bucket wins.
+ * Which bucket claims this item. Fields are checked in priority order — the
+ * item's OWN title says what it is; the session name only says where it lives.
+ * Without this, "Redesign the Crew Manager cards" inside a session called
+ * "Crew Companion Open Bugs" lands in Crew Companion.
  */
 export function initiativeFor(item: WorkItem, initiatives: Initiative[]): string | null {
   const sessionLabel = item.references.find(ref => ref.kind === 'session')?.label ?? ''
-  const haystack = `${item.title}\n${sessionLabel}\n${item.provenance}`.toLowerCase()
-  for (const bucket of initiatives) {
-    if (bucket.aliases.some(alias => alias && haystack.includes(alias.toLowerCase()))) {
-      return bucket.name
+  for (const field of [item.title, sessionLabel, item.provenance]) {
+    const haystack = field.toLowerCase()
+    for (const bucket of initiatives) {
+      if (bucket.aliases.some(alias => alias && haystack.includes(alias.toLowerCase()))) {
+        return bucket.name
+      }
     }
   }
   return null
@@ -1659,13 +1662,15 @@ export function initiativeCandidates(
   initiatives: Initiative[],
 ): { name: string; sessions: number }[] {
   const taken = initiatives.flatMap(bucket => bucket.aliases.map(alias => alias.toLowerCase()))
+  // Generic dir names say nothing about WHAT the work is.
+  const generic = new Set(['workspace', 'workspaces', 'home', 'src', 'tmp', 'documents', 'desktop'])
   const counts = new Map<string, number>()
   for (const slot of slots) {
     if (!slot.key || CONDUCTOR_SLOT_KEYS.has(slot.key) || slot.memory_mode === 'incognito') continue
     const raw = slot.project
     if (!raw) continue
     const name = raw.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop()
-    if (!name) continue
+    if (!name || generic.has(name.toLowerCase())) continue
     // Already covered by a bucket: not a candidate, however many sessions use it.
     if (taken.some(alias => name.toLowerCase().includes(alias) || alias.includes(name.toLowerCase()))) continue
     counts.set(name, (counts.get(name) ?? 0) + 1)

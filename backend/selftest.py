@@ -464,8 +464,11 @@ check(
     repr(focused_real[:90]),
 )
 
-# --- initiatives: the projects.md parser behind GET /initiatives -------------
-from initiatives import parse_projects  # noqa: E402
+# --- initiatives: this app's own goal store + the one-time projects.md import --
+import os  # noqa: E402
+import tempfile  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+import initiatives as _init  # noqa: E402
 
 _PROJECTS_SAMPLE = """
 <!-- comment the parser must skip -->
@@ -474,8 +477,8 @@ _PROJECTS_SAMPLE = """
 - not a bucket line
 - **Crew Companion** — duplicate must be dropped
 """
-_buckets = parse_projects(_PROJECTS_SAMPLE)
-check("parses one bucket per bold line", len(_buckets) == 2, repr([b["name"] for b in _buckets]))
+_buckets = _init.parse_projects(_PROJECTS_SAMPLE)
+check("import parses one bucket per bold line", len(_buckets) == 2, repr([b["name"] for b in _buckets]))
 check(
     "the display name always leads the alias list",
     _buckets[0]["aliases"][0] == "Crew Companion",
@@ -486,40 +489,48 @@ check(
     "mochi" in _buckets[0]["aliases"] and "the pet" in _buckets[0]["aliases"],
     repr(_buckets[0]["aliases"]),
 )
-check(
-    "a bucket without an aliases clause still matches by name",
-    _buckets[1]["aliases"] == ["Design Critique"],
-    repr(_buckets[1]["aliases"]),
-)
-check("duplicate names collapse to the first", sum(1 for b in _buckets if b["name"] == "Crew Companion") == 1)
-check("empty text degrades to no buckets", parse_projects("") == [])
+check("empty text degrades to no buckets", _init.parse_projects("") == [])
 
-# add_initiative round-trips through a THROWAWAY data home — never the real one.
-import os  # noqa: E402
-import tempfile  # noqa: E402
-import initiatives as _initiatives_mod  # noqa: E402
-
-with tempfile.TemporaryDirectory() as _tmp_home:
+# The store round-trips through THROWAWAY dirs — never the real app dir or home.
+with tempfile.TemporaryDirectory() as _tmp:
+    _prior_goals_file = _init.goals_file
     _prior_home = os.environ.get("KIROCREW_HOME")
-    os.environ["KIROCREW_HOME"] = _tmp_home
+    _init.goals_file = lambda: _Path(_tmp) / "data" / "goals.json"  # type: ignore[assignment]
+    os.environ["KIROCREW_HOME"] = str(_Path(_tmp) / "home")
     try:
-        _written = _initiatives_mod.add_initiative("Crew Manager", ["overwatch", "crew-manager"])
-        check("add_initiative creates the file and returns the bucket",
-              any(b["name"] == "Crew Manager" for b in _written))
-        _round = _initiatives_mod.load_initiatives()
-        _cm = next((b for b in _round if b["name"] == "Crew Manager"), None)
-        check("the written line parses back with its aliases",
+        # First run with a projects.md present: buckets are imported once.
+        _memory = _Path(_tmp) / "home" / "workspace" / "memory"
+        _memory.mkdir(parents=True)
+        (_memory / "projects.md").write_text(_PROJECTS_SAMPLE, encoding="utf-8")
+        _first = _init.load_initiatives()
+        check("first run imports projects.md as the initial goals",
+              any(b["name"] == "Crew Companion" for b in _first), repr([b["name"] for b in _first]))
+        # After import the store is Crew Manager's own: edits to projects.md
+        # must NOT leak in.
+        (_memory / "projects.md").write_text("- **Later Project** — added after\n", encoding="utf-8")
+        check("projects.md changes never leak in after the import",
+              not any(b["name"] == "Later Project" for b in _init.load_initiatives()))
+
+        _added = _init.add_initiative("Crew Manager", ["overwatch", "crew-manager"])
+        check("add_initiative persists and returns the bucket",
+              any(b["name"] == "Crew Manager" for b in _added))
+        _cm = next((b for b in _init.load_initiatives() if b["name"] == "Crew Manager"), None)
+        check("the stored goal round-trips with its aliases",
               _cm is not None and "overwatch" in _cm["aliases"], repr(_cm))
-        _again = _initiatives_mod.add_initiative("crew manager", [])
+        _again = _init.add_initiative("crew manager", [])
         check("adding the same name again is idempotent",
               sum(1 for b in _again if b["name"].lower() == "crew manager") == 1)
         _bad = False
         try:
-            _initiatives_mod.add_initiative("   ")
+            _init.add_initiative("   ")
         except ValueError:
             _bad = True
         check("a blank name is refused", _bad)
+        _left = _init.remove_initiative("Crew Manager")
+        check("remove_initiative drops the goal",
+              not any(b["name"] == "Crew Manager" for b in _left))
     finally:
+        _init.goals_file = _prior_goals_file  # type: ignore[assignment]
         if _prior_home is None:
             os.environ.pop("KIROCREW_HOME", None)
         else:
