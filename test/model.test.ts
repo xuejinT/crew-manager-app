@@ -36,6 +36,7 @@ import {
   rememberGoals,
   rollupStatus,
   sameGoal,
+  sessionNameMismatch,
   suggestGoalNames,
   titleOverlap,
   titleWords,
@@ -1446,6 +1447,40 @@ describe('initiatives (the big-goal level)', () => {
     const a = goal('a', 's1', { title: 'overwatch verb badges' })
     const b = goal('b', 's2', { title: 'overwatch stall backend' })
     expect(suggestGoalNames([a, b], buckets)).toEqual([])
+  })
+
+  it('the longest matching alias wins over a shorter generic one', () => {
+    // A stray "Crew" bucket must not swallow Crew Manager and Crew Companion
+    // work — this is the real-data failure that hid the mismatch hint.
+    const withGeneric = [
+      { name: 'Crew', aliases: ['Crew'] },
+      ...buckets,
+    ]
+    const item = goal('a', 's1', { title: 'Redesign the Crew Manager cards' })
+    expect(initiativeFor(item, withGeneric)).toBe('Crew Manager')
+  })
+
+  it('flags a session whose name only mentions another goal', () => {
+    const crossed = goal('a', 's1', {
+      title: 'Redesign the Crew Manager cards',
+      references: [{ kind: 'session', id: 's1', label: 'Crew Companion Open Bugs', sessionKey: 's1' }],
+    })
+    expect(sessionNameMismatch(crossed, buckets)).toEqual({
+      itemGoal: 'Crew Manager',
+      sessionGoal: 'Crew Companion',
+    })
+    // Once the name covers both topics, the flag vanishes — that is the fix.
+    const renamed = goal('b', 's1', {
+      title: 'Redesign the Crew Manager cards',
+      references: [{ kind: 'session', id: 's1', label: 'Crew Companion Open Bugs & Crew Manager', sessionKey: 's1' }],
+    })
+    expect(sessionNameMismatch(renamed, buckets)).toBeNull()
+    // A session name matching no goal at all is vague, not contradictory.
+    const vague = goal('c', 's2', {
+      title: 'Redesign the Crew Manager cards',
+      references: [{ kind: 'session', id: 's2', label: 'Tuesday chores', sessionKey: 's2' }],
+    })
+    expect(sessionNameMismatch(vague, buckets)).toBeNull()
   })
 })
 

@@ -63,6 +63,7 @@ import {
   rankWorkItem,
   rememberGoals,
   sameGoal,
+  sessionNameMismatch,
   suggestGoalNames,
   titleOverlap,
   workCounts,
@@ -452,6 +453,80 @@ function metaReferences(item: WorkItem) {
 
 
 /**
+ * The formal approval card, fed from /api/approvals — the SAME data and
+ * decisions as the session view. It cannot be reused from the platform (the
+ * component is not exported, and a spawn-gate approval never appears in the
+ * session transcript the embed renders), so this mirrors its anatomy: the
+ * formatted purpose + input detail, Allow once, the tiered Trust menu, Reject.
+ * Decisions go to the SLOT approve endpoint — the only one that can express
+ * trust; /api/approvals/{id}/approve would silently downgrade Trust to a
+ * one-shot approve.
+ */
+function FormalApproval({ item, busy, onDecide }: {
+  item: WorkItem
+  busy: boolean
+  onDecide: (action: string) => void
+}) {
+  const [trustOpen, setTrustOpen] = useState(false)
+  const command = item.permissionInput || ''
+  const baseCommand = command.trim().split(/\s+/)[0] || item.permissionTool || ''
+  return (
+    // Clicks inside this card must never reach the row's select toggle — the
+    // row reads a second click as "deselect" and collapses the card mid-answer.
+    // A keyboard-activated button fires click too, so this covers both paths.
+    <div
+      className="ow-formal-approval"
+      role="presentation"
+      onClick={event => event.stopPropagation()}
+      onKeyDown={event => event.stopPropagation()}
+    >
+      <div className="ow-formal-badge">Waiting for approval</div>
+      <div className="ow-formal-detail">
+        {item.permissionPurpose && (
+          <div className="ow-formal-kv">
+            <span className="ow-formal-key">__tool_use_purpose</span>
+            <span className="ow-formal-val">{item.permissionPurpose}</span>
+          </div>
+        )}
+        <div className="ow-formal-kv">
+          <span className="ow-formal-key">{item.permissionTool || 'tool'}</span>
+          <span className="ow-formal-val ow-formal-mono">{command || '(no input details)'}</span>
+        </div>
+      </div>
+      <div className="ow-formal-actions">
+        <Btn disabled={busy} onClick={() => onDecide('approved')}>Allow once</Btn>
+        <span className="ow-trust-wrap">
+          <Btn disabled={busy} onClick={() => setTrustOpen(open => !open)} aria-expanded={trustOpen}>
+            Trust <ChevronRight className="ow-icon ow-trust-caret" data-open={trustOpen ? 'true' : undefined} aria-hidden="true" />
+          </Btn>
+          {trustOpen && (
+            <span className="ow-trust-menu" role="menu">
+              {command && (
+                <button type="button" role="menuitem" className="ow-trust-item" disabled={busy}
+                  onClick={() => { setTrustOpen(false); onDecide('trust_command') }}>
+                  Trust this exact command
+                </button>
+              )}
+              {baseCommand && (
+                <button type="button" role="menuitem" className="ow-trust-item" disabled={busy}
+                  onClick={() => { setTrustOpen(false); onDecide('trust_base') }}>
+                  Trust “{baseCommand}” commands
+                </button>
+              )}
+              <button type="button" role="menuitem" className="ow-trust-item" disabled={busy}
+                onClick={() => { setTrustOpen(false); onDecide('trust') }}>
+                Trust everything in this session
+              </button>
+            </span>
+          )}
+        </span>
+        <Btn className="ow-formal-reject" disabled={busy} onClick={() => onDecide('rejected')}>Reject</Btn>
+      </div>
+    </div>
+  )
+}
+
+/**
  * The bootstrap path for big goals. A goal is only useful if it exists, and
  * projects.md is a convention not everyone has — so the view offers to seed it
  * from the projects sessions actually run in, or from a name the user types.
@@ -734,79 +809,194 @@ function SessionBlockHeader({
   )
 }
 
+/** The platform's own PR payload (the sidebar Changes panel's data source). */
+interface PlatformPrSource {
+  title?: string
+  state?: string
+  draft?: boolean
+  headBranch?: string
+  baseBranch?: string
+  author?: string
+  updatedAt?: string
+  additions?: number
+  deletions?: number
+  changedFiles?: number
+  checks?: { bucket: 'passed' | 'skipped' | 'failed' | 'pending' }[]
+  files?: { path: string; additions: number; deletions: number }[]
+}
+
+const PR_FILES_SHOWN = 12
+
+/** Map the platform payload onto the card shape. One source of truth: the PR
+ *  cards show the same data as the sidebar's Changes panel, fetched the same
+ *  way — no separate gh backend to drift or fail differently. */
+function fromPlatformSource(src: PlatformPrSource): PrChecks {
+  const counted = (src.checks ?? []).filter(check => check.bucket !== 'skipped')
+  return {
+    available: true,
+    total: counted.length,
+    passing: counted.filter(check => check.bucket === 'passed').length,
+    failing: counted.filter(check => check.bucket === 'failed').length,
+    pending: counted.filter(check => check.bucket === 'pending').length,
+    title: src.title,
+    state: src.state ? src.state.toUpperCase() : undefined,
+    is_draft: Boolean(src.draft),
+    head: src.headBranch,
+    base: src.baseBranch,
+    author: src.author,
+    updated_at: src.updatedAt,
+    additions: src.additions,
+    deletions: src.deletions,
+    changed_files: src.changedFiles,
+    files: (src.files ?? []).slice(0, PR_FILES_SHOWN).map(file => ({
+      path: file.path, additions: file.additions, deletions: file.deletions,
+    })),
+  }
+}
+
 interface PrChecks {
   available: boolean
   total?: number
   passing?: number
   failing?: number
   pending?: number
+  /** The sidebar PR view's data — present when the gh overview call succeeded. */
+  title?: string
+  state?: string
+  is_draft?: boolean
+  head?: string
+  base?: string
+  additions?: number
+  deletions?: number
+  changed_files?: number
+  author?: string
+  updated_at?: string
+  files?: { path: string; additions: number; deletions: number }[]
 }
 
-/**
- * A session under a PR: who is on this change and where they stand. The row's
- * leading (most-urgent) work item is the select target, so quoting it in the
- * Conductor still works; Open goes to the session itself.
- */
-function SessionRollupRow({ session, selected, onSelect, onOpen }: {
-  session: SessionRollup
-  selected: boolean
-  onSelect: () => void
-  onOpen: () => void
+function PrBlockHeader({ reference, checks, folded, onToggle }: {
+  reference: WorkReference
+  checks?: PrChecks
+  folded?: boolean
+  onToggle?: () => void
 }) {
-  return (
-    <Clickable onActivate={onSelect} className="ow-srow" data-selected={selected}>
-      <MessageSquare className="ow-icon" aria-hidden="true" />
-      <div className="ow-srow-body">
-        <div className="ow-srow-name ow-truncate">{session.label}</div>
-        <div className="ow-srow-state ow-truncate">{session.leading.summary}</div>
-      </div>
-      <span className="ow-srow-badge">{stateBadge(session.leading)}</span>
-      <Btn
-        className="ow-srow-open"
-        aria-label={`Open ${session.label}`}
-        onClick={event => { event.stopPropagation(); onOpen() }}
-      >
-        Open
-      </Btn>
-    </Clickable>
-  )
-}
-
-function PrBlockHeader({ reference, checks }: { reference: WorkReference; checks?: PrChecks }) {
   const bad = reference.status ? /fail|conflict|closed/.test(reference.status) : false
+  // The real PR title when the backend could fetch it; the bare id otherwise.
+  const title = checks?.title || reference.label
+  const stateLabel = checks?.is_draft ? 'Draft' : checks?.state
+    ? checks.state.charAt(0) + checks.state.slice(1).toLowerCase()
+    : null
+  // The sidebar PR view's top line: badge, branch flow, open-externally.
+  const metaRow = (
+    <>
+      {onToggle && (
+        <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
+      )}
+      {stateLabel && (
+        <span
+          className="ow-init-status"
+          data-status={checks?.state === 'MERGED' ? 'done' : (checks?.failing ?? 0) > 0 ? 'needs-you' : 'running'}
+        >
+          {stateLabel}
+        </span>
+      )}
+      {checks?.head && checks?.base && (
+        <span className="ow-truncate ow-pr-branches ow-formal-mono">{checks.head} → {checks.base}</span>
+      )}
+      {!(checks?.head && checks?.base) && <span className="ow-pr-branches" />}
+      {reference.url && (
+        <a
+          className="ow-block-open ow-icon-link"
+          href={reference.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Open ${reference.label}`}
+          onClick={event => event.stopPropagation()}
+        >
+          <GitPullRequest className="ow-icon" aria-hidden="true" />
+        </a>
+      )}
+    </>
+  )
+  const updatedMs = checks?.updated_at ? Date.parse(checks.updated_at) : 0
+  const updated = updatedMs ? sinceLabel(updatedMs) : null
+  const headerBody = (
+    <>
+      <div className="ow-pr-head-top">{metaRow}</div>
+      <div className="ow-pr-title-line">
+        <span className="ow-block-name">{title}</span>
+        {checks?.title && <span className="ow-pr-number">{reference.label.replace(/^github\s*/, '')}</span>}
+      </div>
+    </>
+  )
   return (
     <div className="ow-pr-head">
-      <div className="ow-pr-head-top">
-        {/* No leading icon: in the PR view every card IS a PR, and the change
-            glyph is the same external-link icon as Open — two of the same thing.
-            The one affordance is an external-link icon on the right. */}
-        <span className="ow-truncate ow-block-name">{reference.label}</span>
-        {reference.url && (
-          <a
-            className="ow-block-open ow-icon-link"
-            href={reference.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`Open ${reference.label}`}
-          >
-            <GitPullRequest className="ow-icon" aria-hidden="true" />
-          </a>
-        )}
-      </div>
+      {onToggle
+        ? (
+          <Clickable onActivate={onToggle} className="ow-pr-head-click" aria-expanded={!folded}>
+            {headerBody}
+          </Clickable>
+        )
+        : headerBody}
       <div className="ow-pr-status-line">
+        {checks?.author && <span>{checks.author}</span>}
+        {checks?.title && (
+          <>
+            <span className="ow-pr-adds">+{checks.additions ?? 0}</span>
+            <span className="ow-pr-dels">−{checks.deletions ?? 0}</span>
+          </>
+        )}
+        {updated && <span>Updated {updated}</span>}
         {/* Real per-check counts from GitHub when available; otherwise the coarse
             ci status the platform gives natively. */}
         {checks?.available && (checks.total ?? 0) > 0
           ? (
             <span className="ow-pr-dot" data-bad={(checks.failing ?? 0) > 0 ? 'true' : undefined}>
-              {checks.passing ?? 0}/{checks.total} checks passing
-              {(checks.failing ?? 0) > 0 ? ` · ${checks.failing} failing` : ''}
+              {(checks.failing ?? 0) > 0
+                ? `${checks.failing} failing · ${checks.passing ?? 0}/${checks.total} passing`
+                : (checks.pending ?? 0) > 0
+                  ? `${checks.passing ?? 0}/${checks.total} checks passing`
+                  : `All checks passed ${checks.passing ?? 0}/${checks.total}`}
             </span>
           )
           : reference.status && (
             <span className="ow-pr-dot" data-bad={bad ? 'true' : undefined}>{reference.status}</span>
           )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * The expanded PR body — a compact mirror of the dashboard's own Changes-panel
+ * PR view: a "N Files Changed" section with per-file diffstat, right-aligned
+ * the way the sidebar draws it.
+ */
+function PrDetail({ checks }: { checks?: PrChecks }) {
+  if (!checks?.title) return null
+  return (
+    <div className="ow-pr-detail">
+      <div className="ow-pr-files-head">
+        <span>{checks.changed_files ?? 0} Files Changed</span>
+        <span className="ow-pr-adds">+{checks.additions ?? 0}</span>
+        <span className="ow-pr-dels">−{checks.deletions ?? 0}</span>
+      </div>
+      {(checks.files ?? []).length > 0 && (
+        <div className="ow-pr-files">
+          {(checks.files ?? []).map(file => (
+            <div key={file.path} className="ow-pr-file">
+              <span className="ow-truncate ow-formal-mono">{file.path}</span>
+              <span className="ow-pr-adds">+{file.additions}</span>
+              <span className="ow-pr-dels">−{file.deletions}</span>
+            </div>
+          ))}
+          {(checks.changed_files ?? 0) > (checks.files ?? []).length && (
+            <div className="ow-pr-file ow-pr-more">
+              +{(checks.changed_files ?? 0) - (checks.files ?? []).length} more files
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -877,6 +1067,9 @@ function WorkRow({
   headless,
   dot,
   simple,
+  onDecideApproval,
+  sessionMismatch,
+  onFixSessionName,
 }: {
   item: WorkItem
   selected: boolean
@@ -893,6 +1086,11 @@ function WorkRow({
    * its detail on select — so it never leaves a blank strip.
    */
   simple?: boolean
+  /** Answer the formal approval card inside this row. */
+  onDecideApproval?: (item: WorkItem, action: string) => void
+  /** The session's NAME only mentions another goal; offer the rename fix. */
+  sessionMismatch?: { itemGoal: string; sessionGoal: string }
+  onFixSessionName?: () => void
   onAnswerPermission?: (id: string, approve: boolean) => void
   permissionBusy?: boolean
   onRetry?: (path: string) => void
@@ -1023,6 +1221,26 @@ function WorkRow({
               </span>
             </div>
           )}
+          {/*
+            The one case where the goal grouping and the session chip visibly
+            contradict: the session's NAME was set by its first topic and now
+            speaks for work it does not cover. The fix is the name, not the
+            grouping — renaming it to mention both topics makes this vanish.
+          */}
+          {sessionMismatch && onFixSessionName && (
+            <div className="ow-row-mismatch">
+              <span className="ow-truncate">
+                This session's name only mentions {sessionMismatch.sessionGoal} — this is {sessionMismatch.itemGoal} work
+              </span>
+              <button
+                type="button"
+                className="ow-mismatch-fix"
+                onClick={event => { event.stopPropagation(); onFixSessionName() }}
+              >
+                Rename session to cover both
+              </button>
+            </div>
+          )}
         </div>
         {/*
           No action button on a work item. A row's job is to be SELECTED, which
@@ -1104,12 +1322,16 @@ function WorkRow({
           </Btn>
         </div></Expand>
       )}
-      {selected && item.permissionId && onAnswerPermission && (
-        <Expand><PermissionDecision
-          tool={item.permissionTool || 'a tool'}
-          purpose={item.permissionPurpose}
+      {/*
+        A permission request is answered in the FORMAL approval card — the same
+        anatomy as the session view (details, Trust options, formatted input) —
+        expanded inside the selected card, where the decision belongs.
+      */}
+      {selected && item.permissionId && onDecideApproval && (
+        <Expand><FormalApproval
+          item={item}
           busy={Boolean(permissionBusy)}
-          onAnswer={approve => onAnswerPermission(item.permissionId as string, approve)}
+          onDecide={action => onDecideApproval(item, action)}
         /></Expand>
       )}
       {/*
@@ -1154,6 +1376,7 @@ function SessionLanes({
   onSelect,
   onOpenSession,
   onAnswerPermission,
+  onDecideApproval,
   permissionBusy,
   onRetry,
   retryBusy,
@@ -1167,6 +1390,7 @@ function SessionLanes({
   onSelect: (item: WorkItem) => void
   onOpenSession: (slot: string) => void
   onAnswerPermission?: (id: string, approve: boolean) => void
+  onDecideApproval?: (item: WorkItem, action: string) => void
   permissionBusy?: boolean
   onRetry?: (path: string) => void
   retryBusy?: boolean
@@ -1221,6 +1445,7 @@ function SessionLanes({
                 onSelect={() => onSelect(item)}
                 onOpenSession={onOpenSession}
                 onAnswerPermission={onAnswerPermission}
+                onDecideApproval={onDecideApproval}
                 permissionBusy={permissionBusy}
                 onRetry={onRetry}
                 retryBusy={retryBusy}
@@ -1269,6 +1494,7 @@ function WorkSection({
   onSelect,
   onOpenSession,
   onAnswerPermission,
+  onDecideApproval,
   permissionBusy,
   onRetry,
   retryBusy,
@@ -1288,6 +1514,8 @@ function WorkSection({
   onSplitGoal,
   onMergeGoal,
   initiativeBlocks,
+  initiatives: goalInitiatives,
+  onRenameSession,
   collapsedInitiatives,
   onToggleInitiative,
   selectedGoalKey,
@@ -1302,6 +1530,7 @@ function WorkSection({
   onSelect: (item: WorkItem) => void
   onOpenSession: (slot: string) => void
   onAnswerPermission?: (id: string, approve: boolean) => void
+  onDecideApproval?: (item: WorkItem, action: string) => void
   permissionBusy?: boolean
   onRetry?: (path: string) => void
   retryBusy?: boolean
@@ -1328,6 +1557,8 @@ function WorkSection({
   onMergeGoal?: (pair: string) => void
   /** Goal mode: the two-level initiative clustering, computed by the parent. */
   initiativeBlocks?: InitiativeBlock[]
+  initiatives?: Initiative[]
+  onRenameSession?: (sessionKey: string, title: string) => void
   collapsedInitiatives?: Record<string, boolean>
   onToggleInitiative?: (key: string, next: boolean) => void
   selectedGoalKey?: string | null
@@ -1355,7 +1586,15 @@ function WorkSection({
     ? initiatives.length
     : groupBy === 'pr' ? shownBlocks.length : items.length
 
-  const renderBlock = (block: WorkBlock) => (
+  const renderBlock = (block: WorkBlock) => {
+    const blockChecks = block.changeRef ? prChecks?.[block.changeRef.url ?? ''] : undefined
+    // A PR card folds like a goal card. It arrives open only when it needs
+    // attention: failing checks, or work on it that waits on the user.
+    const prFolded = block.header === 'pr'
+      ? collapsedInitiatives?.[block.key]
+        ?? !(((blockChecks?.failing ?? 0) > 0) || block.items.some(item => item.state === 'needs-you'))
+      : false
+    return (
             <div
               key={block.key}
               className="ow-block"
@@ -1370,7 +1609,12 @@ function WorkSection({
                 />
               )}
               {block.header === 'pr' && block.changeRef && (
-                <PrBlockHeader reference={block.changeRef} checks={prChecks?.[block.changeRef.url ?? '']} />
+                <PrBlockHeader
+                  reference={block.changeRef}
+                  checks={blockChecks}
+                  folded={prFolded}
+                  onToggle={onToggleInitiative ? () => onToggleInitiative(block.key, !prFolded) : undefined}
+                />
               )}
               {block.header === 'goal' && (
                 <GoalBlockHeader
@@ -1381,18 +1625,28 @@ function WorkSection({
                 />
               )}
               {block.header === 'pr' ? (
+                !prFolded && (
                 <>
-                  <div className="ow-pr-sublabel">Sessions on this PR</div>
-                  {rollUpSessions(block.items).map(session => (
-                    <SessionRollupRow
-                      key={session.sessionKey}
-                      session={session}
-                      selected={selectedId === session.leading.id}
-                      onSelect={() => onSelect(session.leading)}
-                      onOpen={() => onOpenSession(session.sessionKey)}
-                    />
-                  ))}
+                  {/* A compact mirror of the sidebar's PR view, then the sessions
+                      as plain reference CTAs — a session under a PR is a place to
+                      jump to, not a second work list. */}
+                  <PrDetail checks={blockChecks} />
+                  <div className="ow-pr-sessions">
+                    <span className="ow-pr-sublabel-inline">Sessions</span>
+                    {rollUpSessions(block.items).map(session => (
+                      <button
+                        type="button"
+                        key={session.sessionKey}
+                        className="ow-reference ow-reference-link ow-pr-session-chip"
+                        onClick={() => onOpenSession(session.sessionKey)}
+                      >
+                        <MessageSquare className="ow-icon" aria-hidden="true" />
+                        <span className="ow-truncate">{session.label}</span>
+                      </button>
+                    ))}
+                  </div>
                 </>
+                )
               ) : block.header === 'session' ? (
                 <SessionLanes
                   items={block.items}
@@ -1401,6 +1655,7 @@ function WorkSection({
                   onSelect={onSelect}
                   onOpenSession={onOpenSession}
                   onAnswerPermission={onAnswerPermission}
+                  onDecideApproval={onDecideApproval}
                   permissionBusy={permissionBusy}
                   onRetry={onRetry}
                   retryBusy={retryBusy}
@@ -1425,6 +1680,7 @@ function WorkSection({
               onSelect={() => onSelect(item)}
               onOpenSession={onOpenSession}
               onAnswerPermission={onAnswerPermission}
+              onDecideApproval={onDecideApproval}
               permissionBusy={permissionBusy}
               onRetry={onRetry}
               retryBusy={retryBusy}
@@ -1441,17 +1697,29 @@ function WorkSection({
               )))}
             </div>
   )
+  }
 
   // Goal mode: every member is a self-labelling simple row (dot + title +
   // chevron), so no item is hidden behind a header and none renders blank. The
   // card header names the GOAL, never a member — so it must not repeat a title.
-  const goalRow = (item: WorkItem) => (
+  const goalRow = (item: WorkItem) => {
+    const mismatch = goalInitiatives && onRenameSession
+      ? sessionNameMismatch(item, goalInitiatives)
+      : null
+    const sessionLabel = item.references.find(ref => ref.kind === 'session')?.label ?? ''
+    return (
     <Fragment key={item.id}>
       <WorkRow
         item={item}
         selected={selectedId === item.id}
         dot={memberDot(item)}
         simple
+        sessionMismatch={mismatch ?? undefined}
+        onFixSessionName={mismatch && item.sessionKey
+          // The proposed name simply appends the missing topic; the user can
+          // refine it later with the normal session rename.
+          ? () => onRenameSession!(item.sessionKey as string, `${sessionLabel} & ${mismatch.itemGoal}`.slice(0, 200))
+          : undefined}
         whyRanked={
           item.state === 'needs-you' && item.action !== 'resume'
             ? explainRank(rankWorkItem(item), workCopy)
@@ -1460,6 +1728,7 @@ function WorkSection({
         onSelect={() => onSelect(item)}
         onOpenSession={onOpenSession}
         onAnswerPermission={onAnswerPermission}
+        onDecideApproval={onDecideApproval}
         permissionBusy={permissionBusy}
         onRetry={onRetry}
         retryBusy={retryBusy}
@@ -1471,7 +1740,8 @@ function WorkSection({
         <GoalMergeHint item={item} items={items} onMerge={onMergeGoal} />
       )}
     </Fragment>
-  )
+    )
+  }
 
   const renderInitiative = (init: InitiativeBlock) => {
     // A user-defined goal: header names it + a "N need you" flag; a composition
@@ -1696,6 +1966,10 @@ export default function CrewOverviewApp() {
    * The list card's tab. Only ever 'goal' or 'session' — 'pr' is still a real
    * GroupMode, but PR grouping now lives permanently in the bottom stack's PRs
    * card rather than being a third thing this control switches to.
+   *
+   * This supersedes the branch's own GROUP_BY_KEY persistence: the choice is
+   * still remembered across refreshes (see the writeStore effect below), just
+   * under TAB_KEY and without a 'pr' value the tabs can no longer produce.
    */
   const [openStack, setOpenStack] = useState<StackCard | null>(
     () => readStore<StackCard | null>(OPEN_STACK_KEY, null) ?? 'prs',
@@ -1716,6 +1990,9 @@ export default function CrewOverviewApp() {
   const [prFilter, setPrFilter] = useState<PrFilterKey>('all')
   const [prChecks, setPrChecks] = useState<Record<string, PrChecks>>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // The send destination is explicit, not inferred from what is quoted, so the
+  // user sees and can change it before typing. Only meaningful when a session is quoted.
+  const [scope, setScope] = useState<'session' | 'conductor'>('session')
   const [deliveryReceipt, setDeliveryReceipt] = useState<string | null>(null)
   const [sources, setSources] = useState<SourcesResponse | null>(null)
   const [summaries, setSummaries] = useState<Record<string, SessionSummary>>({})
@@ -1963,14 +2240,23 @@ export default function CrewOverviewApp() {
     const urls = new Set<string>()
     for (const item of items) {
       for (const ref of item.references) {
-        if ((ref.kind === 'change') && ref.url && /github\.com\/.+\/pull\//.test(ref.url)) urls.add(ref.url)
+        if ((ref.kind === 'change') && ref.url && /\/pull\/\d|\/merge_requests\/\d/.test(ref.url)) urls.add(ref.url)
       }
     }
     let cancelled = false
     for (const url of urls) {
       if (prChecks[url]) continue
-      apiRef.current.get<PrChecks>(`/pr-checks?url=${encodeURIComponent(url)}`)
-        .then(payload => { if (!cancelled && mountedRef.current) setPrChecks(cur => ({ ...cur, [url]: payload })) })
+      // The platform's own PR endpoint — the exact data source behind the
+      // sidebar Changes panel, including its server-side cache. GitHub and
+      // GitLab both work, and there is no app-backend hop to fail separately.
+      apiRef.current.post<PlatformPrSource>('/api/source/pull-request', { url })
+        .then(payload => {
+          // Cache only real data: a transient failure must not stick — the
+          // next poll retries it against the platform's warm cache.
+          if (!cancelled && mountedRef.current && payload?.title) {
+            setPrChecks(cur => ({ ...cur, [url]: fromPlatformSource(payload) }))
+          }
+        })
         .catch(() => { /* leave unset; header falls back to coarse status */ })
     }
     return () => { cancelled = true }
@@ -2202,6 +2488,15 @@ export default function CrewOverviewApp() {
     }
     return merged.sort((a, b) => b.sessions - a.sessions)
   }, [groupBy, sources, items, initiatives])
+  const renameSession = useCallback(async (sessionKey: string, title: string) => {
+    try {
+      await apiRef.current.patch(`/api/chat/slots/${encodeURIComponent(sessionKey)}/title`, { title })
+      void loadSources()
+    } catch {
+      // The hint stays visible on failure, so the affordance is retryable.
+    }
+  }, [loadSources])
+
   const addInitiative = useCallback(async (name: string, aliases: string[] = []) => {
     if (!name.trim()) return
     setAddingGoal(true)
@@ -2229,6 +2524,33 @@ export default function CrewOverviewApp() {
       void loadSources()
     } catch (error) {
       // A resolved or expired approval answers 404. Saying so beats a dead button.
+      setConductorError(
+        error instanceof Error
+          ? `Could not answer that request: ${error.message}`
+          : 'Could not answer that request',
+      )
+      void loadSources()
+    } finally {
+      if (mountedRef.current) setResolvingApproval(null)
+    }
+  }, [loadSources, resolvingApproval])
+
+  // The formal card's decisions. Routed through the SLOT approve endpoint — the
+  // only one that can express trust; the /api/approvals path would silently
+  // downgrade a Trust click to a one-shot approve.
+  const decideApproval = useCallback(async (item: WorkItem, action: string) => {
+    if (resolvingApproval || !item.permissionId || !item.sessionKey) return
+    setResolvingApproval(item.permissionId)
+    setConductorError(null)
+    try {
+      await apiRef.current.post(`/api/chat/slots/${encodeURIComponent(item.sessionKey)}/approve`, {
+        action,
+        request_id: item.permissionId,
+      })
+      // Keep the card selected and in place: the item's state updates on the
+      // next poll, and yanking the card out from under the click reads as loss.
+      void loadSources()
+    } catch (error) {
       setConductorError(
         error instanceof Error
           ? `Could not answer that request: ${error.message}`
@@ -2379,7 +2701,7 @@ export default function CrewOverviewApp() {
       return
     }
     const target = selected && !selected.permissionId ? selected : null
-    if (target?.sessionKey) {
+    if (scope === 'session' && target?.sessionKey) {
       const slot = target.sessionKey
       await apiRef.current.post('/api/chat', { message, slot }).catch(error => {
         if (!(error instanceof SyntaxError)) throw error
@@ -2401,7 +2723,7 @@ export default function CrewOverviewApp() {
     await apiRef.current.post('/api/chat', { message, slot: CONDUCTOR_SLOT }).catch(error => {
       if (!(error instanceof SyntaxError)) throw error
     })
-  }, [selected, selectedGoal, goalTarget, items, loadSources])
+  }, [selected, selectedGoal, goalTarget, items, loadSources, scope])
 
   const grouped: Record<WorkState, WorkItem[]> = {
     'needs-you': sessionItems.filter(item => item.state === 'needs-you'),
@@ -2429,6 +2751,7 @@ export default function CrewOverviewApp() {
     setSelectedId(current => (current === item.id ? null : item.id))
     setSelectedGoalKey(null)
     setDeliveryReceipt(null)
+    setScope('session')
   }
 
   return (
@@ -2525,6 +2848,7 @@ export default function CrewOverviewApp() {
                             onSelect={selectItem}
                             onOpenSession={openSession}
                 onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                onDecideApproval={(item, action) => { void decideApproval(item, action) }}
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
@@ -2534,6 +2858,8 @@ export default function CrewOverviewApp() {
                             onSplitGoal={splitGoal}
                             onMergeGoal={mergeGoal}
                             initiativeBlocks={initiativeBlocks}
+                            initiatives={initiatives}
+                            onRenameSession={(key, title) => { void renameSession(key, title) }}
                             collapsedInitiatives={collapsedInitiatives}
                             onToggleInitiative={toggleInitiative}
                             selectedGoalKey={selectedGoalKey}
@@ -2571,6 +2897,7 @@ export default function CrewOverviewApp() {
                               : undefined}
                             onOpenSession={openSession}
                 onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                onDecideApproval={(item, action) => { void decideApproval(item, action) }}
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
@@ -2589,6 +2916,7 @@ export default function CrewOverviewApp() {
                             onSelect={selectItem}
                             onOpenSession={openSession}
                 onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                onDecideApproval={(item, action) => { void decideApproval(item, action) }}
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
@@ -2608,6 +2936,7 @@ export default function CrewOverviewApp() {
                             onToggleCollapsed={toggleDone}
                             onOpenSession={openSession}
                 onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                onDecideApproval={(item, action) => { void decideApproval(item, action) }}
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
@@ -2627,6 +2956,7 @@ export default function CrewOverviewApp() {
                           onSelect={selectItem}
                           onOpenSession={openSession}
                 onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                onDecideApproval={(item, action) => { void decideApproval(item, action) }}
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
@@ -2691,10 +3021,13 @@ export default function CrewOverviewApp() {
                           items={items}
                           prChecks={prChecks}
                           prFilter={prFilter}
+                          collapsedInitiatives={collapsedInitiatives}
+                          onToggleInitiative={toggleInitiative}
                           selectedId={selectedId}
                           onSelect={selectItem}
                           onOpenSession={openSession}
                           onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                          onDecideApproval={(item, action) => { void decideApproval(item, action) }}
                           permissionBusy={resolvingApproval !== null}
                           onRetry={path => { void retryRun(path) }}
                           retryBusy={retrying !== null}
@@ -2875,7 +3208,7 @@ export default function CrewOverviewApp() {
                       startAtBottom
                       placeholder={selectedGoal
                         ? 'Instruction for this goal…'
-                        : quoted?.sessionKey ? 'New instructions for this session…' : 'Ask across your work…'}
+                        : quoted?.sessionKey && scope === 'session' ? 'New instructions for this session…' : 'Ask across your work…'}
                       onSend={handleConductorSend}
                     />
                     </div>
@@ -2907,7 +3240,23 @@ export default function CrewOverviewApp() {
                     ) : quoted && (
                       <div className="ow-quote ow-quote-docked">
                         <div className="ow-quote-body">
-                          <span className="ow-eyebrow">{quoted.sessionKey ? 'Instructing' : 'Quoted'}</span>
+                          {quoted.sessionKey ? (
+                            // The destination is a toggle, not an inference: text names the
+                            // active target, click switches it. No session means Conductor only.
+                            <button
+                              type="button"
+                              className="ow-scope-toggle"
+                              aria-pressed={scope === 'conductor'}
+                              aria-label={scope === 'session'
+                                ? 'Sending to this session. Activate to send to the Conductor instead.'
+                                : 'Sending to the Conductor. Activate to send to this session instead.'}
+                              onClick={() => setScope(current => (current === 'session' ? 'conductor' : 'session'))}
+                            >
+                              {scope === 'session' ? 'Instructing' : 'To Conductor'}
+                            </button>
+                          ) : (
+                            <span className="ow-eyebrow">Quoted</span>
+                          )}
                           <span className="ow-quote-title" title={quoted.title}>{quoted.title}</span>
                         </div>
                         <Btn

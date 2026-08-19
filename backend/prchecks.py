@@ -89,7 +89,61 @@ def _run_gh(url: str) -> dict:
         return {"available": False, "reason": "unparseable gh output"}
     if not isinstance(rows, list):
         return {"available": False, "reason": "unexpected gh output"}
-    return _count_buckets(rows)
+    payload = _count_buckets(rows)
+    payload.update(_run_gh_overview(url))
+    return payload
+
+
+_MAX_FILES = 12
+
+
+def _run_gh_overview(url: str) -> dict:
+    """Title, state, branches, diffstat and files — the sidebar PR view's data.
+
+    Best-effort on top of the check counts: a failure here still leaves the
+    counts usable, so it degrades to the ID-only header, never to an error.
+    """
+    try:
+        proc = subprocess.run(
+            ["gh", "pr", "view", url, "--json",
+             "title,state,isDraft,headRefName,baseRefName,additions,deletions,changedFiles,files,author,updatedAt"],
+            capture_output=True,
+            text=True,
+            timeout=_GH_TIMEOUT_SECS,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        logger.info("crew-manager: gh pr view failed: %s", exc)
+        return {}
+    out = proc.stdout.strip()
+    if not out:
+        return {}
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    files = []
+    for entry in (data.get("files") or [])[:_MAX_FILES]:
+        if isinstance(entry, dict) and entry.get("path"):
+            files.append({
+                "path": str(entry["path"]),
+                "additions": int(entry.get("additions") or 0),
+                "deletions": int(entry.get("deletions") or 0),
+            })
+    return {
+        "title": str(data.get("title") or ""),
+        "state": str(data.get("state") or ""),
+        "is_draft": bool(data.get("isDraft")),
+        "head": str(data.get("headRefName") or ""),
+        "base": str(data.get("baseRefName") or ""),
+        "additions": int(data.get("additions") or 0),
+        "deletions": int(data.get("deletions") or 0),
+        "changed_files": int(data.get("changedFiles") or 0),
+        "author": str((data.get("author") or {}).get("login") or ""),
+        "updated_at": str(data.get("updatedAt") or ""),
+        "files": files,
+    }
 
 
 async def pr_check_counts(url: str | None) -> dict:
