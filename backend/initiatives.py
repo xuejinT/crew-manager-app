@@ -23,6 +23,19 @@ from pathlib import Path
 _LINE = re.compile(r"^-\s+\*\*(?P<name>[^*]+)\*\*(?P<rest>.*)$")
 _ALIASES = re.compile(r"aliases:\s*(?P<aliases>.+?)\s*$", re.IGNORECASE)
 
+# `## Name` / `### Name` -- the OTHER shape a real projects.md takes. Level 1 is
+# excluded: that is the document's own title ("Active Projects"), not a project.
+# Levels 2 and 3 are both accepted because real files put genuine work groupings
+# at either depth ("### Research Campaign: ..." under a broader project), and a
+# bucket that matches no work item is never rendered, so over-reading is cheap
+# while under-reading leaves the whole Goals view unnamed.
+_HEADING = re.compile(r"^#{2,3}\s+(?P<name>[^#].*?)\s*$")
+
+# A trailing parenthetical is qualifying detail, not part of the name people
+# write in a session title: "Research Campaign: X (ed5268e8)" must still match a
+# session that says "Research Campaign: X".
+_TRAILING_PAREN = re.compile(r"\s*\([^()]*\)\s*$")
+
 _MAX_GOALS = 100
 _MAX_ALIASES = 8
 
@@ -37,22 +50,39 @@ def goals_file() -> Path:
 
 
 def parse_projects(text: str) -> list[dict]:
-    """Parse the projects.md bullet format, for the one-time import."""
+    """Parse a projects.md into buckets, for the one-time import.
+
+    Two shapes are accepted, because both occur in real files: the bullet form
+    ``- **Name** ... aliases: a, b`` and a level-2 heading ``## Name``. Reading
+    only the bullet form is why this import silently produced nothing for a user
+    whose projects.md is organised as headings -- the store was then written
+    empty, and every work item fell to the unnamed tail of the Goals view.
+    """
     buckets: list[dict] = []
     seen: set[str] = set()
+
+    def take(name: str, aliases: list[str]) -> None:
+        clean = " ".join(name.split())
+        if not clean or clean.lower() in seen:
+            return
+        seen.add(clean.lower())
+        buckets.append({"name": clean, "aliases": ([clean] + aliases)[: _MAX_ALIASES + 1]})
+
     for raw in text.splitlines():
-        match = _LINE.match(raw.strip())
-        if not match:
+        line = raw.strip()
+        match = _LINE.match(line)
+        if match:
+            extra: list[str] = []
+            alias_match = _ALIASES.search(match.group("rest"))
+            if alias_match:
+                extra = [a.strip() for a in alias_match.group("aliases").split(",") if a.strip()]
+            take(match.group("name"), extra)
             continue
-        name = match.group("name").strip()
-        if not name or name.lower() in seen:
-            continue
-        seen.add(name.lower())
-        aliases = [name]
-        alias_match = _ALIASES.search(match.group("rest"))
-        if alias_match:
-            aliases += [a.strip() for a in alias_match.group("aliases").split(",") if a.strip()]
-        buckets.append({"name": name, "aliases": aliases[: _MAX_ALIASES + 1]})
+        heading = _HEADING.match(line)
+        if heading:
+            name = heading.group("name")
+            stripped = _TRAILING_PAREN.sub("", name).strip()
+            take(name, [stripped] if stripped and stripped != name.strip() else [])
     return buckets
 
 
@@ -86,7 +116,11 @@ def _write(buckets: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Write-then-rename so a crash mid-write cannot truncate the store.
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"goals": buckets}, indent=1), encoding="utf-8")
+    # `imported` records that the one-time projects.md courtesy has HAPPENED.
+    # Without it, "already tried" was inferred from the file merely existing, so
+    # an import that read nothing was indistinguishable from a user who cleared
+    # their goals on purpose -- and the retry below could never be safe.
+    tmp.write_text(json.dumps({"goals": buckets, "imported": True}, indent=1), encoding="utf-8")
     tmp.replace(path)
 
 
@@ -115,6 +149,17 @@ def load_initiatives() -> list[dict]:
         if name not in aliases:
             aliases = [name] + aliases
         buckets.append({"name": name, "aliases": aliases[: _MAX_ALIASES + 1]})
+    if not buckets and isinstance(payload, dict) and not payload.get("imported"):
+        # A store written by an older import that did not understand this user's
+        # projects.md shape: it recorded no goals and no attempt, so try once
+        # more now. A store that DOES carry the flag is left alone even when
+        # empty -- that is a user who removed their goals, not a missed import.
+        imported = _import_once()
+        try:
+            _write(imported)
+        except OSError:
+            pass
+        return imported
     return buckets
 
 

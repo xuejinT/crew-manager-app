@@ -508,6 +508,7 @@ check(
 # --- initiatives: this app's own goal store + the one-time projects.md import --
 import os  # noqa: E402
 import tempfile  # noqa: E402
+import json as _json  # noqa: E402
 from pathlib import Path as _Path  # noqa: E402
 import initiatives as _init  # noqa: E402
 
@@ -531,6 +532,31 @@ check(
     repr(_buckets[0]["aliases"]),
 )
 check("empty text degrades to no buckets", _init.parse_projects("") == [])
+
+# The OTHER real shape: headings. A projects.md organised this way used to import
+# as ZERO buckets, which left every work item in the Goals view unnamed.
+_HEADING_SAMPLE = """
+# Active Projects
+
+## Kiro Crew
+- Repo: https://example.invalid/kirocrew
+
+### Research Campaign: Snowflake AI Designer (ed5268e8)
+- Question: why this role
+"""
+_heads = _init.parse_projects(_HEADING_SAMPLE)
+_head_names = [b["name"] for b in _heads]
+check("level 2 and 3 headings import as buckets", _head_names == [
+    "Kiro Crew", "Research Campaign: Snowflake AI Designer (ed5268e8)"], repr(_head_names))
+check("the level 1 document title is not a bucket",
+      "Active Projects" not in _head_names, repr(_head_names))
+check(
+    "a trailing parenthetical becomes an alias so plainer text still matches",
+    "Research Campaign: Snowflake AI Designer" in _heads[1]["aliases"],
+    repr(_heads[1]["aliases"]),
+)
+check("headings and bold bullets can coexist in one file",
+      [b["name"] for b in _init.parse_projects("## Alpha\n- **Beta**\n")] == ["Alpha", "Beta"])
 
 # The store round-trips through THROWAWAY dirs — never the real app dir or home.
 with tempfile.TemporaryDirectory() as _tmp:
@@ -570,6 +596,23 @@ with tempfile.TemporaryDirectory() as _tmp:
         _left = _init.remove_initiative("Crew Manager")
         check("remove_initiative drops the goal",
               not any(b["name"] == "Crew Manager" for b in _left))
+        # A store the user emptied themselves carries the import flag, so it is
+        # left alone -- re-importing would resurrect goals they just removed.
+        _init._write([])
+        check("an empty store the user cleared is not re-imported",
+              _init.load_initiatives() == [])
+        # The legacy shape: a store written by an older import that understood
+        # only bold bullets, so it recorded no goals AND no attempt. That one
+        # gets a single retry -- the fix that unsticks a heading-shaped file.
+        _legacy = _Path(_tmp) / "data" / "goals.json"
+        _legacy.write_text('{"goals": []}', encoding="utf-8")
+        (_memory / "projects.md").write_text(_HEADING_SAMPLE, encoding="utf-8")
+        _retried = _init.load_initiatives()
+        check("a store with no goals and no import flag retries the import",
+              any(b["name"] == "Kiro Crew" for b in _retried),
+              repr([b["name"] for b in _retried]))
+        check("the retry records the attempt, so it happens at most once",
+              _json.loads(_legacy.read_text(encoding="utf-8")).get("imported") is True)
     finally:
         _init.goals_file = _prior_goals_file  # type: ignore[assignment]
         if _prior_home is None:
