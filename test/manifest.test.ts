@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -23,6 +23,60 @@ describe('Crew Manager app manifest', () => {
         iconUrl: 'icon.svg',
       },
     ])
+  })
+
+  it('ships store art for every surface, as files that exist', () => {
+    // The store renders an external app's art through a plain <img>, so the bytes
+    // are fixed: theme variables cannot reach them, which is why the light and
+    // dark heroes are separate files. Absolute
+    // `/apps/<name>/ui/...` paths matter: the host rewrites a RELATIVE art path
+    // only when the app came from a git registry (there is a repo to proxy
+    // against), and passes an absolute one through untouched — which is the only
+    // form a locally installed app can serve.
+    const art: Record<string, string> = {
+      iconUrl: 'icon.svg',
+      heroImage: 'hero-light.svg',
+      heroImageDark: 'hero-dark.svg',
+      heroImageDetail: 'hero-detail-light.svg',
+      heroImageDetailDark: 'hero-detail-dark.svg',
+    }
+    for (const [field, file] of Object.entries(art)) {
+      expect(manifest[field]).toBe(`/apps/crew-manager/ui/${file}`)
+    }
+    // A manifest pointing at a missing file degrades to the host's generic
+    // Package glyph with nothing failing loudly, so assert the files are there.
+    for (const file of Object.values(art)) {
+      expect(existsSync(resolve(process.cwd(), 'ui', file))).toBe(true)
+    }
+  })
+
+  it('keeps art SVGs free of CSS variables, which do not resolve through <img>', () => {
+    // Only the host's own /app-assets/ icons are inlined and repainted from theme
+    // variables. This app's art is fetched as an image, where var() is not
+    // resolved — a themed stroke would render as nothing at all.
+    for (const file of [
+      'icon.svg',
+      'hero-light.svg', 'hero-dark.svg',
+      'hero-detail-light.svg', 'hero-detail-dark.svg',
+    ]) {
+      const svg = readFileSync(resolve(process.cwd(), 'ui', file), 'utf8')
+      expect(svg).not.toMatch(/var\(--/)
+      // A '--' inside an XML comment makes the whole file invalid XML, and an
+      // invalid SVG loaded as an image renders blank without raising anything.
+      expect(svg).not.toMatch(/<!--/)
+    }
+  })
+
+  it('paints the nav icon in one neutral ink, with no opacity fades', () => {
+    // The icon cannot follow the theme: only the host's own /app-assets/ icons
+    // are inlined, so an external app's icon is fixed bytes on a background it
+    // does not know. One ink that clears 3:1 on both appearances is therefore
+    // the whole contrast budget — a second, lighter ink (or an opacity fade)
+    // would fail on whichever appearance it was not chosen against.
+    const svg = readFileSync(resolve(process.cwd(), 'ui', 'icon.svg'), 'utf8')
+    const inks = new Set(svg.match(/#[0-9A-Fa-f]{3,8}/g) ?? [])
+    expect([...inks]).toEqual(['#737A8C'])
+    expect(svg).not.toMatch(/opacity=/)
   })
 
   it('keeps the beta disabled until explicitly enabled', () => {

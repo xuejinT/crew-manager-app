@@ -68,5 +68,10 @@
         "iconUrl": "icon.svg"
       }
     ]
-  }
+  },
+  "iconUrl": "/apps/crew-manager/ui/icon.svg",
+  "heroImage": "/apps/crew-manager/ui/hero-light.svg",
+  "heroImageDark": "/apps/crew-manager/ui/hero-dark.svg",
+  "heroImageDetail": "/apps/crew-manager/ui/hero-detail-light.svg",
+  "heroImageDetailDark": "/apps/crew-manager/ui/hero-detail-dark.svg"
 }

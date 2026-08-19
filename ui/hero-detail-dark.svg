@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="288" viewBox="0 0 1200 288" role="img" aria-label="Crew Manager">
+  <defs>
+    <linearGradient id="cm-detail-d" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#151022"/>
+      <stop offset="100%" stop-color="#241c36"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="288" fill="url(#cm-detail-d)"/>
+  <circle cx="36" cy="34" r="28" fill="#4c2a8a" opacity="0.38"/>
+  <circle cx="1180" cy="258" r="30" fill="#6d3fc4" opacity="0.28"/>
+
+  <path d="M-20 144H424" stroke="#3d3059" stroke-width="2" opacity="0.8"/>
+  <path d="M776 144H1220" stroke="#3d3059" stroke-width="2" opacity="0.8"/>
+
+  <g id="needs-you-cluster">
+    <path d="M120 144V96" stroke="#fbbf24" stroke-width="2" opacity="0.45"/>
+    <rect x="72" y="60" width="176" height="38" rx="8" fill="#1e1730" stroke="#a97a20" stroke-width="1.5"/>
+    <circle cx="92" cy="79" r="4.4" fill="#fbbf24"/>
+    <rect x="106" y="72" width="80" height="6" rx="3" fill="#e7e0f7"/>
+    <rect x="106" y="84" width="52" height="5" rx="2.5" fill="#544a70"/>
+    <rect x="198" y="72" width="36" height="14" rx="7" fill="#fbbf24" opacity="0.2"/>
+    <circle cx="120" cy="144" r="8" fill="#fbbf24" opacity="0.24"/>
+    <circle cx="120" cy="144" r="4.2" fill="#fbbf24"/>
+  </g>
+
+  <g id="running-cluster">
+    <path d="M330 144v48" stroke="#7ba4ff" stroke-width="2" opacity="0.45"/>
+    <rect x="282" y="192" width="176" height="38" rx="8" fill="#1e1730" stroke="#372c52" stroke-width="1.5"/>
+    <circle cx="302" cy="211" r="4.4" fill="none" stroke="#7ba4ff" stroke-width="2" stroke-dasharray="5.5 3.2"/>
+    <rect x="316" y="204" width="70" height="6" rx="3" fill="#cfc6e4"/>
+    <rect x="316" y="216" width="46" height="5" rx="2.5" fill="#544a70"/>
+    <rect x="408" y="204" width="36" height="14" rx="7" fill="#7ba4ff" opacity="0.18"/>
+    <circle cx="330" cy="144" r="8" fill="#7ba4ff" opacity="0.22"/>
+    <circle cx="330" cy="144" r="4.2" fill="#7ba4ff"/>
+  </g>
+
+  <g id="quiet-lane" fill="#6b5f8c" opacity="0.7">
+    <circle cx="418" cy="144" r="3.4"/>
+    <circle cx="782" cy="144" r="3.4"/>
+  </g>
+
+  <g id="done-cluster" opacity="0.82">
+    <path d="M878 144V96" stroke="#34d399" stroke-width="2" opacity="0.45"/>
+    <rect x="830" y="60" width="176" height="38" rx="8" fill="#1e1730" stroke="#372c52" stroke-width="1.5"/>
+    <path d="M846.6 77.2l2.6 2.7 4.6-5.4" fill="none" stroke="#34d399" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="866" y="72" width="66" height="6" rx="3" fill="#a79cc2"/>
+    <rect x="866" y="84" width="48" height="5" rx="2.5" fill="#4b426a"/>
+    <rect x="956" y="72" width="36" height="14" rx="7" fill="#34d399" opacity="0.18"/>
+    <circle cx="878" cy="144" r="8" fill="#34d399" opacity="0.22"/>
+    <circle cx="878" cy="144" r="4.2" fill="#34d399"/>
+  </g>
+
+  <g id="conductor-lane">
+    <path d="M1060 144v48" stroke="#8E47FF" stroke-width="2" opacity="0.45"/>
+    <rect x="1012" y="192" width="150" height="38" rx="8" fill="#191227" stroke="#372c52" stroke-width="1.5"/>
+    <circle cx="1032" cy="211" r="6" fill="#34d399" opacity="0.2"/>
+    <circle cx="1032" cy="211" r="3.2" fill="#34d399"/>
+    <rect x="1046" y="205" width="56" height="5.5" rx="2.75" fill="#b98cff" opacity="0.75"/>
+    <rect x="1046" y="216" width="38" height="5" rx="2.5" fill="#4e4470"/>
+    <circle cx="1060" cy="144" r="8" fill="#8E47FF" opacity="0.24"/>
+    <circle cx="1060" cy="144" r="4.2" fill="#a97bff"/>
+  </g>
+
+  <text x="600" y="157" text-anchor="middle" fill="#d8cff0" font-family="system-ui" font-size="42" font-weight="600">Crew Manager</text>
+</svg>
