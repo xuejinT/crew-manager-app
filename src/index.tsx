@@ -24,35 +24,23 @@ import {
   EmptyState,
   Input,
   PageHeader,
-  SearchInput,
   SendBtn,
 } from '@kirocrew/app-sdk/ui'
 import type {
   Artifact,
   ChatSlot,
   CronJob,
+  CronRun,
   MonitorLoop,
   SessionSummary,
   ErrorLoopFinding,
-  RecallHit,
-  RecallReport,
   StallFinding,
   StallReport,
 } from './types'
 import {
-  EMPTY_RECALL,
-  RECALL_DEBOUNCE_MS,
-  dedupeRecall,
-  describeAge,
-  readRecallReport,
-  recallIsWorthAsking,
-  recallUrl,
-  type RecallScope,
-  type RecallState,
-} from './recall'
-import {
   applyInstructed,
   clusterBy,
+  epoch,
   prBucket,
   rollUpSessions,
   applySetAside,
@@ -70,7 +58,6 @@ import {
   normalizeWorkItems,
   rankWorkItem,
   sameGoal,
-  searchWorkItems,
   suggestGoalNames,
   titleOverlap,
   workCounts,
@@ -117,6 +104,13 @@ const HANDLED_KEY = 'crew-manager.handled'
 const DONE_COLLAPSED_KEY = 'crew-manager.done-collapsed'
 const GOAL_VERDICTS_KEY = 'crew-manager.goal-verdicts'
 const INITIATIVE_COLLAPSED_KEY = 'crew-manager.initiative-collapsed'
+const SPLIT_KEY = 'crew-manager.split'
+const TAB_KEY = 'crew-manager.tab'
+/* Left column width as a percentage: the default, and the drag clamp — past
+   either end one of the two columns stops being usable. */
+const SPLIT_DEFAULT = 40
+const SPLIT_MIN = 25
+const SPLIT_MAX = 75
 
 function readStore<T>(key: string, fallback: T = {} as T): T {
   try {
@@ -133,6 +127,25 @@ function writeStore(key: string, value: unknown): void {
   } catch {
     // Storage full or unavailable: the feature degrades to session-only.
   }
+}
+
+/** "2h ago" / "just now". Null for a missing stamp so callers omit the phrase
+ *  entirely rather than printing a fake zero. */
+function sinceLabel(ms: number, now: number = Date.now()): string | null {
+  if (!ms) return null
+  const secs = Math.max(0, Math.round((now - ms) / 1000))
+  if (secs < 60) return 'just now'
+  const mins = Math.round(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.round(hours / 24)}d ago`
+}
+
+/** Local wall-clock time, the form a schedule is read in. */
+function clockLabel(ms: number): string {
+  if (!ms) return ''
+  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
 const CONDUCTOR_SLOT = 'crew-manager-conductor'
@@ -181,8 +194,6 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   related_same_topic: 'similar goal',
   related_same_step: 'same next step',
   related_more: 'and {{count}} more',
-  recall_scope_workspace: 'This workspace',
-  recall_scope_all: 'All workspaces',
   rank_approval_owed: 'only you can clear this approval',
   rank_subagent_gate: 'a sub-agent is held at the spawn gate',
   rank_input_requested: 'the agent asked you a question',
@@ -325,87 +336,6 @@ function stateBadge(item: WorkItem) {
 
 /** Beyond this the list stops being scannable and starts being a wall. */
 const MAX_LISTED_GOALS = 4
-
-/** One screenful of recalled work. Recall is a sidebar, not an archive browser. */
-const RECALL_LIMIT = 8
-
-/**
- * Recalled work, shown only while searching.
- *
- * These rows carry NO state badge on purpose. A finished-and-archived session has
- * no live state to report, and borrowing Done's badge would claim the outcome was
- * verified when all we know is that the transcript mentions the query. What they
- * offer is the one honest action: open it and read.
- */
-function PastWorkSection({
-  hits,
-  now,
-  onOpenSession,
-  scope,
-  onScopeChange,
-}: {
-  hits: RecallHit[]
-  now: number
-  onOpenSession: (slot: string) => void
-  scope: RecallScope
-  /** Widening is per query and never remembered, so this is a live control. */
-  onScopeChange: (scope: RecallScope) => void
-}) {
-  if (hits.length === 0) return null
-  return (
-    <section className="ow-section" aria-label="From past work">
-      <PanelSectionHeader label="From past work" count={hits.length} />
-      {/*
-        The reach of a search is stated, and changing it is one click. Labelled
-        with what IS being searched rather than as a checkbox, because "all
-        workspaces" as an unchecked box reads as a promise the default breaks.
-      */}
-      <div className="ow-recall-scope">
-        <Clickable
-          className="ow-recall-scope-toggle"
-          onActivate={() => onScopeChange(scope === 'all' ? 'workspace' : 'all')}
-        >
-          <span>{workCopy(scope === 'all' ? 'recall_scope_all' : 'recall_scope_workspace')}</span>
-        </Clickable>
-      </div>
-      <div className="ow-section-list">
-        {hits.map(hit => (
-          <Clickable
-            key={hit.session_key}
-            className="ow-row ow-recall-row"
-            onActivate={() => onOpenSession(hit.session_key)}
-            data-testid={`recall-${hit.session_key}`}
-          >
-            <div className="ow-row-layout">
-              <div className="ow-row-content">
-                <div className="ow-row-heading">
-                  <span className="ow-row-title">{hit.title}</span>
-                  <span className="ow-recall-age">{describeAge(hit.modified, now)}</span>
-                  {/*
-                    Shown only when the answer could have come from elsewhere. In
-                    the default scope every hit is local, so the label would be
-                    noise on every row.
-                  */}
-                  {scope === 'all' && hit.workspace && (
-                    <span className="ow-recall-workspace">{hit.workspace}</span>
-                  )}
-                </div>
-                {hit.snippet && <p className="ow-row-summary">{hit.snippet}</p>}
-              </div>
-              <div className="ow-row-actions">
-                <Btn className="ow-primary-action" onClick={event => {
-                  event.stopPropagation()
-                  onOpenSession(hit.session_key)
-                }}>Open</Btn>
-                <ChevronRight className="ow-icon" aria-hidden="true" />
-              </div>
-            </div>
-          </Clickable>
-        ))}
-      </div>
-    </section>
-  )
-}
 
 /**
  * The permission decision itself. One component, used both in the list row and in
@@ -1578,10 +1508,16 @@ export default function CrewOverviewApp() {
   const navigate = useNavigate()
   const setNavBadge = useNavBadge()
   const [filter, setFilter] = useState<FilterKey>('all')
-  const [groupBy, setGroupBy] = useState<GroupMode>('session')
+  /*
+   * The list card's tab. Only ever 'goal' or 'session' — 'pr' is still a real
+   * GroupMode, but PR grouping now lives permanently in the bottom stack's PRs
+   * card rather than being a third thing this control switches to.
+   */
+  const [groupBy, setGroupBy] = useState<GroupMode>(() => (
+    readStore<GroupMode | null>(TAB_KEY, null) === 'session' ? 'session' : 'goal'
+  ))
   const [prFilter, setPrFilter] = useState<PrFilterKey>('all')
   const [prChecks, setPrChecks] = useState<Record<string, PrChecks>>({})
-  const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [deliveryReceipt, setDeliveryReceipt] = useState<string | null>(null)
   const [sources, setSources] = useState<SourcesResponse | null>(null)
@@ -1606,12 +1542,15 @@ export default function CrewOverviewApp() {
   const [collapsedInitiatives, setCollapsedInitiatives] = useState<Record<string, boolean>>(() => readStore(INITIATIVE_COLLAPSED_KEY))
   const [selectedGoalKey, setSelectedGoalKey] = useState<string | null>(null)
   const [doneCollapsed, setDoneCollapsed] = useState<boolean>(() => readStore<boolean | null>(DONE_COLLAPSED_KEY, null) ?? true)
-  // Instructions sent from here. They land in ANOTHER session's transcript, so the
-  // Conductor has to keep its own record or the conversation loses the user's turn.
-  const [recall, setRecall] = useState<RecallState>(EMPTY_RECALL)
-  // Not persisted on purpose: a widened search must be re-chosen, never inherited.
-  const [recallScope, setRecallScope] = useState<RecallScope>('workspace')
   const [loops, setLoops] = useState<Record<string, ErrorLoopFinding>>({})
+  // Today's cron runs. The Loops card reads `sources.loops` (the MonitorLoop
+  // payload the board already fetches) rather than requesting /api/autonudge a
+  // second time — note `loops` above is detect.py's REPEAT-FAILURE finding, a
+  // different thing wearing the same word.
+  const [cronRuns, setCronRuns] = useState<CronRun[]>([])
+  // Left column width as a percentage, and the live drag flag.
+  const [splitPct, setSplitPct] = useState<number>(() => readStore<number | null>(SPLIT_KEY, null) ?? SPLIT_DEFAULT)
+  const [resizing, setResizing] = useState(false)
   // Flips false the first time the backend route is unreachable.
   const stallProbeRef = useRef(true)
   const [sourcesLoading, setSourcesLoading] = useState(true)
@@ -1634,7 +1573,7 @@ export default function CrewOverviewApp() {
     const request = ++sourceRequestRef.current
     const currentApi = apiRef.current
     try {
-      const [slots, approvals, agentEnvelope, workflowEnvelope, cronEnvelope, artifactEnvelope, loopEnvelope] = await Promise.all([
+      const [slots, approvals, agentEnvelope, workflowEnvelope, cronEnvelope, artifactEnvelope, loopEnvelope, runEnvelope] = await Promise.all([
         currentApi.get<ChatSlot[]>('/api/chat/slots'),
         currentApi.get<ApprovalRow[]>('/api/approvals'),
         currentApi.get<{ agents?: AgentRow[] }>('/api/spawn'),
@@ -1648,6 +1587,12 @@ export default function CrewOverviewApp() {
         currentApi
           .get<{ enabled?: boolean; loops?: MonitorLoop[] }>('/api/autonudge')
           .catch(() => ({ loops: [] as MonitorLoop[] })),
+        // Same reasoning: run history is ADDITIVE, so a gateway that cannot serve
+        // it loses today's completed counts only, not the board. Needed because a
+        // job's own `last_run_ts` records just its most recent fire, so an
+        // every-4-hours job would otherwise count as one run today.
+        currentApi.get<{ runs?: CronRun[] }>('/api/crons/history?limit=200')
+          .catch(() => ({ runs: [] as CronRun[] })),
       ])
       if (!mountedRef.current || request !== sourceRequestRef.current) return
       setSources({
@@ -1659,6 +1604,7 @@ export default function CrewOverviewApp() {
         artifacts: Array.isArray(artifactEnvelope.artifacts) ? artifactEnvelope.artifacts : [],
         loops: Array.isArray(loopEnvelope?.loops) ? loopEnvelope.loops : [],
       })
+      setCronRuns(Array.isArray(runEnvelope?.runs) ? runEnvelope.runs : [])
       setSourcesError(null)
     } catch (error) {
       if (mountedRef.current && request === sourceRequestRef.current) {
@@ -1753,43 +1699,6 @@ export default function CrewOverviewApp() {
     return () => { cancelled = true }
   }, [])
 
-  /*
-   * Recall runs on the query, not on the board.
-   *
-   * Debounced because each call is a transcript scan across many files, and a
-   * scan per keystroke would be pure waste. The response is dropped when the
-   * query has moved on: without that guard a slow scan for "ac" can land after a
-   * fast one for "ack contention" and replace correct results with stale ones.
-   *
-   * A conclusive `enabled: false` (no history modules on this gateway) stops the
-   * probe for good rather than re-asking on every keystroke.
-   */
-  useEffect(() => {
-    if (recall.unsupported) return
-    const text = query.trim()
-    if (!recallIsWorthAsking(text)) {
-      setRecall(current => (current.hits.length ? { ...current, hits: [] } : current))
-      return
-    }
-    let cancelled = false
-    const timer = setTimeout(() => {
-      void (async () => {
-        try {
-          const report = await apiRef.current.get<RecallReport>(
-            recallUrl(text, RECALL_LIMIT, recallScope),
-          )
-          if (cancelled || !mountedRef.current) return
-          setRecall(readRecallReport(report))
-        } catch {
-          // A route that is not mounted yet (backend hook needs a restart) is not
-          // worth retrying on every keystroke.
-          if (mountedRef.current) setRecall({ unsupported: true, hits: [], scope: 'workspace' })
-        }
-      })()
-    }, RECALL_DEBOUNCE_MS)
-    return () => { cancelled = true; clearTimeout(timer) }
-  }, [query, recall.unsupported, recallScope])
-
   const derived = useMemo(
     // Optimistic acknowledgements are applied on top of derived state, never baked
     // into it: real state wins on the next poll, and the ack expires on its own.
@@ -1823,31 +1732,38 @@ export default function CrewOverviewApp() {
     () => items.find(item => item.id === selectedId) ?? null,
     [items, selectedId],
   )
-  const visibleItems = useMemo(() => {
-    const searched = searchWorkItems(items, query)
-    // PR and Goal grouping span states — one PR or one goal carries its done and
-    // needs-you work at once — so the state filter does not narrow them.
-    if (groupBy === 'pr' || groupBy === 'goal' || query.trim() || filter === 'all') return searched
-    return searched.filter(item => item.state === filter)
-  }, [filter, items, query, groupBy])
+  /*
+   * The state filter belongs to the Sessions list ALONE.
+   *
+   * `items` stays the full set and is what the Goals list, the PRs card and the
+   * Loops card read. Only the Sessions branch reads `sessionItems`. Keeping the
+   * two named separately is the point: one shared "visibleItems" is what let a
+   * Sessions-tab pill quietly reshape the Goals list and the companion cards.
+   */
+  const sessionItems = useMemo(() => (
+    filter === 'all' ? items : items.filter(item => item.state === filter)
+  ), [filter, items])
 
   // One tally per PR (block), not per item, so the chip counts match the groups.
+  // Reads `items`, not the Sessions filter: the PRs card is its own surface, and
+  // a "Needs your input" pill in the list must not restate its open-PR count.
   const prCounts = useMemo(() => {
     const tally: Record<PrFilterKey, number> = { all: 0, failing: 0, running: 0, merged: 0 }
-    for (const block of clusterBy(visibleItems, 'pr')) {
+    for (const block of clusterBy(items, 'pr')) {
       if (!block.changeRef) continue
       tally.all++
       const bucket = prBucket(block.changeRef, prChecks[block.changeRef.url ?? ''])
       if (bucket !== 'other') tally[bucket]++
     }
     return tally
-  }, [visibleItems, prChecks])
+  }, [items, prChecks])
 
   useEffect(() => {
-    if (groupBy !== 'pr') return
+    // Not gated on a view mode any more: the PRs card is always on screen, so its
+    // check counts have to load whichever tab the list is showing.
     // Only GitHub pull URLs; the backend caches per URL and degrades gracefully.
     const urls = new Set<string>()
-    for (const item of visibleItems) {
+    for (const item of items) {
       for (const ref of item.references) {
         if ((ref.kind === 'change') && ref.url && /github\.com\/.+\/pull\//.test(ref.url)) urls.add(ref.url)
       }
@@ -1860,22 +1776,39 @@ export default function CrewOverviewApp() {
         .catch(() => { /* leave unset; header falls back to coarse status */ })
     }
     return () => { cancelled = true }
-  }, [groupBy, visibleItems, prChecks])
+  }, [items, prChecks])
 
   useEffect(() => setNavBadge(counts['needs-you']), [counts, setNavBadge])
   useEffect(() => {
     if (selectedId && !items.some(item => item.id === selectedId)) setSelectedId(null)
   }, [items, selectedId])
+
+  /* Persist the tab and the column split so the board reopens as it was left. */
+  useEffect(() => { writeStore(TAB_KEY, groupBy) }, [groupBy])
+  useEffect(() => { writeStore(SPLIT_KEY, splitPct) }, [splitPct])
+
+  /*
+   * Column drag. Listeners live on the window for the duration of the gesture,
+   * not on the handle: the pointer routinely outruns a 10px target, and a
+   * handle-scoped listener would drop the drag the moment it did.
+   */
+  const layoutRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase('en-US') === 'k') {
-        event.preventDefault()
-        document.querySelector<HTMLInputElement>('[data-crew-manager-search="true"]')?.focus()
-      }
+    if (!resizing) return
+    const onMove = (event: MouseEvent) => {
+      const box = layoutRef.current?.getBoundingClientRect()
+      if (!box || box.width === 0) return
+      const pct = ((event.clientX - box.left) / box.width) * 100
+      setSplitPct(Math.max(SPLIT_MIN, Math.min(SPLIT_MAX, pct)))
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+    const onUp = () => setResizing(false)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [resizing])
 
   const conductorSlot = sources?.slots.find(slot => slot.key === CONDUCTOR_SLOT)
   const conductorAvailable = Boolean(conductorSlot || conductorCreated)
@@ -1942,9 +1875,16 @@ export default function CrewOverviewApp() {
 
   // Two-level goal clustering lives in the parent so the Conductor can resolve
   // a selected goal's members for context and routing.
+  /*
+   * Computed on BOTH tabs and from the full `items`. Not just the Goals list's
+   * data any more: the Loops card names a loop by the goal that owns it, so
+   * gating this on the Goals tab would leave every loop unattributed on Sessions,
+   * and feeding it the filtered set would make goals appear and disappear as a
+   * Sessions pill changed.
+   */
   const initiativeBlocks = useMemo(
-    () => (groupBy === 'goal' ? clusterByInitiative(visibleItems, initiatives, goalVerdicts) : []),
-    [groupBy, visibleItems, initiatives, goalVerdicts],
+    () => clusterByInitiative(items, initiatives, goalVerdicts),
+    [items, initiatives, goalVerdicts],
   )
   // Re-derived each render: a poll can reshape the clusters, and a quote must
   // describe the board as it is now, not as it was when clicked.
@@ -1957,6 +1897,86 @@ export default function CrewOverviewApp() {
     return null
   }, [selectedGoalKey, initiativeBlocks])
   const goalTarget = selectedGoal ? goalRouteTarget(selectedGoal.items) : null
+
+  /*
+   * Kiro Crew's Loops, attributed to the goal that owns them. A loop is keyed by
+   * SLOT, and a goal holds work items that each carry a sessionKey, so the join
+   * is slot_key -> sessionKey -> goal. Nothing is invented: a loop with no
+   * matching member session simply lists under its own session name.
+   */
+  const loopRows = useMemo(() => {
+    // Reads the SAME payload the board already fetched for its loop rows, so the
+    // card costs no extra request and can never disagree with them. Inactive
+    // loops are dropped: one that hit max_cycles must leave no residue here.
+    const live = (sources?.loops ?? []).filter(loop => loop && loop.active !== false && loop.slot_key)
+    if (live.length === 0) return []
+    const labelFor = new Map<string, string>()
+    const goalFor = new Map<string, string>()
+    for (const item of items) {
+      for (const ref of item.references) {
+        if (ref.kind !== 'session' || !ref.id) continue
+        if (ref.label && !labelFor.has(ref.id)) labelFor.set(ref.id, ref.label)
+      }
+    }
+    for (const init of initiativeBlocks) {
+      if (!init.name) continue
+      for (const block of init.blocks) {
+        for (const item of block.items) {
+          if (item.sessionKey && !goalFor.has(item.sessionKey)) goalFor.set(item.sessionKey, init.name)
+        }
+      }
+    }
+    return live.map(loop => {
+      const cycles = Number(loop.cycle_count) || 0
+      const max = Number(loop.max_cycles) || 0
+      return {
+        key: loop.slot_key,
+        // A loop carries no name of its own, so the session it drives names it.
+        title: labelFor.get(loop.slot_key) ?? loop.slot_key,
+        goalName: goalFor.get(loop.slot_key) ?? null,
+        // max_cycles 0 means unlimited — a fraction would be a lie there.
+        progress: max > 0 ? `${cycles}/${max}` : `${cycles} ${cycles === 1 ? 'cycle' : 'cycles'}`,
+        remaining: max > 0 ? Math.max(0, max - cycles) : null,
+        instruction: (loop.message ?? '').replace(/\s+/g, ' ').trim(),
+        lastFire: epoch(loop.last_fire_ts),
+      }
+    })
+  }, [sources, items, initiativeBlocks])
+
+  /*
+   * Today's scheduled work. Two different questions, two different sources: what
+   * ALREADY RAN comes from run history (a job's own last_run_ts records only its
+   * most recent fire, so an every-4-hours job would undercount), and what is
+   * STILL COMING comes from each job's computed next_run_ts.
+   */
+  const cronToday = useMemo(() => {
+    const start = new Date()
+    start.setHours(0, 0, 0, 0)
+    const dayStart = start.getTime()
+    const dayEnd = dayStart + 86_400_000
+    const jobs = sources?.crons ?? []
+    const ranByJob = new Map<string, { count: number; failed: number; last: number }>()
+    for (const run of cronRuns) {
+      const started = epoch(run.started_at)
+      if (!run.job_id || started < dayStart || started >= dayEnd) continue
+      const seen = ranByJob.get(run.job_id) ?? { count: 0, failed: 0, last: 0 }
+      seen.count += 1
+      if (run.status && run.status !== 'success') seen.failed += 1
+      seen.last = Math.max(seen.last, started)
+      ranByJob.set(run.job_id, seen)
+    }
+    const rows = jobs.map(job => {
+      const ran = ranByJob.get(job.id)
+      const next = epoch(job.next_run_ts)
+      const dueToday = next >= dayStart && next < dayEnd
+      return { job, ran, next, dueToday }
+    // A job with nothing today is not today's business; the Schedule page owns
+    // the full list.
+    }).filter(row => row.ran || row.dueToday || row.job.is_running)
+    const done = rows.filter(row => row.ran && row.ran.failed === 0).length
+    const failed = rows.filter(row => row.ran && row.ran.failed > 0).length
+    return { rows, done, failed, total: rows.length, historyKnown: cronRuns.length > 0 }
+  }, [sources, cronRuns])
 
   const [addingGoal, setAddingGoal] = useState(false)
   const goalCandidates = useMemo(() => {
@@ -2175,18 +2195,10 @@ export default function CrewOverviewApp() {
     })
   }, [selected, selectedGoal, goalTarget, items, loadSources])
 
-  const recalled = useMemo(
-    // Dedupe against what the live results already show: a session can be both
-    // live on the board and a strong history match, and two rows for one thing is
-    // the duplication the grouping work just removed.
-    () => dedupeRecall(recall.hits, visibleItems),
-    [recall.hits, visibleItems],
-  )
-
   const grouped: Record<WorkState, WorkItem[]> = {
-    'needs-you': visibleItems.filter(item => item.state === 'needs-you'),
-    running: visibleItems.filter(item => item.state === 'running'),
-    done: visibleItems.filter(item => item.state === 'done'),
+    'needs-you': sessionItems.filter(item => item.state === 'needs-you'),
+    running: sessionItems.filter(item => item.state === 'running'),
+    done: sessionItems.filter(item => item.state === 'done'),
   }
 
   const toggleInitiative = useCallback((key: string, next: boolean) => {
@@ -2219,76 +2231,56 @@ export default function CrewOverviewApp() {
         subtitle="See what needs your input, what is still running, and what finished recently."
       />
       <div className="ow-body">
-        <div className="ow-layout">
-          <nav className="ow-rail" aria-label="Crew Manager">
-            <div className="ow-rail-inner">
-              {/* Group by — the view mode — is the left rail. Search and the state
-                  filter sit above the list. */}
-              <div className="ow-groupby" role="group" aria-label="Group by">
-                <span className="ow-groupby-label">Group by</span>
-                {(['session', 'pr', 'goal'] as GroupMode[]).map(mode => (
-                  <Btn
-                    key={mode}
-                    onClick={() => setGroupBy(mode)}
-                    aria-pressed={groupBy === mode}
-                    data-selected={groupBy === mode}
-                    className="ow-groupby-opt"
-                  >
-                    {mode === 'session' ? 'Session' : mode === 'pr' ? 'PR' : 'Goal'}
-                  </Btn>
-                ))}
+        <div className="ow-layout" ref={layoutRef}>
+          <div className="ow-main" style={{ flexBasis: `${splitPct}%` }}>
+            <section className="ow-card ow-listcard" aria-label="Work">
+              <div className="ow-listcard-head">
+                {/* Goals and Sessions were the Group by rail's first two modes.
+                    They are the same two lenses, promoted to the card's own title
+                    row — the third (PR) is the bottom stack's PRs card now. */}
+                <div className="ow-tabs" role="tablist" aria-label="View">
+                  {(['goal', 'session'] as GroupMode[]).map(mode => (
+                    <Btn
+                      key={mode}
+                      role="tab"
+                      aria-selected={groupBy === mode}
+                      data-selected={groupBy === mode}
+                      className="ow-tab"
+                      onClick={() => setGroupBy(mode)}
+                    >
+                      {mode === 'goal' ? 'Goals' : 'Sessions'}
+                    </Btn>
+                  ))}
+                </div>
+                <div className="ow-listcard-tools">
+                  <p className="ow-listcard-sub">
+                    {groupBy === 'goal'
+                      ? 'Sessions consolidated by the goal or topic they share'
+                      : 'Grouped by what each session needs from you'}
+                  </p>
+                  {/* Sessions only. A goal card spans states, so a state filter
+                      there would be a control that does nothing. */}
+                  {groupBy === 'session' && (
+                    <div className="ow-filters" role="group" aria-label="Filter by state">
+                      {(Object.keys(filterLabels) as FilterKey[]).map(key => (
+                        <Btn
+                          key={key}
+                          onClick={() => setFilter(key)}
+                          aria-pressed={filter === key}
+                          data-selected={filter === key}
+                          className="ow-filter"
+                        >
+                          {filterLabels[key]}
+                          <span className="ow-count">{counts[key]}</span>
+                        </Btn>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          </nav>
 
-          <main className="ow-work">
-            <div className="ow-work-inner">
-              {/* Above the list: search, then the state filter. */}
-              <div className="ow-toolbar">
-                <SearchInput
-                  data-crew-manager-search="true"
-                  value={query}
-                  onChange={event => setQuery(event.target.value)}
-                  placeholder="Search work and projects… ⌘K"
-                  aria-label="Search work"
-                  className="ow-search"
-                />
-                {groupBy === 'pr' ? (
-                <div className="ow-filters" role="group" aria-label="Filter by PR status">
-                  {(Object.keys(prFilterLabels) as PrFilterKey[]).map(key => (
-                    <Btn
-                      key={key}
-                      onClick={() => setPrFilter(key)}
-                      aria-pressed={prFilter === key}
-                      data-selected={prFilter === key}
-                      className="ow-filter"
-                    >
-                      {prFilterLabels[key]}
-                      <span className="ow-count">{prCounts[key]}</span>
-                    </Btn>
-                  ))}
-                </div>
-                ) : groupBy === 'goal' ? (
-                  // A goal card spans states, so a state filter would be a control
-                  // that does nothing. Search still narrows.
-                  null
-                ) : (
-                <div className="ow-filters" role="group" aria-label="Filter by state">
-                  {(Object.keys(filterLabels) as FilterKey[]).map(key => (
-                    <Btn
-                      key={key}
-                      onClick={() => setFilter(key)}
-                      aria-pressed={filter === key}
-                      data-selected={filter === key}
-                      className="ow-filter"
-                    >
-                      {filterLabels[key]}
-                      <span className="ow-count">{counts[key]}</span>
-                    </Btn>
-                  ))}
-                </div>
-                )}
-              </div>
+              <main className="ow-work">
+                <div className="ow-work-inner">
               {sourcesLoading
                 ? <ContentSkeleton rows={7} />
                 : sourcesError && !sources
@@ -2300,58 +2292,27 @@ export default function CrewOverviewApp() {
                       action={<Btn onClick={retrySources}>Try again</Btn>}
                     />
                   )
-                  : visibleItems.length === 0
+                  : (groupBy === 'goal' ? items.length === 0 : sessionItems.length === 0)
                     ? (
                       <EmptyState
                         icon={<Search className="ow-icon" />}
                         title="No matching work"
-                        subtitle="Change the filter or search for a session, project, PR, or output."
+                        subtitle={groupBy === 'goal'
+                          ? 'No sessions are running yet.'
+                          : 'Change the filter to see sessions in another state.'}
                       />
                     )
-                    : filter === 'all' || query.trim()
+                    /* Tab first, THEN the filter. The state filter is a Sessions
+                       control, so the Goals branch never reads it. */
+                    : groupBy === 'goal'
                       ? (
-                        groupBy === 'pr'
-                        ? (
-                          visibleItems.some(it => it.references.some(r => r.kind === 'change' || r.kind === 'issue'))
-                          ? (
-                          // PR-primary: one list, PR groups span states (a PR can
-                          // have done and needs-you work at once). State stays
-                          // visible as each row's badge, not as section walls.
-                          <WorkSection
-                            title="Work by PR"
-                            subtitle="Every pull request your work touches"
-                            items={visibleItems}
-                            prChecks={prChecks}
-                            prFilter={prFilter}
-                            selectedId={selectedId}
-                            onSelect={selectItem}
-                            onOpenSession={openSession}
-                onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
-                permissionBusy={resolvingApproval !== null}
-                onRetry={path => { void retryRun(path) }}
-                retryBusy={retrying !== null}
-                onPickStep={what => { void handleConductorSend(what) }}
-                            groupBy={groupBy}
-                            emptyLabel="No matching work"
-                          />
-                          )
-                          : (
-                            <EmptyState
-                              icon={<Tag className="ow-icon" />}
-                              title="No work is linked to a PR right now"
-                              subtitle="Work links to a PR when a session mentions its URL (a GitHub/GitLab pull, merge request, or issue). None of the current sessions do, so there is nothing to group by PR yet."
-                              action={<Btn onClick={() => setGroupBy('session')}>Back to Session view</Btn>}
-                            />
-                          )
-                        )
-                        : groupBy === 'goal'
-                        ? (
+                        (
                           // Goal-primary: one list, a goal card spans states and
                           // sessions — "S1 is on it, S2 left it open" is one thing.
                           <WorkSection
                             title="Work by goal"
                             subtitle="The same job across sessions, merged into one card"
-                            items={visibleItems}
+                            items={items}
                             selectedId={selectedId}
                             onSelect={selectItem}
                             onOpenSession={openSession}
@@ -2380,7 +2341,9 @@ export default function CrewOverviewApp() {
                             emptyLabel="No matching work"
                           />
                         )
-                        : (
+                      )
+                      : filter === 'all'
+                        ? (
                         <>
                           <WorkSection
                             title="Needs you"
@@ -2448,11 +2411,10 @@ export default function CrewOverviewApp() {
                           />
                         </>
                         )
-                      )
-                      : (
+                        : (
                         <WorkSection
                           title={filterLabels[filter]}
-                          items={visibleItems}
+                          items={sessionItems}
                           selectedId={selectedId}
                           onSelect={selectItem}
                           onOpenSession={openSession}
@@ -2467,18 +2429,184 @@ export default function CrewOverviewApp() {
                           emptyLabel="No matching work"
                         />
                       )}
-                    {/* Only while searching: history has no claim on the resting board. */}
-                    {query.trim() && (
-                      <PastWorkSection
-                        hits={recalled}
-                        now={Date.now()}
-                        onOpenSession={openSession}
-                        scope={recall.scope}
-                        onScopeChange={setRecallScope}
-                      />
+                </div>
+              </main>
+            </section>
+
+            {/* Companion surfaces, pinned below the scrolling list. None of these
+                is a lens on the list — each is its own kind of thing, which is
+                why they can live here permanently instead of behind a switch. */}
+            <div className="ow-stack">
+              <details className="ow-card ow-stack-card">
+                <summary>
+                  <span className="ow-stack-title">
+                    <ChevronRight className="ow-icon ow-stack-chevron" />
+                    <GitPullRequest className="ow-icon" />
+                    PRs
+                  </span>
+                  <Badge variant="muted">{prCounts.all} open</Badge>
+                </summary>
+                <p className="ow-stack-sub">Open pull requests your work touches</p>
+                <div className="ow-stack-body">
+                  {prCounts.all === 0
+                    ? (
+                      <p className="ow-stack-empty">
+                        No work is linked to a PR right now. Work links to one when a session
+                        mentions its URL.
+                      </p>
+                    )
+                    : (
+                      <>
+                        <div className="ow-filters" role="group" aria-label="Filter by PR status">
+                          {(Object.keys(prFilterLabels) as PrFilterKey[]).map(key => (
+                            <Btn
+                              key={key}
+                              onClick={() => setPrFilter(key)}
+                              aria-pressed={prFilter === key}
+                              data-selected={prFilter === key}
+                              className="ow-filter"
+                            >
+                              {prFilterLabels[key]}
+                              <span className="ow-count">{prCounts[key]}</span>
+                            </Btn>
+                          ))}
+                        </div>
+                        {/* The PR lens itself, unchanged — the same WorkSection the
+                            rail used to switch to, rendered in its own card. Reads
+                            `items`: this card is not downstream of the Sessions
+                            filter, and its own status chips do its narrowing. */}
+                        <WorkSection
+                          title="Work by PR"
+                          items={items}
+                          prChecks={prChecks}
+                          prFilter={prFilter}
+                          selectedId={selectedId}
+                          onSelect={selectItem}
+                          onOpenSession={openSession}
+                          onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                          permissionBusy={resolvingApproval !== null}
+                          onRetry={path => { void retryRun(path) }}
+                          retryBusy={retrying !== null}
+                          onStop={path => { void stopLoop(path) }}
+                          stopBusy={stopping !== null}
+                          onPickStep={what => { void handleConductorSend(what) }}
+                          groupBy="pr"
+                          emptyLabel="No PR matches that status."
+                        />
+                      </>
                     )}
+                </div>
+              </details>
+
+              <details className="ow-card ow-stack-card">
+                <summary>
+                  <span className="ow-stack-title">
+                    <ChevronRight className="ow-icon ow-stack-chevron" />
+                    <Radar className="ow-icon" />
+                    Loops
+                  </span>
+                  <Badge variant="muted">{loopRows.length}</Badge>
+                </summary>
+                <p className="ow-stack-sub">Sessions repeating a goal until it is done</p>
+                <div className="ow-stack-body">
+                  {loopRows.length === 0
+                    ? <p className="ow-stack-empty">No loop is running right now.</p>
+                    : loopRows.map(loop => {
+                      const since = sinceLabel(loop.lastFire)
+                      const when = [
+                        since && `last tick ${since}`,
+                        loop.remaining !== null && `${loop.remaining} remaining`,
+                      ].filter(Boolean).join(' · ')
+                      return (
+                        <div className="ow-mini" key={loop.key}>
+                          <span className="ow-mini-rail" style={{ background: 'var(--warn)' }} />
+                          <div>
+                            <div className="ow-mini-title">
+                              {loop.goalName ?? loop.title}
+                              <span className="ow-mini-chip">{loop.progress}</span>
+                            </div>
+                            {/* The loop's own instruction IS its goal statement —
+                                there is no separate description field to show. */}
+                            {loop.instruction && (
+                              <div className="ow-mini-desc" title={loop.instruction}>{loop.instruction}</div>
+                            )}
+                            {when && <div className="ow-mini-when">{when}</div>}
+                          </div>
+                          <Badge variant="ok">Active</Badge>
+                        </div>
+                      )
+                    })}
+                </div>
+              </details>
+
+              <details className="ow-card ow-stack-card">
+                <summary>
+                  <span className="ow-stack-title">
+                    <ChevronRight className="ow-icon ow-stack-chevron" />
+                    <Clock3 className="ow-icon" />
+                    Scheduled tasks
+                  </span>
+                  <Badge variant={cronToday.failed > 0 ? 'err' : 'muted'}>
+                    {cronToday.done}/{cronToday.total} today
+                  </Badge>
+                </summary>
+                <p className="ow-stack-sub">
+                  {cronToday.historyKnown
+                    ? "Today's runs only — jobs with nothing scheduled today are hidden"
+                    : 'Run history is unavailable, so completed counts may be low'}
+                </p>
+                <div className="ow-stack-body">
+                  {cronToday.rows.length === 0
+                    ? <p className="ow-stack-empty">Nothing is scheduled for today.</p>
+                    : cronToday.rows.map(({ job, ran, next, dueToday }) => {
+                      const failed = Boolean(ran && ran.failed > 0)
+                      const when = [
+                        ran && `ran today ${clockLabel(ran.last)}${ran.count > 1 ? ` (${ran.count}x)` : ''}`,
+                        dueToday && next ? `next ${clockLabel(next)}` : null,
+                      ].filter(Boolean).join(' · ')
+                      return (
+                        <div className="ow-mini" key={job.id}>
+                          <span
+                            className="ow-mini-rail"
+                            style={{ background: failed ? 'var(--danger)' : job.enabled === false ? 'var(--muted)' : 'var(--warn)' }}
+                          />
+                          <div>
+                            <div className="ow-mini-title">{job.name}</div>
+                            {job.schedule && (
+                              <div className="ow-mini-desc">
+                                {job.schedule}
+                                {job.cron_expr && <span className="ow-mini-chip">{job.cron_expr}</span>}
+                              </div>
+                            )}
+                            {when && <div className="ow-mini-when">{when}</div>}
+                          </div>
+                          {job.is_running
+                            ? <Badge variant="aim">Running</Badge>
+                            : failed
+                              ? <Badge variant="err">Failed</Badge>
+                              : job.enabled === false
+                                ? <Badge variant="muted">Paused</Badge>
+                                : ran
+                                  ? <Badge variant="ok">Success</Badge>
+                                  : <Badge variant="warn">Pending</Badge>}
+                        </div>
+                      )
+                    })}
+                </div>
+              </details>
             </div>
-          </main>
+          </div>
+
+          {/* Column split. A button, not a bare div: it has to be reachable and it
+              is a real control. Double-click restores the default width. */}
+          <button
+            type="button"
+            className="ow-resizer"
+            aria-label="Resize columns"
+            data-dragging={resizing ? 'true' : undefined}
+            onMouseDown={event => { event.preventDefault(); setResizing(true) }}
+            onDoubleClick={() => setSplitPct(SPLIT_DEFAULT)}
+          />
 
           <aside className="ow-conductor" aria-label="Conductor">
             <div className="ow-conductor-header">

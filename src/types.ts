@@ -153,6 +153,23 @@ export interface CronJob {
    */
   next_run_ts?: number | null
   paused?: boolean
+  /** The raw 5-field spec, shown as a monospace chip beside the human schedule. */
+  cron_expr?: string | null
+}
+
+/**
+ * One cron execution, from `GET /api/crons/history`. Needed because a job's
+ * `last_run_ts` records only its MOST RECENT run — an every-4-hours job would
+ * otherwise count as one run today no matter how many times it actually fired,
+ * so "N of M done today" cannot be answered from the job record alone.
+ */
+export interface CronRun {
+  run_id?: string
+  job_id?: string
+  trigger?: string
+  started_at?: number
+  finished_at?: number
+  status?: string
 }
 
 /**

@@ -66,8 +66,6 @@ export type WorkCopyKey =
   | 'related_same_topic'
   | 'related_same_step'
   | 'related_more'
-  | 'recall_scope_workspace'
-  | 'recall_scope_all'
   | 'rank_approval_owed'
   | 'rank_subagent_gate'
   | 'rank_input_requested'
@@ -318,7 +316,12 @@ const STATE_RANK: Record<WorkState, number> = {
   done: 2,
 }
 
-function epoch(value?: string | number | null): number {
+/**
+ * Coerce a host timestamp to epoch milliseconds. The gateway sends float
+ * SECONDS for cron timestamps but ISO strings elsewhere, and the 10-billion
+ * threshold is what tells the two number forms apart.
+ */
+export function epoch(value?: string | number | null): number {
   if (typeof value === 'number') return value > 10_000_000_000 ? value : value * 1000
   if (!value) return 0
   const parsed = Date.parse(value)
