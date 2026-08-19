@@ -15,6 +15,8 @@ Endpoints:
   manual refresh, so nobody has to wait out a sweep interval to see a change)
 * ``GET  /recall``   -- past work matching a query, from the transcript history
   the live board cannot see
+* ``POST /goal-pass`` -- one semantic clustering pass over the items the
+  rule-based grouper left ungrouped; degrades to ``available: false``
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from aiohttp import web
 # under its own package name.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import goalpass  # noqa: E402
 from recall import search_past_work  # noqa: E402
 from prchecks import pr_check_counts  # noqa: E402
 from initiatives import add_initiative, load_initiatives, remove_initiative  # noqa: E402
@@ -234,6 +237,115 @@ async def handle_remove_initiative(request: web.Request, ctx: Any) -> web.Respon
     return web.json_response({"initiatives": buckets})
 
 
+async def handle_goal_pass(request: web.Request, ctx: Any) -> web.Response:
+    """POST /goal-pass — one semantic clustering pass over the ungrouped items.
+
+    Request: ``{"clusters": [{key, name, items:[{id,title}]}],
+    "ungrouped": [{id, title, detail?}]}``.
+
+    Success: ``{"available": true, "assignments": [...], "names": [...]}``.
+    ANY failure — no gateway state, no LLM helpers, timeout, unparseable reply —
+    answers HTTP 200 with ``{"available": false, "reason": "..."}``, because this
+    is an enhancement over the rule-based grouping the UI already shows. An error
+    status would make the Goals view look broken when it is merely unimproved.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    clusters = goalpass.clamp_clusters(body.get("clusters"))
+    ungrouped = goalpass.clamp_ungrouped(body.get("ungrouped"))
+
+    # Nothing to assign and nothing to name: the answer is already known, so no
+    # call is made at all.
+    if not goalpass.needs_pass(clusters, ungrouped):
+        return web.json_response({"available": True, "assignments": [], "names": []})
+
+    state = request.app.get("state")
+    sessions = getattr(state, "sessions", None)
+    if sessions is None:
+        return _pass_unavailable("no gateway session manager")
+
+    # Imported here, never at module scope: this app's backend must load (and its
+    # selftest must run) on a machine with no kiro_crew importable.
+    try:
+        import asyncio
+        import uuid
+
+        from kiro_crew.llm_helpers import (
+            ToolApprovalPolicy,
+            parse_llm_json,
+            stream_and_collect,
+        )
+    except Exception:
+        logger.debug("crew-manager: goal pass has no llm helpers", exc_info=True)
+        return _pass_unavailable("model helpers unavailable")
+
+    prompt = goalpass.build_prompt(clusters, ungrouped)
+    key = f"crew-manager-goalpass:{uuid.uuid4().hex}"
+    try:
+        provider, _n, _r = await sessions.get_or_create(key, agent=goalpass.PASS_AGENT)
+    except Exception:
+        logger.debug("crew-manager: goal pass could not open a session", exc_info=True)
+        return _pass_unavailable("could not start a model session")
+
+    text = ""
+    reason: str | None = None
+    try:
+        text = await asyncio.wait_for(
+            stream_and_collect(
+                provider,
+                prompt,
+                # The pass reads nothing and writes nothing; a tool request here
+                # would only be a prompt-injected title trying its luck.
+                approval_policy=ToolApprovalPolicy.REJECT_ALL,
+            ),
+            timeout=goalpass.PASS_TIMEOUT_SECS,
+        )
+    except (TimeoutError, asyncio.TimeoutError):
+        reason = "the model did not answer in time"
+    except Exception:
+        logger.debug("crew-manager: goal pass call failed", exc_info=True)
+        reason = "the model call failed"
+    finally:
+        # Both, always: release alone leaves the kiro-cli subprocess running for
+        # a session nobody will ever ask for again.
+        try:
+            sessions.release(key)
+        except Exception:
+            logger.debug("crew-manager: goal pass release failed", exc_info=True)
+        try:
+            await sessions.destroy(key)
+        except Exception:
+            logger.debug("crew-manager: goal pass destroy failed", exc_info=True)
+
+    if reason is not None:
+        return _pass_unavailable(reason)
+
+    payload = parse_llm_json(text or "")
+    if not isinstance(payload, dict):
+        return _pass_unavailable("the model reply was not usable JSON")
+
+    result = goalpass.parse_pass(
+        payload,
+        {cluster["key"] for cluster in clusters},
+        {item["id"] for item in ungrouped},
+    )
+    return web.json_response({"available": True, **result})
+
+
+def _pass_unavailable(reason: str) -> web.Response:
+    """HTTP 200 with available:false — a missing improvement, not an error."""
+    return web.json_response({"available": False, "reason": reason})
+
+
 def register_routes(ctx: Any) -> list:
     """Declare Crew Manager's backend routes.
 
@@ -252,4 +364,5 @@ def register_routes(ctx: Any) -> list:
         AppRoute(method="GET", path="/initiatives", handler=handle_initiatives),
         AppRoute(method="POST", path="/initiatives", handler=handle_add_initiative),
         AppRoute(method="POST", path="/initiatives/remove", handler=handle_remove_initiative),
+        AppRoute(method="POST", path="/goal-pass", handler=handle_goal_pass),
     ]

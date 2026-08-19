@@ -57,8 +57,13 @@ describe('Crew Manager Conductor boundaries', () => {
   it('goal view merges same-titled sessions into one card and split undoes it', async () => {
     localStorage.removeItem('crew-manager.goal-verdicts')
     localStorage.removeItem('crew-manager.goal-memory')
-    // Two sessions whose slot titles clearly say the same job. Timestamps must be
-    // recent: an idle session's card falls out of the done window otherwise.
+    localStorage.removeItem('crew-manager.goal-semantic')
+    localStorage.removeItem('crew-manager.goal-names')
+    // Two sessions whose slot titles say the same job in DIFFERENT words. That is
+    // no longer a deterministic merge (loose overlap chained the board into
+    // blobs); it is the semantic pass's job, so the test stages the pass's
+    // answer and asserts the whole loop: pairs merge the card, the model's name
+    // labels it, its why line explains it, and the user's Split still wins.
     const now = new Date().toISOString()
     appSdkMocks.get.mockImplementation(async (path: string) => {
       if (path === '/api/chat/slots') {
@@ -75,17 +80,31 @@ describe('Crew Manager Conductor boundaries', () => {
       if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
       throw new Error(`Unexpected GET ${path}`)
     })
+    appSdkMocks.post.mockImplementation(async (path: string) => {
+      if (path === '/api/apps/crew-manager/goal-pass') {
+        return {
+          available: true,
+          assignments: [
+            { item_id: 'session:s1', cluster: 'new:avatar', confidence: 0.9, why: 'both ship the avatar upload flow' },
+            { item_id: 'session:s2', cluster: 'new:avatar', confidence: 0.9, why: 'both ship the avatar upload flow' },
+          ],
+          names: [{ cluster: 'new:avatar', name: 'Avatar upload flow' }],
+        }
+      }
+      return {}
+    })
     renderApp()
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
     // One merged card, folded by default (nothing needs the user): digest shows.
-    // It is NAMED from what the two sessions share, not labelled by their count.
+    // It carries the NAME the pass wrote, not the members' count.
     expect(await screen.findByText('Avatar upload flow', { selector: '.ow-goalcard-title' }))
       .toBeInTheDocument()
     expect(screen.queryByText('2 sessions, one goal')).not.toBeInTheDocument()
     // A merged card has to say what it merged on: the reason is what Split is
-    // judged against, so an unexplained merge is one the user cannot check.
-    expect(screen.getByText('Grouped because these sessions describe the same work.')).toBeInTheDocument()
+    // judged against, so an unexplained merge is one the user cannot check. A
+    // semantic merge quotes the model's own one-line rationale.
+    expect(screen.getByText('Grouped because both ship the avatar upload flow.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Expand Avatar upload flow' }))
     // Member rows carry a status dot + title; the lead is a row too (the header
     // names the GROUP, not a member, so nothing is duplicated).
@@ -93,11 +112,64 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(screen.getByTestId('work-item-session:s2')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Split Ship the avatar upload flow' }))
-    // The ruling takes effect immediately: two plain cards, no merged header.
+    // The ruling takes effect immediately AND outranks the semantic pair: two
+    // plain cards, no merged header, even though the pass still says "merge".
     await waitFor(() => expect(
       screen.queryByText('Avatar upload flow', { selector: '.ow-goalcard-title' }),
     ).not.toBeInTheDocument())
     localStorage.removeItem('crew-manager.goal-verdicts')
+    localStorage.removeItem('crew-manager.goal-semantic')
+    localStorage.removeItem('crew-manager.goal-names')
+  })
+
+  it('gives a deterministically-merged card the model outcome name over the derived label', async () => {
+    // Two sessions on the same PR merge deterministically (same_change), so the
+    // derived name would be the bare ref label "github #6". The naming rework
+    // sends even an already-derived-named cluster to the pass so the model can
+    // write an OUTCOME title — and it wins over the quote.
+    localStorage.removeItem('crew-manager.goal-verdicts')
+    localStorage.removeItem('crew-manager.goal-memory')
+    localStorage.removeItem('crew-manager.goal-semantic')
+    localStorage.removeItem('crew-manager.goal-names')
+    localStorage.removeItem('crew-manager.initiative-collapsed')
+    const now = new Date().toISOString()
+    const link = { kind: 'change', url: 'https://github.com/o/r/pull/6', number: 6, provider: 'github' }
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots') {
+        return [
+          { key: 's1', title: 'Open a PR for the art', messages: 4, running: true, last_ts: now, source_links: [link] },
+          { key: 's2', title: 'Rebase after 8 merged', messages: 2, running: true, last_ts: now, source_links: [link] },
+        ]
+      }
+      if (path === '/api/approvals') return []
+      if (path === '/api/spawn') return { agents: [] }
+      if (path === '/api/workflows/runs') return { runs: [] }
+      if (path === '/api/crons') return { jobs: [] }
+      if (path === '/api/artifacts') return { artifacts: [] }
+      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+    // The pass echoes the unnamed existing cluster's own key back with an
+    // outcome name; a static name string cannot, since the key is derived.
+    appSdkMocks.post.mockImplementation(async (path: string, body?: any) => {
+      if (path === '/api/apps/crew-manager/goal-pass') {
+        const key = body?.clusters?.[0]?.key
+        return key
+          ? { available: true, assignments: [], names: [{ cluster: key, name: 'Ship the app store art' }] }
+          : { available: false }
+      }
+      return {}
+    })
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
+    // The model's outcome title, not the derived "github #6" ref label.
+    expect(await screen.findByText('Ship the app store art', { selector: '.ow-goalcard-title' }))
+      .toBeInTheDocument()
+    expect(screen.queryByText('github #6', { selector: '.ow-goalcard-title' })).not.toBeInTheDocument()
+    localStorage.removeItem('crew-manager.goal-semantic')
+    localStorage.removeItem('crew-manager.goal-names')
+    localStorage.removeItem('crew-manager.goal-memory')
   })
 
   it('groups a session with the loop it started, naming the card by the session', async () => {
@@ -199,9 +271,73 @@ describe('Crew Manager Conductor boundaries', () => {
     localStorage.removeItem('crew-manager.goal-memory')
   })
 
+  it('titles a lone card by the model outcome name, distinguishing same-session cards', async () => {
+    // Two lone cards from ONE session used to collide on the session name. Now
+    // each solo item gets its own model outcome title (names entry item:<id>),
+    // so two goals in one session read distinctly.
+    localStorage.removeItem('crew-manager.goal-verdicts')
+    localStorage.removeItem('crew-manager.goal-memory')
+    localStorage.removeItem('crew-manager.goal-semantic')
+    localStorage.removeItem('crew-manager.goal-names')
+    localStorage.removeItem('crew-manager.initiative-collapsed')
+    const now = new Date().toISOString()
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots') {
+        return [{ key: 's1', title: 'Local debug and Git requests', messages: 6, running: true, last_ts: now }]
+      }
+      if (path === '/api/chat/slots/s1/summary') {
+        return {
+          enabled: true,
+          intents: [
+            { id: 'i1', title: 'Make a DMG build from latest main', state: 'in-progress', progress: [] },
+            { id: 'i2', title: 'Restore SSH access to the remote box', state: 'in-progress', progress: [] },
+          ],
+        }
+      }
+      if (path === '/api/approvals') return []
+      if (path === '/api/spawn') return { agents: [] }
+      if (path === '/api/workflows/runs') return { runs: [] }
+      if (path === '/api/crons') return { jobs: [] }
+      if (path === '/api/artifacts') return { artifacts: [] }
+      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+    // The pass names each solo item by its own id -- distinct titles for two
+    // goals that share one session.
+    appSdkMocks.post.mockImplementation(async (path: string) => {
+      if (path === '/api/apps/crew-manager/goal-pass') {
+        return {
+          available: true,
+          assignments: [],
+          names: [
+            { cluster: 'item:intent:s1:0', name: 'Build a fresh DMG from main' },
+            { cluster: 'item:intent:s1:1', name: 'Restore remote SSH access' },
+          ],
+        }
+      }
+      return {}
+    })
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
+    // Each lone card carries its own model outcome title, not the shared session
+    // name -- and neither is titled "Local debug and Git requests".
+    expect(await screen.findByText('Build a fresh DMG from main', { selector: '.ow-goalcard-title' }))
+      .toBeInTheDocument()
+    expect(await screen.findByText('Restore remote SSH access', { selector: '.ow-goalcard-title' }))
+      .toBeInTheDocument()
+    expect(screen.queryByText('Local debug and Git requests', { selector: '.ow-goalcard-title' }))
+      .not.toBeInTheDocument()
+    localStorage.removeItem('crew-manager.goal-semantic')
+    localStorage.removeItem('crew-manager.goal-names')
+    localStorage.removeItem('crew-manager.goal-memory')
+  })
+
   it('initiative buckets and auto clusters share one card anatomy; goal quote routes to the active session', async () => {
     localStorage.removeItem('crew-manager.goal-verdicts')
     localStorage.removeItem('crew-manager.initiative-collapsed')
+    localStorage.removeItem('crew-manager.goal-semantic')
+    localStorage.removeItem('crew-manager.goal-names')
     const now = new Date().toISOString()
     appSdkMocks.get.mockImplementation(async (path: string) => {
       if (path === '/api/chat/slots') {
@@ -224,17 +360,32 @@ describe('Crew Manager Conductor boundaries', () => {
       if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
       throw new Error(`Unexpected GET ${path}`)
     })
+    // The s1/s2 pair shares no hard signal — the merge is the semantic pass's.
+    appSdkMocks.post.mockImplementation(async (path: string) => {
+      if (path === '/api/apps/crew-manager/goal-pass') {
+        return {
+          available: true,
+          assignments: [
+            { item_id: 'session:s1', cluster: 'new:avatar', confidence: 0.9, why: 'both ship the avatar upload flow' },
+            { item_id: 'session:s2', cluster: 'new:avatar', confidence: 0.9, why: 'both ship the avatar upload flow' },
+          ],
+          names: [{ cluster: 'new:avatar', name: 'Avatar upload flow' }],
+        }
+      }
+      return {}
+    })
     renderApp()
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
-    // The bucket card: name + a status flag in its header. The cluster card
-    // carries the same flag — one chrome, so two "Running" flags render.
+    // The bucket card: name + a status flag in its header.
     expect(await screen.findByText('Crew Companion')).toBeInTheDocument()
+    // The auto cluster arrives once the semantic pass answers: same card chrome,
+    // named by the pass rather than labelled by the members' count. It arrives
+    // FOLDED (nothing needs the user) showing the digest, not the rows — and the
+    // count lives in the meta. Both cards share one chrome, so two "Running"
+    // flags render.
+    expect(await screen.findByText('Avatar upload flow', { selector: '.ow-goalcard-title' })).toBeInTheDocument()
     expect(screen.getAllByText('Running', { selector: '.ow-goal-flag' })).toHaveLength(2)
-    // The auto cluster: same card chrome, named from what its members share
-    // rather than labelled by their count. It arrives FOLDED (nothing needs the
-    // user) showing the digest, not the rows — and the count lives in the meta.
-    expect(screen.getByText('Avatar upload flow', { selector: '.ow-goalcard-title' })).toBeInTheDocument()
     expect(screen.queryByText('2 sessions, one goal')).not.toBeInTheDocument()
     expect(screen.getByText('2 sessions · 1 running · 1 done')).toBeInTheDocument()
     expect(screen.queryByTestId('work-item-session:s2')).not.toBeInTheDocument()
@@ -252,6 +403,8 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', expect.anything())
     localStorage.removeItem('crew-manager.goal-verdicts')
     localStorage.removeItem('crew-manager.initiative-collapsed')
+    localStorage.removeItem('crew-manager.goal-semantic')
+    localStorage.removeItem('crew-manager.goal-names')
   })
 
   it('keeps the state filter inside the Sessions tab', async () => {
@@ -291,7 +444,9 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(quote).not.toBeNull()
     expect(quote?.textContent).toContain('Instructing')
     expect(screen.queryByText('Private')).not.toBeInTheDocument()
-    expect(appSdkMocks.post).not.toHaveBeenCalled()
+    // Selecting a quote sends no conductor message. (A background goal-pass POST
+    // may fire on the Goals tab -- that is not "sending", so scope to /api/chat.)
+    expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', expect.anything())
   })
 
   it('shows no quote and no placeholder panel when nothing is selected', async () => {
