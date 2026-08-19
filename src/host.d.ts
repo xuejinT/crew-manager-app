@@ -52,5 +52,5 @@ declare module '@kirocrew/app-sdk/ui' {
     subtitle?: string
     action?: import('react').ReactNode
   }>
-  export const PageHeader: import('react').ComponentType<{ title: string; subtitle?: string }>
+  export const PageHeader: import('react').ComponentType<{ title: import('react').ReactNode; subtitle?: string; actions?: import('react').ReactNode }>
 }

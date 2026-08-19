@@ -44,6 +44,6 @@ export function EmptyState({
   return <div>{icon}<h2>{title}</h2>{subtitle && <p>{subtitle}</p>}{action}</div>
 }
 
-export function PageHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+export function PageHeader({ title, subtitle }: { title: React.ReactNode; subtitle?: string }) {
   return <header><h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</header>
 }
