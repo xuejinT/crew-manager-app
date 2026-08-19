@@ -130,10 +130,13 @@ const GOAL_MEMORY_KEY = 'crew-manager.goal-memory'
    for a model call, and so a reload keeps its grouping. The `.v2` suffix is a
    schema-buster: it discards a cache written by an earlier prompt so an improved
    naming pass actually re-runs instead of short-circuiting on the stale stamp. */
-const GOAL_SEMANTIC_KEY = 'crew-manager.goal-semantic.v3'
+const GOAL_SEMANTIC_KEY = 'crew-manager.goal-semantic.v5'
 /* Model-written goal names, keyed by goal key. Sticky by design: a name the
-   user has seen must not churn because a member joined. */
-const GOAL_NAMES_KEY = 'crew-manager.goal-names'
+   user has seen must not churn because a member joined. The `.v2` suffix is a
+   one-time reset: the prior pass could hand two different goals the same title,
+   and those duplicates are already stored; discarding them lets the distinctness-
+   enforcing pass re-name cleanly. */
+const GOAL_NAMES_KEY = 'crew-manager.goal-names.v2'
 /* Below this confidence an assignment is ignored and the item stays ungrouped.
    The spec's core ruling: a wrong grouping is worse than no grouping, because
    it hides an item somewhere the user will not look for it. */
@@ -1860,7 +1863,6 @@ function WorkSection({
               aria-pressed={selectedGoalKey === block.key}
               data-selected={selectedGoalKey === block.key ? 'true' : undefined}
             >
-              <Users className="ow-icon" aria-hidden="true" />
               <span className="ow-truncate ow-block-name ow-goalcard-title">{goalLabel}</span>
             </Clickable>
           }
@@ -2561,13 +2563,14 @@ export default function CrewOverviewApp() {
         for (const entry of payload.assignments ?? []) {
           if ((entry.confidence ?? 0) < SEMANTIC_CONFIDENCE_FLOOR) continue
           const item = entry.item_id ? itemById.get(entry.item_id) : undefined
-          // Semantic merges are cross-session only: within one session the
-          // deterministic stages (provenance, refs) already know better.
+          // The model may merge items WITHIN one session as well as across them:
+          // several intents in one session are often one piece of work. The
+          // deterministic stages still keep same-session items apart on their
+          // own — only an explicit model pair overrules that (see clusterByGoal).
           if (!item?.sessionKey || !entry.cluster) continue
           if (entry.cluster.startsWith('existing:')) {
             const block = blockByKey.get(entry.cluster.slice('existing:'.length))
-            const partner = block?.items.find(member =>
-              member.sessionKey && member.sessionKey !== item.sessionKey)
+            const partner = block?.items.find(member => member.id !== item.id)
             if (!partner) continue
             const pair = goalPairKey(item, partner)
             pairs.add(pair)
@@ -2588,7 +2591,6 @@ export default function CrewOverviewApp() {
           if (members.length < 2) continue
           for (let i = 0; i < members.length; i += 1) {
             for (let j = i + 1; j < members.length; j += 1) {
-              if (members[i].sessionKey === members[j].sessionKey) continue
               const pair = goalPairKey(members[i], members[j])
               pairs.add(pair)
               const reason = whyByItem.get(members[i].id) ?? whyByItem.get(members[j].id)

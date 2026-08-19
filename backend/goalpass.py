@@ -197,7 +197,9 @@ def build_prompt(clusters: list[dict], ungrouped: list[dict]) -> str:
         "better, never pad), naming the OUTCOME not the activity: \"Ship the "
         'neutral single-ink app icon across all sizes", not "Working on icons" and '
         'not "icon 16/24/48". Read the group\'s member titles and say what shipping '
-        "them all accomplishes."
+        "them all accomplishes. Every name MUST be DISTINCT from the other names "
+        "you return in this pass -- if two groups are close, name each by what "
+        "SETS IT APART, never give two groups the same title."
     )
     lines.append("")
     lines.append(
@@ -302,6 +304,7 @@ def parse_pass(payload: Any, cluster_keys: set, item_ids: set) -> dict:
         )
 
     seen_names: set[str] = set()
+    seen_labels: set[str] = set()
     raw_names = payload.get("names")
     for row in raw_names if isinstance(raw_names, list) else []:
         if not isinstance(row, dict):
@@ -328,9 +331,13 @@ def parse_pass(payload: Any, cluster_keys: set, item_ids: set) -> dict:
                 continue
             target = key
         name = _clamp_name(row.get("name"))
-        if not name or target in seen_names:
+        # Reject a name already handed to another group this pass (case-insensitive):
+        # two goals with the same title are indistinguishable in the UI, so the
+        # duplicate is dropped and that group falls back to its derived label.
+        if not name or target in seen_names or name.casefold() in seen_labels:
             continue
         seen_names.add(target)
+        seen_labels.add(name.casefold())
         out["names"].append({"cluster": target, "name": name})
 
     return out

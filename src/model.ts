@@ -1993,10 +1993,17 @@ function clusterByGoal(
       // where two unrelated intents in that same session are not.
       if (provenanceEdge(a, b)) { union(i, j); continue }
       if (verdicts.merged.includes(pair)) { union(i, j); continue }
-      // Two intents inside one session are distinct goals; only sessions merge.
-      if (!a.sessionKey || !b.sessionKey || a.sessionKey === b.sessionKey) continue
-      // Stage 3 — the model's judgement on this specific pair.
+      // Stage 3 — the model's judgement on this specific pair. The model may
+      // rule that two intents WITHIN one session are one goal (e.g. three fixes
+      // that are one piece of work), so this is checked BEFORE the same-session
+      // guard below — an explicit model pair merges even where the deterministic
+      // matcher deliberately would not.
       if (semantic?.has(pair)) { union(i, j); continue }
+      // Two intents inside one session are distinct goals for the deterministic
+      // matcher; only recorded provenance or an explicit model pair (both above)
+      // may overrule that. Everything past here is threshold matching, and stays
+      // cross-session only.
+      if (!a.sessionKey || !b.sessionKey || a.sessionKey === b.sessionKey) continue
       // Stage 4 — deterministic matching, HARD signals only.
       const match = sameGoal(a, b, ambient)
       if (match && HARD_GOAL_MATCHES.includes(match)) union(i, j)
@@ -2065,6 +2072,8 @@ export const GOAL_REUSE_OVERLAP = 0.5
  */
 export function reconcileGoalKeys(blocks: WorkBlock[], prior: PriorGoal[]): WorkBlock[] {
   const claimed = new Set<string>()
+  // Every key handed out this run, so no two blocks can end up sharing one.
+  const used = new Set<string>()
   // Bigger clusters choose first, so a split leaves the key with the larger part.
   const order = [...blocks].sort((a, b) => b.items.length - a.items.length)
   for (const block of order) {
@@ -2082,6 +2091,20 @@ export function reconcileGoalKeys(blocks: WorkBlock[], prior: PriorGoal[]): Work
       claimed.add(best.key)
       block.key = best.key
     }
+    // Guarantee a unique key per block. A block that KEEPS its intrinsic key can
+    // still collide with a prior key ANOTHER block reclaimed (item `x` left that
+    // goal and is now this block's smallest-id member, so its intrinsic is
+    // `goal:x` while the other block reclaimed the prior `goal:x`). Two blocks
+    // sharing a key share the React key and the persisted fold state, so one
+    // chevron toggles both. On a collision, suffix until unique -- deterministic
+    // given the largest-first order, and it stabilises next run because this key
+    // is then remembered and reclaimed directly.
+    if (used.has(block.key)) {
+      let n = 2
+      while (used.has(`${block.key}~${n}`)) n += 1
+      block.key = `${block.key}~${n}`
+    }
+    used.add(block.key)
   }
   return blocks
 }

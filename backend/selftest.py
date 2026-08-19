@@ -802,6 +802,16 @@ check(
     )["names"][0]["name"] == "Ship the neutral single-ink app icon across every size on light and dark",
 )
 check(
+    "a duplicate name is dropped so two goals never share a title",
+    _gp.parse_pass(
+        {"names": [
+            {"cluster": "c1", "name": "Ship the dashboard"},
+            {"cluster": "c2", "name": "ship THE dashboard"},
+        ]},
+        _KEYS, _IDS,
+    )["names"] == [{"cluster": "c1", "name": "Ship the dashboard"}],
+)
+check(
     "a solo item is nameable via item:<id>",
     _gp.parse_pass({"names": [{"cluster": "item:u1", "name": "Export the icon proofs at 16px"}]}, _KEYS, _IDS)[
         "names"

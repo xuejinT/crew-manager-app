@@ -1435,6 +1435,33 @@ describe('grouping by goal', () => {
     expect(blocks.every(b => b.header === null)).toBe(true)
   })
 
+  it('merges two items inside one session when the semantic pass names the pair', () => {
+    // The deterministic matcher keeps same-session intents apart (test above),
+    // but the model may rule that several intents in one session are one piece
+    // of work — an explicit model pair merges even within a session.
+    const a = goal('a', 's1', { title: 'remove the goal-header icon' })
+    const b = goal('b', 's1', { title: 'fix the shared collapse state' })
+    const c = goal('c', 's1', { title: 'unrelated thing in the same session' })
+
+    const semantic = new Set([goalPairKey(a, b)])
+    const blocks = clusterBy([a, b, c], 'goal', EMPTY_VERDICTS, semantic)
+    expect(blocks).toHaveLength(2)
+    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
+    expect(blocks[0].header).toBe('goal')
+    // c shares the session but no pair named it — it stays its own row.
+    expect(blocks[1].items.map(i => i.id)).toEqual(['c'])
+  })
+
+  it('a user split ruling still beats a same-session semantic pair', () => {
+    // Stickiness of the user's own call: even within one session, if they ruled
+    // the pair apart, the model's merge does not override it.
+    const a = goal('a', 's1', { title: 'remove the goal-header icon' })
+    const b = goal('b', 's1', { title: 'fix the shared collapse state' })
+    const semantic = new Set([goalPairKey(a, b)])
+    const blocks = clusterBy([a, b], 'goal', { merged: [], split: [goalPairKey(a, b)] }, semantic)
+    expect(blocks).toHaveLength(2)
+  })
+
   it('the user split ruling beats every signal, and merge beats no-signal', () => {
     const change = { kind: 'change' as const, id: 'https://x/pull/9', label: 'github #9' }
     const a = goal('a', 's1', { references: [
@@ -2290,6 +2317,26 @@ describe('goal extraction', () => {
     const remainder = split.find(block => block.items.length === 1)
     expect(larger?.key).toBe(priorKey)
     expect(remainder?.key).not.toBe(priorKey)
+  })
+
+  it('never hands two live goals the same key, even when an intrinsic key collides with a reclaimed prior', () => {
+    // The bug: a bigger block reclaims prior `goal:x`; a different single-item
+    // block whose own smallest-id member is `x` keeps its intrinsic `goal:x` and
+    // finds no match -- so both end up `goal:x`, sharing React key + fold state
+    // (one chevron toggled both). Reconcile must uniquify.
+    const x = goal('x', 'S', { title: 'alpha' })
+    const y = goal('y', 'S', { title: 'alpha' })
+    const z = goal('z', 'S', { title: 'alpha' })
+    type Block = ReturnType<typeof clusterBy>[number]
+    const bigger: Block = { key: 'goal:y', items: [y, z], header: 'goal', sessionKey: null, changeRef: null }
+    const lone: Block = { key: 'goal:x', items: [x], header: 'goal', sessionKey: null, changeRef: null }
+    const prior = [{ key: 'goal:x', members: ['S|alpha'] }]
+    const out = reconcileGoalKeys([bigger, lone], prior)
+    const keys = out.map(b => b.key)
+    expect(new Set(keys).size).toBe(2)
+    // The larger block reclaims the prior id; the colliding lone block is moved off it.
+    expect(out.find(b => b.items.length === 2)?.key).toBe('goal:x')
+    expect(out.find(b => b.items.length === 1)?.key).not.toBe('goal:x')
   })
 
   it('does not hand a prior id to an unrelated new goal', () => {
