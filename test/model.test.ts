@@ -9,6 +9,11 @@ import {
   applyInstructed,
   clusterBy,
   prBucket,
+  prBlockers,
+  prVerdict,
+  repoFromUrl,
+  reviewDecision,
+  unresolvedThreads,
   rollUpSessions,
   applySetAside,
   DONE_WINDOW_MS,
@@ -1871,13 +1876,21 @@ describe('searchWorkItems', () => {
 
 describe('prBucket', () => {
   it('prefers live GitHub check counts over the coarse status', () => {
-    expect(prBucket({ status: 'checks running' }, { available: true, total: 5, failing: 2 })).toBe('failing')
-    expect(prBucket({ status: 'checks failing' }, { available: true, total: 5, pending: 1 })).toBe('running')
-    expect(prBucket({ status: 'checks failing' }, { available: true, total: 5, failing: 0, pending: 0 })).toBe('other')
+    expect(prBucket({ status: 'checks running', available: true, total: 5, failing: 2 })).toBe('failing')
+    expect(prBucket({ status: 'checks failing', available: true, total: 5, pending: 1 })).toBe('running')
+    expect(prBucket({ status: 'checks failing', available: true, total: 5, failing: 0, pending: 0 })).toBe('other')
   })
 
   it('counts a merge conflict as failing even with green checks', () => {
-    expect(prBucket({ status: 'conflict' }, { available: true, total: 5, failing: 0 })).toBe('failing')
+    expect(prBucket({ status: 'conflict', available: true, total: 5, failing: 0 })).toBe('failing')
+  })
+
+  it('agrees with the row pill, so no chip contradicts a visible row', () => {
+    // The fetched state is what the pill reads, so the chip must read it too:
+    // a Merged row in a list whose Merged chip says 0 is the bug this prevents.
+    expect(prBucket({ state: 'MERGED' })).toBe('merged')
+    expect(prBucket({ state: 'OPEN', review: 'changes-requested' })).toBe('failing')
+    expect(prBucket({ state: 'OPEN', mergeState: 'blocked' })).toBe('other')
   })
 
   it('sends merged to its own bucket and closed/open to other', () => {
@@ -2441,5 +2454,163 @@ describe('goal extraction', () => {
       goal('f', 's2', { title: 'afternoon errands', nextSteps: [{ what: 'check merged cards in the goal grouping view' }] }),
     ]
     expect(explainGoal(steppy)).toBeNull()
+  })
+})
+
+describe('PR verdict and blockers', () => {
+  const NOW = Date.parse('2026-08-19T18:00:00Z')
+  const clean = {
+    state: 'OPEN', mergeState: 'clean', base: 'main', available: true,
+    total: 3, passing: 3, failing: 0, pending: 0, updatedAt: NOW,
+  }
+
+  it('gives a merged PR one verdict and no work to do', () => {
+    expect(prVerdict({ state: 'MERGED', failing: 2, mergeState: 'dirty' })).toBe('merged')
+    // The pill already says Merged; a line repeating it spends a row on nothing.
+    expect(prBlockers({ state: 'MERGED', failing: 2 }, NOW)).toEqual([])
+    expect(prBlockers({ state: 'CLOSED' }, NOW)).toEqual([])
+  })
+
+  it('never restates the verdict pill in the blocker line', () => {
+    // Draft's only real content here is the staleness, so that is all it says.
+    expect(prBlockers({ ...clean, isDraft: true, updatedAt: NOW - 4 * 86_400_000 }, NOW))
+      .toEqual(['All checks passing', 'no activity in 4 days'])
+    expect(prBlockers({ ...clean, review: 'changes-requested' }, NOW))
+      .toEqual(['All checks passing'])
+  })
+
+  it('ranks a conflict above failing checks, because rebasing re-runs them', () => {
+    expect(prVerdict({ ...clean, mergeState: 'dirty', failing: 2 })).toBe('conflict')
+    expect(prBlockers({ ...clean, mergeState: 'dirty', failing: 2, passing: 1 }, NOW)).toEqual([
+      '2 checks failing', 'merge conflict with main',
+    ])
+  })
+
+  it('ranks a draft above every blocker it happens to carry', () => {
+    expect(prVerdict({ ...clean, isDraft: true, mergeState: 'dirty', failing: 1 })).toBe('draft')
+  })
+
+  it('calls a clean, fully passing PR ready and says so', () => {
+    expect(prVerdict(clean)).toBe('ready')
+    expect(prBlockers(clean, NOW)).toEqual(['All checks passing', 'ready to merge'])
+  })
+
+  it('reports auto-merge instead of ready when GitHub will land it', () => {
+    expect(prBlockers({ ...clean, autoMerge: true }, NOW)).toEqual([
+      'All checks passing', 'auto-merge armed',
+    ])
+  })
+
+  it('surfaces a behind-base PR that no single field calls broken', () => {
+    expect(prVerdict({ ...clean, mergeState: 'behind' })).toBe('behind')
+    expect(prBlockers({ ...clean, mergeState: 'behind' }, NOW)).toContain('behind main')
+  })
+
+  it('puts a person waiting on you above bookkeeping', () => {
+    // A rebase does not answer a review, so the review wins the pill.
+    expect(prVerdict({ ...clean, mergeState: 'behind', review: 'changes-requested' }))
+      .toBe('changes-requested')
+    expect(prVerdict({ ...clean, mergeState: 'behind', unresolved: 2 })).toBe('comments-open')
+    // But a failing build still comes first: the reviewer is reading broken code.
+    expect(prVerdict({ ...clean, failing: 1, review: 'changes-requested' })).toBe('ci-failing')
+  })
+
+  it('names staleness, which no other field reports', () => {
+    const stale = { ...clean, updatedAt: NOW - 4 * 86_400_000 }
+    expect(prBlockers(stale, NOW)).toContain('no activity in 4 days')
+    // A PR touched today is not stale.
+    expect(prBlockers(clean, NOW).join(' ')).not.toContain('no activity')
+  })
+
+  it('treats a change request as blocking and an approval as ready', () => {
+    expect(prVerdict({ ...clean, mergeState: 'blocked', review: 'changes-requested' }))
+      .toBe('changes-requested')
+    expect(prVerdict({ ...clean, review: 'approved' })).toBe('ready')
+    // Approved but still blocked is NOT ready: the host is authoritative about
+    // mergeability, and something else (a code-owner review, a required check)
+    // still holds it. Calling it Ready would send the user to a merge button
+    // the host refuses.
+    expect(prVerdict({ ...clean, mergeState: 'blocked', review: 'approved' })).toBe('needs-review')
+    expect(prVerdict({ ...clean, mergeState: 'blocked', review: 'none' })).toBe('needs-review')
+    expect(prBlockers({ ...clean, mergeState: 'blocked', review: 'none' }, NOW))
+      .toContain('waiting on review')
+  })
+
+  it('counts open threads, and singular reads as one comment', () => {
+    expect(prBlockers({ ...clean, unresolved: 1 }, NOW)).toContain('1 unresolved comment')
+    expect(prBlockers({ ...clean, unresolved: 3 }, NOW)).toContain('3 unresolved comments')
+  })
+
+  it('falls back to the platform status when the rich fields are missing', () => {
+    expect(prVerdict({ status: 'checks failing' })).toBe('ci-failing')
+    expect(prVerdict({ status: 'conflict' })).toBe('conflict')
+    expect(prVerdict({ status: 'merged' })).toBe('merged')
+    expect(prVerdict({})).toBe('open')
+  })
+
+  it('lets live data outrank a stale coarse status', () => {
+    // The coarse status is the platform's cached reading and lags the fetch. If
+    // it could override live fields, a fixed PR would keep reporting the old
+    // failure and a merged-then-reopened one would read Merged forever.
+    expect(prVerdict({ ...clean, status: 'checks failing' })).toBe('ready')
+    expect(prVerdict({ ...clean, status: 'merged' })).toBe('ready')
+    expect(prVerdict({ ...clean, status: 'conflict', mergeable: 'mergeable' })).toBe('ready')
+    // With no live checks it is still the best answer available.
+    expect(prVerdict({ status: 'checks failing', state: 'OPEN' })).toBe('ci-failing')
+  })
+
+  it('keeps the line to one row', () => {
+    const everything = {
+      ...clean, failing: 2, mergeState: 'dirty', unresolved: 5,
+      review: 'changes-requested' as const, autoMerge: true, updatedAt: NOW - 9 * 86_400_000,
+    }
+    expect(prBlockers(everything, NOW)).toHaveLength(4)
+  })
+})
+
+describe('PR review signals', () => {
+  it('lets a later approval clear the same reviewer’s change request', () => {
+    expect(reviewDecision([
+      { kind: 'review', state: 'CHANGES_REQUESTED', author: 'a', createdAt: '2026-08-01T00:00:00Z' },
+      { kind: 'review', state: 'APPROVED', author: 'a', createdAt: '2026-08-02T00:00:00Z' },
+    ])).toBe('approved')
+  })
+
+  it('keeps a change request that nobody has withdrawn', () => {
+    expect(reviewDecision([
+      { kind: 'review', state: 'APPROVED', author: 'a', createdAt: '2026-08-01T00:00:00Z' },
+      { kind: 'review', state: 'CHANGES_REQUESTED', author: 'b', createdAt: '2026-08-02T00:00:00Z' },
+    ])).toBe('changes-requested')
+  })
+
+  it('ignores plain comments and bare review notes', () => {
+    expect(reviewDecision([
+      { kind: 'comment', state: '', author: 'a' },
+      { kind: 'review', state: 'COMMENTED', author: 'b' },
+    ])).toBe('none')
+  })
+
+  it('counts each open thread once, however many comments it holds', () => {
+    expect(unresolvedThreads([
+      { resolvable: true, resolved: false, threadId: 't1' },
+      { resolvable: true, resolved: false, threadId: 't1' },
+      { resolvable: true, resolved: true, threadId: 't2' },
+      { resolvable: false, resolved: false, id: 'plain' },
+    ])).toBe(1)
+  })
+})
+
+describe('repoFromUrl', () => {
+  it('reads the repo out of a GitHub PR url', () => {
+    expect(repoFromUrl('https://github.com/xuejinT/crew-manager-app/pull/6')).toBe('crew-manager-app')
+  })
+
+  it('reads the project out of a nested GitLab merge request url', () => {
+    expect(repoFromUrl('https://gitlab.com/group/sub/project/-/merge_requests/12')).toBe('project')
+  })
+
+  it('answers nothing rather than guessing when there is no url', () => {
+    expect(repoFromUrl(undefined)).toBeUndefined()
+    expect(repoFromUrl('not a url')).toBeUndefined()
   })
 })

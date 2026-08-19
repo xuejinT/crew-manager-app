@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import {
   AlertTriangle as AlertCircle,
   Bot,
@@ -43,6 +43,13 @@ import {
   clusterBy,
   epoch,
   prBucket,
+  prBlockers,
+  prVerdict,
+  PR_VERDICT_LABELS,
+  PR_VERDICT_TONES,
+  repoFromUrl,
+  reviewDecision,
+  unresolvedThreads,
   rollUpSessions,
   applySetAside,
   inDoneWindow,
@@ -79,6 +86,8 @@ import {
   type MemberDot,
   type PendingPermission,
   type PriorGoal,
+  type PrReviewComment,
+  type PrSignals,
   type ResponseVerb,
   type WorkBlock,
   type WorkItem,
@@ -96,16 +105,84 @@ import {
 } from './summaries'
 import { OVERWATCH_STYLES } from './styles'
 
+/** The four movable panels. Any of them can be the primary; Work has no special
+ * status beyond being the default. */
+type PanelId = 'work' | 'prs' | 'loops' | 'schedule'
+
+/* Fixed DOM order. Panels are placed by grid coordinates, never by reordering
+ * this array in JSX — reordering nodes remounts ChatEmbed and loses the
+ * transcript's scroll position and any in-flight stream. */
+const PANEL_ORDER: PanelId[] = ['work', 'prs', 'loops', 'schedule']
+
+/* Which card inherits the rail's open slot when the open one is promoted. */
+const PANEL_PICK_ORDER: PanelId[] = ['prs', 'loops', 'schedule', 'work']
+
+const PANEL_LABELS: Record<PanelId, string> = {
+  work: 'Goals / Sessions',
+  prs: 'PRs',
+  loops: 'Loops',
+  schedule: 'Scheduled tasks',
+}
+
+/* The attributes every panel card carries. Spread onto <details> so the four
+ * cards cannot drift apart. */
+interface PanelShellProps {
+  className: string
+  open: boolean
+  draggable: true
+  'data-panel': PanelId
+  'data-primary': 'true' | 'false'
+  'data-rail-index': number | undefined
+  'data-dragover': 'true' | undefined
+  onDragStart: (event: React.DragEvent<HTMLElement>) => void
+  onDragOver: ((event: React.DragEvent) => void) | undefined
+  onDragLeave: (() => void) | undefined
+  onDrop: ((event: React.DragEvent) => void) | undefined
+}
+
+/* Drag is not the only route to promotion — this is the keyboard one. Lives in
+ * the card header so the action sits on the thing it moves. */
+function MakePrimary({ id, onPromote }: { id: PanelId; onPromote: (id: PanelId) => void }) {
+  return (
+    <Btn
+      className="ow-promote"
+      aria-label={`Move ${PANEL_LABELS[id]} to the first column`}
+      onClick={event => { event.preventDefault(); event.stopPropagation(); onPromote(id) }}
+    >
+      Make primary
+    </Btn>
+  )
+}
+
 /**
- * Which bottom-stack card is open. Exactly one at a time, or none.
+ * When the board last loaded, and a manual re-fetch. The label ages when polling
+ * fails, which is the staleness signal.
  *
- * They were independent `<details>` elements, so opening PRs left Loops and
- * Schedule open around it and the list you wanted sat between two others.
- * Native `<details name=...>` groups them in Chromium, but jsdom does not
- * implement that grouping, so the open card is held in state -- otherwise this
- * behaviour could not be tested in this suite at all.
+ * It rides the PRIMARY card's header rather than the Work card's: this is board
+ * state, not one panel's, and Work can now be demoted into the rail — which
+ * would have taken the only refresh control down with it.
  */
-type StackCard = 'prs' | 'loops' | 'schedule'
+function BoardFreshness({ lastUpdated, refreshing, onRefresh }: {
+  lastUpdated: number | null
+  refreshing: boolean
+  onRefresh: () => void
+}) {
+  const since = lastUpdated ? sinceLabel(lastUpdated) : null
+  return (
+    <span className="ow-refreshbar">
+      {since && <span className="ow-updated" aria-live="polite">updated {since}</span>}
+      <Btn
+        className="ow-refresh"
+        onClick={event => { event.preventDefault(); event.stopPropagation(); onRefresh() }}
+        disabled={refreshing}
+        aria-label="Refresh"
+        title="Refresh"
+      >
+        <RefreshCw className={`ow-icon${refreshing ? ' ow-spin' : ''}`} aria-hidden="true" />
+      </Btn>
+    </span>
+  )
+}
 
 type FilterKey = 'all' | WorkState
 
@@ -170,14 +247,12 @@ function persistSemantic(next: SemanticPass): SemanticPass {
   return next
 }
 const INITIATIVE_COLLAPSED_KEY = 'crew-manager.initiative-collapsed'
-const OPEN_STACK_KEY = 'crew-manager.open-stack'
-const SPLIT_KEY = 'crew-manager.split'
+const OPEN_STACK_KEY = 'crew-manager.stack-open-v2'
 const TAB_KEY = 'crew-manager.tab'
-/* Left column width as a percentage: the default, and the drag clamp — past
-   either end one of the two columns stops being usable. */
-const SPLIT_DEFAULT = 40
-const SPLIT_MIN = 25
-const SPLIT_MAX = 75
+/* Which panel holds column 1. A new key: the retired swap flag was a boolean
+ * under a different name, so no old value can be misread as a PanelId. */
+const PRIMARY_KEY = 'crew-manager.primary-v1'
+
 
 function readStore<T>(key: string, fallback: T = {} as T): T {
   try {
@@ -228,10 +303,12 @@ function countPart(n: number, one: string, many: string): string | null {
  * counts only members that actually exist — no start date is invented (the model
  * has no per-goal creation stamp), so it reports last activity instead.
  */
-function goalMetaLine(items: WorkItem[], now: number = Date.now()): string {
+function goalMetaLine(items: WorkItem[], now: number = Date.now(), omitSessions = false): string {
   const c = goalComposition(items)
   const parts = [
-    countPart(c.sessions, 'session', 'sessions'),
+    // A session card's meta would always open with "1 session" — say nothing
+    // there instead of stating the card's own subject back at the reader.
+    omitSessions ? null : countPart(c.sessions, 'session', 'sessions'),
     countPart(c.prs, 'PR', 'PRs'),
     countPart(c.issues, 'issue', 'issues'),
     countPart(c.loops, 'loop', 'loops'),
@@ -316,12 +393,12 @@ function workCopy(key: WorkCopyKey, values: Record<string, string> = {}): string
 }
 
 /**
- * Upper case because these are a fixed set of categories, not prose — the same
- * reason a form field label is not a sentence.
+ * Sentence case so the lane label reads as one family with the "N need you"
+ * count pill instead of shouting over it.
  */
 const verbLabels: Record<ResponseVerb, string> = {
-  followup: 'FOLLOW UP',
-  unblock: 'UNBLOCK',
+  followup: 'Follow up',
+  unblock: 'Unblock',
 }
 
 
@@ -758,7 +835,7 @@ function GoalBlockHeader({ block, status, folded, onToggle, onSplit, selected, o
       </span>
       {onSplit && (
         <Btn
-          className="ow-block-open"
+          className="ow-block-open ow-goal-split"
           title="Not the same goal — split into separate cards"
           aria-label={`Split ${lead.title}`}
           onClick={event => { event.stopPropagation(); onSplit(pairs) }}
@@ -820,37 +897,72 @@ function GoalMergeHint({ item, items, onMerge }: {
   )
 }
 
+/**
+ * A session card wears the SAME anatomy as a goal card — summary row (chevron,
+ * icon, title, action, state flag), then a meta line, then rows. One card
+ * language: a card is either one unit of work or one session holding rows, never
+ * a third shape.
+ *
+ * It carries no "Grouped because" line, on GoalCard's own rule: that line
+ * defends a grouping the agent inferred, and a session was never grouped.
+ */
 function SessionBlockHeader({
   item,
+  items,
+  folded,
+  onToggle,
   onOpen,
 }: {
   item: WorkItem
+  items: WorkItem[]
+  folded?: boolean
+  onToggle?: () => void
   onOpen: () => void
 }) {
   const sessionRef = item.references.find(ref => ref.kind === 'session')
-  const changeRefs = item.references.filter(ref => ref.kind !== 'session')
+  const label = sessionRef?.label ?? item.provenance
+  const comp = goalComposition(items)
+  const state: WorkState = comp.needsYou > 0
+    ? 'needs-you'
+    : items.some(row => row.state === 'running') ? 'running' : 'done'
+  // The header flag would double-label an expanded card: its needs-you rows sit
+  // in an UNBLOCK / FOLLOW UP lane whose badge already says the same thing. So
+  // show the "N need you" count only while the card is COLLAPSED (the lanes are
+  // hidden then, and it is the only signal); once expanded, the lanes speak.
+  // The Running / Done state has no lane badge, so that flag always shows.
+  const flag = comp.needsYou > 0
+    ? (folded ? `${comp.needsYou} need you` : null)
+    : stateLabels[state]
+  // The session IS the card's subject, so its own count is not restated — and
+  // provenance here is the bare word "Session", which the icon already says.
+  const meta = goalMetaLine(items, Date.now(), true)
   return (
-    // Not a clickable header. One visible Open button is the only way in, so the
-    // affordance and the destination are the same thing — a whole-header hit area
-    // put an invisible action behind text that reads as a label.
-    <div className="ow-block-tab">
-      <MessageSquare className="ow-icon" aria-hidden="true" />
-      <span className="ow-truncate ow-block-name">{sessionRef?.label ?? item.provenance}</span>
-      <span className="ow-block-tab-meta">
-        <span aria-hidden="true">·</span>
-        <span className="ow-truncate">{item.provenance}</span>
-        {changeRefs.slice(0, 2).map(ref => (
-          <span key={`${ref.kind}:${ref.id}`} className="ow-truncate">{ref.label}</span>
-        ))}
-      </span>
-      <Btn
-        className="ow-block-open"
-        onClick={onOpen}
-        aria-label={`Open ${sessionRef?.label ?? item.provenance}`}
-      >
-        Open
-      </Btn>
-    </div>
+    <>
+      <div className="ow-goalcard-summary">
+        {onToggle && (
+          <button
+            type="button"
+            className="ow-goalcard-chevron"
+            aria-expanded={!folded}
+            aria-label={`${folded ? 'Expand' : 'Collapse'} ${label}`}
+            onClick={onToggle}
+          >
+            <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
+          </button>
+        )}
+        {/* Static, not a hit area: one visible Open button stays the only way in,
+            so the title must not hint at an action it does not carry. */}
+        <span className="ow-goalcard-header ow-goalcard-static">
+          <MessageSquare className="ow-icon" aria-hidden="true" />
+          <span className="ow-truncate ow-block-name ow-goalcard-title">{label}</span>
+        </span>
+        <Btn className="ow-block-open" onClick={onOpen} aria-label={`Open ${label}`}>
+          Open
+        </Btn>
+        {flag && <span className={`ow-goal-flag${comp.needsYou > 0 ? ' ow-goal-flag-warn' : ''}`}>{flag}</span>}
+      </div>
+      {meta && <div className="ow-goal-meta">{meta}</div>}
+    </>
   )
 }
 
@@ -866,17 +978,21 @@ interface PlatformPrSource {
   additions?: number
   deletions?: number
   changedFiles?: number
+  /** GitHub mergeStateStatus; GitLab's detailed status mapped onto the same set. */
+  mergeStateStatus?: string
+  mergeable?: string
+  autoMerge?: boolean
   checks?: { bucket: 'passed' | 'skipped' | 'failed' | 'pending' }[]
+  comments?: PrReviewComment[]
   files?: { path: string; additions: number; deletions: number }[]
 }
-
-const PR_FILES_SHOWN = 12
 
 /** Map the platform payload onto the card shape. One source of truth: the PR
  *  cards show the same data as the sidebar's Changes panel, fetched the same
  *  way — no separate gh backend to drift or fail differently. */
 function fromPlatformSource(src: PlatformPrSource): PrChecks {
   const counted = (src.checks ?? []).filter(check => check.bucket !== 'skipped')
+  const comments = src.comments ?? []
   return {
     available: true,
     total: counted.length,
@@ -893,9 +1009,11 @@ function fromPlatformSource(src: PlatformPrSource): PrChecks {
     additions: src.additions,
     deletions: src.deletions,
     changed_files: src.changedFiles,
-    files: (src.files ?? []).slice(0, PR_FILES_SHOWN).map(file => ({
-      path: file.path, additions: file.additions, deletions: file.deletions,
-    })),
+    merge_state: src.mergeStateStatus ? src.mergeStateStatus.toLowerCase() : undefined,
+    mergeable: src.mergeable ? src.mergeable.toLowerCase() : undefined,
+    auto_merge: Boolean(src.autoMerge),
+    review: reviewDecision(comments),
+    unresolved: unresolvedThreads(comments),
   }
 }
 
@@ -916,7 +1034,34 @@ interface PrChecks {
   changed_files?: number
   author?: string
   updated_at?: string
-  files?: { path: string; additions: number; deletions: number }[]
+  merge_state?: string
+  mergeable?: string
+  auto_merge?: boolean
+  review?: 'approved' | 'changes-requested' | 'none'
+  unresolved?: number
+}
+
+/* The card's fields, restated as the signals the verdict reads. Both the row's
+ * pill and the filter chips go through this, so they cannot disagree. */
+function prSignals(reference: { status?: string }, checks?: PrChecks): PrSignals {
+  const updatedMs = checks?.updated_at ? Date.parse(checks.updated_at) : 0
+  return {
+    status: reference.status,
+    state: checks?.state,
+    isDraft: checks?.is_draft,
+    mergeState: checks?.merge_state,
+    mergeable: checks?.mergeable,
+    autoMerge: checks?.auto_merge,
+    base: checks?.base,
+    available: checks?.available,
+    total: checks?.total,
+    passing: checks?.passing,
+    failing: checks?.failing,
+    pending: checks?.pending,
+    unresolved: checks?.unresolved,
+    review: checks?.review,
+    updatedAt: updatedMs || undefined,
+  }
 }
 
 function PrBlockHeader({ reference, checks, folded, onToggle }: {
@@ -925,123 +1070,60 @@ function PrBlockHeader({ reference, checks, folded, onToggle }: {
   folded?: boolean
   onToggle?: () => void
 }) {
-  const bad = reference.status ? /fail|conflict|closed/.test(reference.status) : false
   // The real PR title when the backend could fetch it; the bare id otherwise.
   const title = checks?.title || reference.label
-  const stateLabel = checks?.is_draft ? 'Draft' : checks?.state
-    ? checks.state.charAt(0) + checks.state.slice(1).toLowerCase()
-    : null
-  // The sidebar PR view's top line: badge, branch flow, open-externally.
-  const metaRow = (
-    <>
-      {onToggle && (
-        <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
-      )}
-      {stateLabel && (
-        <span
-          className="ow-init-status"
-          data-status={checks?.state === 'MERGED' ? 'done' : (checks?.failing ?? 0) > 0 ? 'needs-you' : 'running'}
-        >
-          {stateLabel}
-        </span>
-      )}
-      {checks?.head && checks?.base && (
-        <span className="ow-truncate ow-pr-branches ow-formal-mono">{checks.head} → {checks.base}</span>
-      )}
-      {!(checks?.head && checks?.base) && <span className="ow-pr-branches" />}
-      {reference.url && (
-        <a
-          className="ow-block-open ow-icon-link"
-          href={reference.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`Open ${reference.label}`}
-          onClick={event => event.stopPropagation()}
-        >
-          <GitPullRequest className="ow-icon" aria-hidden="true" />
-        </a>
-      )}
-    </>
-  )
+  const repo = repoFromUrl(reference.url)
   const updatedMs = checks?.updated_at ? Date.parse(checks.updated_at) : 0
+  const signals = prSignals(reference, checks)
+  const verdict = prVerdict(signals)
+  const blockers = prBlockers(signals)
   const updated = updatedMs ? sinceLabel(updatedMs) : null
+  /* Three rows on every PR, in the order they are read: who and where, then the
+     title with the whole width to itself, then the one blocker line. The title
+     used to share row one with the pill and was the thing that got truncated. */
   const headerBody = (
     <>
-      <div className="ow-pr-head-top">{metaRow}</div>
+      <div className="ow-pr-idline">
+        {onToggle && (
+          <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
+        )}
+        {repo && <span className="ow-pr-repo ow-truncate">{repo}</span>}
+        <span className="ow-pr-number">{reference.label.replace(/^github\s*/, '')}</span>
+        {checks?.author && <span>{checks.author}</span>}
+        {updated && <span className="ow-pr-when">{updated}</span>}
+      </div>
       <div className="ow-pr-title-line">
         <span className="ow-block-name">{title}</span>
-        {checks?.title && <span className="ow-pr-number">{reference.label.replace(/^github\s*/, '')}</span>}
       </div>
     </>
   )
   return (
     <div className="ow-pr-head">
-      {onToggle
-        ? (
-          <Clickable onActivate={onToggle} className="ow-pr-head-click" aria-expanded={!folded}>
-            {headerBody}
-          </Clickable>
-        )
-        : headerBody}
-      <div className="ow-pr-status-line">
-        {checks?.author && <span>{checks.author}</span>}
-        {checks?.title && (
-          <>
-            <span className="ow-pr-adds">+{checks.additions ?? 0}</span>
-            <span className="ow-pr-dels">−{checks.deletions ?? 0}</span>
-          </>
-        )}
-        {updated && <span>Updated {updated}</span>}
-        {/* Real per-check counts from GitHub when available; otherwise the coarse
-            ci status the platform gives natively. */}
-        {checks?.available && (checks.total ?? 0) > 0
+      <div className="ow-pr-head-row">
+        {onToggle
           ? (
-            <span className="ow-pr-dot" data-bad={(checks.failing ?? 0) > 0 ? 'true' : undefined}>
-              {(checks.failing ?? 0) > 0
-                ? `${checks.failing} failing · ${checks.passing ?? 0}/${checks.total} passing`
-                : (checks.pending ?? 0) > 0
-                  ? `${checks.passing ?? 0}/${checks.total} checks passing`
-                  : `All checks passed ${checks.passing ?? 0}/${checks.total}`}
-            </span>
+            <Clickable onActivate={onToggle} className="ow-pr-head-click" aria-expanded={!folded}>
+              {headerBody}
+            </Clickable>
           )
-          : reference.status && (
-            <span className="ow-pr-dot" data-bad={bad ? 'true' : undefined}>{reference.status}</span>
-          )}
+          : <div className="ow-pr-head-click">{headerBody}</div>}
+        <span className="ow-pr-verdict" data-tone={PR_VERDICT_TONES[verdict]}>
+          {PR_VERDICT_LABELS[verdict]}
+        </span>
+        {reference.url && (
+          <a
+            className="ow-block-open ow-icon-link"
+            href={reference.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open ${reference.label}`}
+            onClick={event => event.stopPropagation()}
+          >
+            <GitPullRequest className="ow-icon" aria-hidden="true" />
+          </a>
+        )}
       </div>
-    </div>
-  )
-}
-
-/**
- * The expanded PR body — a compact mirror of the dashboard's own Changes-panel
- * PR view: a "N Files Changed" section with per-file diffstat, right-aligned
- * the way the sidebar draws it.
- */
-function PrDetail({ checks }: { checks?: PrChecks }) {
-  if (!checks?.title) return null
-  return (
-    <div className="ow-pr-detail">
-      <div className="ow-pr-files-head">
-        <span>{checks.changed_files ?? 0} Files Changed</span>
-        <span className="ow-pr-adds">+{checks.additions ?? 0}</span>
-        <span className="ow-pr-dels">−{checks.deletions ?? 0}</span>
-      </div>
-      {(checks.files ?? []).length > 0 && (
-        <div className="ow-pr-files">
-          {(checks.files ?? []).map(file => (
-            <div key={file.path} className="ow-pr-file">
-              <span className="ow-truncate ow-formal-mono">{file.path}</span>
-              <span className="ow-pr-adds">+{file.additions}</span>
-              <span className="ow-pr-dels">−{file.deletions}</span>
-            </div>
-          ))}
-          {(checks.changed_files ?? 0) > (checks.files ?? []).length && (
-            <div className="ow-pr-file ow-pr-more">
-              +{(checks.changed_files ?? 0) - (checks.files ?? []).length} more files
-            </div>
-          )}
-        </div>
-      )}
+      {blockers.length > 0 && <div className="ow-pr-status-line">{blockers.join(' · ')}</div>}
     </div>
   )
 }
@@ -1629,7 +1711,7 @@ function WorkSection({
   // PR mode only: drop whole PR groups that do not match the chosen status chip.
   const shownBlocks = groupBy === 'pr' && prFilter && prFilter !== 'all'
     ? blocks.filter(block => block.changeRef
-        && prBucket(block.changeRef, prChecks?.[block.changeRef.url ?? '']) === prFilter)
+        && prBucket(prSignals(block.changeRef, prChecks?.[block.changeRef.url ?? ''])) === prFilter)
     : blocks
   const initiatives = initiativeBlocks ?? []
   // In PR mode the header counts PRs; in Goal mode it counts big goals (units).
@@ -1645,17 +1727,24 @@ function WorkSection({
       ? collapsedInitiatives?.[block.key]
         ?? !(((blockChecks?.failing ?? 0) > 0) || block.items.some(item => item.state === 'needs-you'))
       : false
+    const sessionFolded = block.header === 'session'
+      ? Boolean(collapsedInitiatives?.[block.key])
+      : false
     return (
             <div
               key={block.key}
-              className="ow-block"
+              className={`ow-block${block.header === 'session' ? ' ow-goalcard' : ''}`}
               // Every card that belongs to a group gets the header, whether it
               // holds one row or five. One row is not a different KIND of thing.
               data-grouped={block.header ? 'true' : undefined}
+              data-open={block.header === 'session' && !sessionFolded ? 'true' : undefined}
             >
               {block.header === 'session' && block.sessionKey && (
                 <SessionBlockHeader
                   item={block.items[0]}
+                  items={block.items}
+                  folded={sessionFolded}
+                  onToggle={onToggleInitiative ? () => onToggleInitiative(block.key, !sessionFolded) : undefined}
                   onOpen={() => onOpenSession(block.sessionKey as string)}
                 />
               )}
@@ -1678,10 +1767,9 @@ function WorkSection({
               {block.header === 'pr' ? (
                 !prFolded && (
                 <>
-                  {/* A compact mirror of the sidebar's PR view, then the sessions
-                      as plain reference CTAs — a session under a PR is a place to
-                      jump to, not a second work list. */}
-                  <PrDetail checks={blockChecks} />
+                  {/* Just the sessions. A session under a PR is a place to jump
+                      to, not a second work list — and the diff itself belongs on
+                      the forge, which the header links to. */}
                   <div className="ow-pr-sessions">
                     <span className="ow-pr-sublabel-inline">Sessions</span>
                     {rollUpSessions(block.items).map(session => (
@@ -1699,6 +1787,7 @@ function WorkSection({
                 </>
                 )
               ) : block.header === 'session' ? (
+                !sessionFolded && (
                 <SessionLanes
                   items={block.items}
                   doneTitles={block.sessionKey ? doneBySession?.[block.sessionKey] : undefined}
@@ -1714,6 +1803,7 @@ function WorkSection({
                   onSnooze={onSnooze}
                   onHandled={onHandled}
                 />
+                )
               ) : (
               block.items.map((item) => (
             <Fragment key={item.id}>
@@ -1868,7 +1958,7 @@ function WorkSection({
           }
           action={onSplitGoal && (
             <Btn
-              className="ow-block-open"
+              className="ow-block-open ow-goal-split"
               title="Not the same goal — split into separate cards"
               aria-label={`Split ${lead.title}`}
               onClick={event => { event.stopPropagation(); onSplitGoal(pairs) }}
@@ -2009,6 +2099,78 @@ function contextMessage(item: WorkItem | null, items: WorkItem[]): string {
   ].filter((line): line is string => Boolean(line)).join('\n')
 }
 
+const PANEL_WIDTHS_KEY = 'crew-manager.panel-widths'
+/* Resize bounds in px. Each handle's `reserve` is the space the panel on the
+   OTHER side must keep, so a drag can never collapse it. */
+const COLW = { workMin: 300, railReserve: 370, conductorMin: 300, conductorMax: 620, mainReserve: 676 }
+type PanelWidths = { work: number | null; conductor: number | null }
+
+/* Keep a size within [min, container - reserve], never above max. */
+function clampSize(raw: number, containerW: number, min: number, reserve: number, max: number): number {
+  const hi = Math.min(max, Math.max(min, containerW - reserve))
+  return Math.max(min, Math.min(hi, raw))
+}
+
+/* A draggable/keyboard divider that resizes one neighbouring panel. `side`
+   'start' grows the left panel as the divider moves right; 'end' grows the
+   right panel as it moves left. Value is that panel's width in px, or null
+   while the CSS default still governs. */
+function ColumnResizer({ side, containerRef, min, reserve, max, value, onChange, label }: {
+  side: 'start' | 'end'
+  containerRef: { current: HTMLElement | null }
+  min: number
+  reserve: number
+  max: number
+  value: number | null
+  onChange: (px: number) => void
+  label: string
+}) {
+  const sizeFromPointer = (clientX: number, el: HTMLElement): number => {
+    const rect = el.getBoundingClientRect()
+    const raw = side === 'start' ? clientX - rect.left : rect.right - clientX
+    return clampSize(raw, el.clientWidth, min, reserve, max)
+  }
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const el = containerRef.current
+    if (!el) return
+    e.preventDefault()
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    const move = (ev: PointerEvent) => onChange(sizeFromPointer(ev.clientX, el))
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    const el = containerRef.current
+    if (!el) return
+    e.preventDefault()
+    const step = (e.shiftKey ? 48 : 16) * (e.key === 'ArrowRight' ? 1 : -1)
+    const current = value ?? (side === 'start' ? el.clientWidth / 2 : Math.round(el.clientWidth * 0.3))
+    onChange(clampSize(current + (side === 'start' ? step : -step), el.clientWidth, min, reserve, max))
+  }
+
+  return (
+    <div
+      className="ow-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={label}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+    />
+  )
+}
+
 export default function CrewOverviewApp() {
   const api = useAppApi()
   const apiRef = useRef(api)
@@ -2018,19 +2180,31 @@ export default function CrewOverviewApp() {
   const [filter, setFilter] = useState<FilterKey>('all')
   /*
    * The list card's tab. Only ever 'goal' or 'session' — 'pr' is still a real
-   * GroupMode, but PR grouping now lives permanently in the bottom stack's PRs
+   * GroupMode, but PR grouping now lives permanently in the utility rail's PRs
    * card rather than being a third thing this control switches to.
    *
    * This supersedes the branch's own GROUP_BY_KEY persistence: the choice is
    * still remembered across refreshes (see the writeStore effect below), just
    * under TAB_KEY and without a 'pr' value the tabs can no longer produce.
    */
-  const [openStack, setOpenStack] = useState<StackCard | null>(
-    () => readStore<StackCard | null>(OPEN_STACK_KEY, null) ?? 'prs',
-  )
-  // Clicking the open card closes it; clicking another switches. Toggling rather
-  // than always-opening keeps "collapse everything" reachable.
-  const toggleStack = useCallback((card: StackCard) => {
+  /* Column 1 holds exactly one panel, expanded; the other three sit in the
+   * column-2 accordion. Conductor is column 3 and never participates. */
+  const [primary, setPrimary] = useState<PanelId>(() => {
+    const stored = readStore<PanelId | null>(PRIMARY_KEY, null)
+    return stored && PANEL_ORDER.includes(stored) ? stored : 'work'
+  })
+  const [openStack, setOpenStack] = useState<PanelId | null>(() => {
+    const stored = readStore<PanelId | null>(OPEN_STACK_KEY, null) ?? 'prs'
+    const valid = PANEL_ORDER.includes(stored) ? stored : 'prs'
+    // openStack may never name the primary — that card is expanded in column 1,
+    // so pointing the rail's open slot at it would leave the rail with none.
+    const seed = readStore<PanelId | null>(PRIMARY_KEY, null)
+    const current = seed && PANEL_ORDER.includes(seed) ? seed : 'work'
+    return valid === current ? PANEL_PICK_ORDER.find(id => id !== current) ?? null : valid
+  })
+  // One open at a time: opening a card closes the others, and clicking the open
+  // card closes it, so "collapse everything" stays reachable.
+  const toggleStack = useCallback((card: PanelId) => {
     setOpenStack(current => {
       const next = current === card ? null : card
       writeStore(OPEN_STACK_KEY, next)
@@ -2066,6 +2240,26 @@ export default function CrewOverviewApp() {
   const [snoozed, setSnoozed] = useState<Record<string, number>>(() => readStore(SNOOZE_KEY))
   const [handled, setHandled] = useState<Record<string, number>>(() => readStore(HANDLED_KEY))
   const [goalVerdicts, setGoalVerdicts] = useState<GoalVerdicts>(() => readStore(GOAL_VERDICTS_KEY, { merged: [], split: [] }))
+  // User-dragged column widths (px), or null while the CSS default governs.
+  const layoutRef = useRef<HTMLDivElement>(null)
+  const mainRef = useRef<HTMLDivElement>(null)
+  const [panelW, setPanelW] = useState<PanelWidths>(() => readStore(PANEL_WIDTHS_KEY, { work: null, conductor: null }))
+  useEffect(() => { writeStore(PANEL_WIDTHS_KEY, panelW) }, [panelW])
+  // A stored width saved on a wider window can overflow a narrower one; re-clamp
+  // on mount AND on resize so the opposite panel never gets squeezed to nothing.
+  useEffect(() => {
+    const reclamp = () => setPanelW(p => {
+      const mainW = mainRef.current?.clientWidth ?? 0
+      const layoutW = layoutRef.current?.clientWidth ?? 0
+      return {
+        work: p.work == null || mainW === 0 ? p.work : clampSize(p.work, mainW, COLW.workMin, COLW.railReserve, Infinity),
+        conductor: p.conductor == null || layoutW === 0 ? p.conductor : clampSize(p.conductor, layoutW, COLW.conductorMin, COLW.mainReserve, COLW.conductorMax),
+      }
+    })
+    reclamp()
+    window.addEventListener('resize', reclamp)
+    return () => window.removeEventListener('resize', reclamp)
+  }, [])
   const priorGoals = useRef<PriorGoal[]>(readStore<PriorGoal[]>(GOAL_MEMORY_KEY, []))
   // The semantic pass's verdicts. Pairs merge clusters (always below the user's
   // own Split pins); why lines feed the card's "Grouped because" copy. Cached
@@ -2096,9 +2290,63 @@ export default function CrewOverviewApp() {
   // second time — note `loops` above is detect.py's REPEAT-FAILURE finding, a
   // different thing wearing the same word.
   const [cronRuns, setCronRuns] = useState<CronRun[]>([])
-  // Left column width as a percentage, and the live drag flag.
-  const [splitPct, setSplitPct] = useState<number>(() => readStore<number | null>(SPLIT_KEY, null) ?? SPLIT_DEFAULT)
-  const [resizing, setResizing] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  /* Promotion is a swap of two slots: the dropped card takes column 1 and the
+   * card it displaces joins the rail. */
+  const promote = useCallback((id: PanelId) => {
+    if (id === primary) return
+    const nextOpen = openStack === id ? PANEL_PICK_ORDER.find(card => card !== id) ?? null : openStack
+    writeStore(PRIMARY_KEY, id)
+    writeStore(OPEN_STACK_KEY, nextOpen)
+    setPrimary(id)
+    setOpenStack(nextOpen)
+  }, [primary, openStack])
+  const startPanelDrag = useCallback((event: React.DragEvent<HTMLElement>, id: PanelId) => {
+    event.dataTransfer.setData('text/x-crew-panel', id)
+    event.dataTransfer.effectAllowed = 'move'
+    /* Pin the ghost to this card's own header. Left to infer one, the browser
+       painted the whole column — so dragging one card looked like moving all
+       three, and the header alone reads as "this card is the thing moving". */
+    const header = event.currentTarget.querySelector('summary')
+    if (!header) return
+    const rect = header.getBoundingClientRect()
+    event.dataTransfer.setDragImage(
+      header,
+      Math.min(Math.max(event.clientX - rect.left, 0), rect.width),
+      Math.min(Math.max(event.clientY - rect.top, 0), rect.height),
+    )
+  }, [])
+  // Column 1 is the only drop target, and the primary card is what fills it.
+  const dropPanel = useCallback((event: React.DragEvent) => {
+    event.preventDefault()
+    setDragOver(false)
+    const id = event.dataTransfer.getData('text/x-crew-panel') as PanelId | ''
+    if (!id || !PANEL_ORDER.includes(id)) return
+    promote(id)
+  }, [promote])
+  /* Every panel is the same card. Placement, open state and drop-target duty all
+   * come from `primary`, so the DOM order below stays fixed. */
+  const railOrder = useMemo(() => PANEL_ORDER.filter(id => id !== primary), [primary])
+  /* Which of column 2's three rows takes the leftover height. A grid row cannot
+   * size itself from the item in it, so the open card's row index has to reach
+   * the container. */
+  const openRow = openStack && openStack !== primary ? String(railOrder.indexOf(openStack)) : 'none'
+  const panelShell = (id: PanelId): PanelShellProps => {
+    const isPrimary = id === primary
+    return {
+      className: 'ow-card ow-stack-card',
+      open: isPrimary || openStack === id,
+      draggable: true,
+      'data-panel': id,
+      'data-primary': isPrimary ? 'true' : 'false',
+      'data-rail-index': isPrimary ? undefined : railOrder.indexOf(id),
+      'data-dragover': isPrimary && dragOver ? 'true' : undefined,
+      onDragStart: event => startPanelDrag(event, id),
+      onDragOver: isPrimary ? event => { event.preventDefault(); setDragOver(true) } : undefined,
+      onDragLeave: isPrimary ? () => setDragOver(false) : undefined,
+      onDrop: isPrimary ? dropPanel : undefined,
+    }
+  }
   // Flips false the first time the backend route is unreachable.
   const stallProbeRef = useRef(true)
   const [sourcesLoading, setSourcesLoading] = useState(true)
@@ -2316,7 +2564,7 @@ export default function CrewOverviewApp() {
     for (const block of clusterBy(items, 'pr')) {
       if (!block.changeRef) continue
       tally.all++
-      const bucket = prBucket(block.changeRef, prChecks[block.changeRef.url ?? ''])
+      const bucket = prBucket(prSignals(block.changeRef, prChecks[block.changeRef.url ?? '']))
       if (bucket !== 'other') tally[bucket]++
     }
     return tally
@@ -2356,32 +2604,8 @@ export default function CrewOverviewApp() {
     if (selectedId && !items.some(item => item.id === selectedId)) setSelectedId(null)
   }, [items, selectedId])
 
-  /* Persist the tab and the column split so the board reopens as it was left. */
+  /* Persist the selected Goals/Sessions tab across refreshes. */
   useEffect(() => { writeStore(TAB_KEY, groupBy) }, [groupBy])
-  useEffect(() => { writeStore(SPLIT_KEY, splitPct) }, [splitPct])
-
-  /*
-   * Column drag. Listeners live on the window for the duration of the gesture,
-   * not on the handle: the pointer routinely outruns a 10px target, and a
-   * handle-scoped listener would drop the drag the moment it did.
-   */
-  const layoutRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    if (!resizing) return
-    const onMove = (event: MouseEvent) => {
-      const box = layoutRef.current?.getBoundingClientRect()
-      if (!box || box.width === 0) return
-      const pct = ((event.clientX - box.left) / box.width) * 100
-      setSplitPct(Math.max(SPLIT_MIN, Math.min(SPLIT_MAX, pct)))
-    }
-    const onUp = () => setResizing(false)
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [resizing])
 
   const conductorSlot = sources?.slots.find(slot => slot.key === CONDUCTOR_SLOT)
   const conductorAvailable = Boolean(conductorSlot || conductorCreated)
@@ -3013,55 +3237,59 @@ export default function CrewOverviewApp() {
   return (
     <div className="ow-root" data-crew-manager-shell="quiet-split">
       <style>{OVERWATCH_STYLES}</style>
-      <PageHeader
-        title="Crew Manager"
-        subtitle="See what needs your input, what is still running, and what finished recently."
-      />
+      <div className="ow-titlebar">
+        {/* Beta pill inline with the name so the two read as one label. */}
+        <PageHeader
+          title={<span className="ow-title-line">Crew Manager<span className="ow-beta" aria-label="Beta preview">Beta</span></span>}
+          subtitle="See what needs your input, what is still running, and what finished recently."
+        />
+      </div>
       <div className="ow-body">
-        <div className="ow-layout" ref={layoutRef}>
-          <div className="ow-main" style={{ flexBasis: `${splitPct}%` }}>
-            <section className="ow-card ow-listcard" aria-label="Work">
-              <div className="ow-listcard-head">
-                {/* Goals and Sessions were the Group by rail's first two modes.
-                    They are the same two lenses, promoted to the card's own title
-                    row — the third (PR) is the bottom stack's PRs card now. */}
-                <div className="ow-tabrow">
-                  <div className="ow-tabs" role="tablist" aria-label="View">
-                    {(['goal', 'session'] as GroupMode[]).map(mode => (
-                      <Btn
-                        key={mode}
-                        role="tab"
-                        aria-selected={groupBy === mode}
-                        data-selected={groupBy === mode}
-                        className="ow-tab"
-                        onClick={() => setGroupBy(mode)}
-                      >
-                        {mode === 'goal' ? 'Goals' : 'Sessions'}
-                      </Btn>
-                    ))}
-                  </div>
-                  {/* When the board last loaded, and a manual re-fetch. The label
-                      ages when polling fails, which is the staleness signal. */}
-                  <div className="ow-refreshbar">
-                    {lastUpdated && (
-                      <span className="ow-updated" aria-live="polite">
-                        updated {sinceLabel(lastUpdated)}
+        <div
+          className="ow-layout"
+          ref={layoutRef}
+          style={panelW.conductor != null ? ({ '--ow-conductor-w': `${panelW.conductor}px` } as CSSProperties) : undefined}
+        >
+          <div
+            className="ow-main"
+            data-open-row={openRow}
+            ref={mainRef}
+            style={panelW.work != null ? ({ '--ow-work-w': `${panelW.work}px` } as CSSProperties) : undefined}
+          >
+            <details {...panelShell('work')} aria-label="Work">
+              {/* Goals and Sessions were the Group by rail's first two modes.
+                  They are the same two lenses, promoted to the card's own header
+                  row — the third (PR) is the utility rail's PRs card now. When
+                  Work is demoted the tabs give way to a plain label, because a
+                  collapsed card has no list for them to switch. */}
+              <summary onClick={event => { event.preventDefault(); if (primary !== 'work') toggleStack('work') }}>
+                <span className="ow-stack-title">
+                  <ChevronRight className="ow-icon ow-stack-chevron" />
+                  <Users className="ow-icon" />
+                  {primary === 'work'
+                    ? (
+                      <span className="ow-tabs" role="tablist" aria-label="View">
+                        {(['goal', 'session'] as GroupMode[]).map(mode => (
+                          <Btn
+                            key={mode}
+                            role="tab"
+                            aria-selected={groupBy === mode}
+                            data-selected={groupBy === mode}
+                            className="ow-tab"
+                            onClick={() => setGroupBy(mode)}
+                          >
+                            {mode === 'goal' ? 'Goals' : 'Sessions'}
+                          </Btn>
+                        ))}
                       </span>
-                    )}
-                    <Btn
-                      className="ow-refresh"
-                      onClick={refreshSources}
-                      disabled={refreshing}
-                      aria-label="Refresh"
-                      title="Refresh"
-                    >
-                      <RefreshCw
-                        className={`ow-icon${refreshing ? ' ow-spin' : ''}`}
-                        aria-hidden="true"
-                      />
-                    </Btn>
-                  </div>
-                </div>
+                    )
+                    : PANEL_LABELS.work}
+                </span>
+                <span className="ow-stack-actions">
+                  <Badge variant="muted">{counts.all}</Badge>
+                  {primary === 'work' ? <BoardFreshness lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={refreshSources} /> : <MakePrimary id="work" onPromote={promote} />}
+                </span>
+              </summary>
                 <div className="ow-listcard-tools">
                   <p className="ow-listcard-sub">
                     {groupBy === 'goal'
@@ -3087,7 +3315,6 @@ export default function CrewOverviewApp() {
                     </div>
                   )}
                 </div>
-              </div>
 
               <main className="ow-work">
                 <div className="ow-work-inner">
@@ -3185,6 +3412,8 @@ export default function CrewOverviewApp() {
                 onStop={path => { void stopLoop(path) }}
                 stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
+                            collapsedInitiatives={collapsedInitiatives}
+                            onToggleInitiative={toggleInitiative}
                             groupBy={groupBy}
                             emptyLabel="Nothing needs your input right now."
                           />
@@ -3204,6 +3433,8 @@ export default function CrewOverviewApp() {
                 onStop={path => { void stopLoop(path) }}
                 stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
+                            collapsedInitiatives={collapsedInitiatives}
+                            onToggleInitiative={toggleInitiative}
                             groupBy={groupBy}
                             emptyLabel="Nothing is in progress right now."
                           />
@@ -3224,6 +3455,8 @@ export default function CrewOverviewApp() {
                 onStop={path => { void stopLoop(path) }}
                 stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
+                            collapsedInitiatives={collapsedInitiatives}
+                            onToggleInitiative={toggleInitiative}
                             groupBy={groupBy}
                             emptyLabel="No recent completed work."
                           />
@@ -3244,31 +3477,53 @@ export default function CrewOverviewApp() {
                 onStop={path => { void stopLoop(path) }}
                 stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
+                          collapsedInitiatives={collapsedInitiatives}
+                          onToggleInitiative={toggleInitiative}
                           groupBy={groupBy}
                           emptyLabel="No matching work"
                         />
                       )}
                 </div>
               </main>
-            </section>
+            </details>
 
-            {/* Companion surfaces, pinned below the scrolling list. None of these
-                is a lens on the list — each is its own kind of thing, which is
-                why they can live here permanently instead of behind a switch. */}
-            <div className="ow-stack">
-              <details
-                  className="ow-card ow-stack-card"
-                  open={openStack === 'prs'}
-                >
-                <summary onClick={event => { event.preventDefault(); toggleStack('prs') }}>
+            {/* Companion surfaces. None of these is a lens on the work list —
+                each is its own kind of thing, so they are peers of Work rather
+                than modes of it, and any of them can take column 1. */}
+              <details {...panelShell('prs')}>
+                <summary onClick={event => { event.preventDefault(); if (primary !== 'prs') toggleStack('prs') }}>
                   <span className="ow-stack-title">
                     <ChevronRight className="ow-icon ow-stack-chevron" />
                     <GitPullRequest className="ow-icon" />
                     PRs
                   </span>
-                  <Badge variant="muted">{prCounts.all} open</Badge>
+                  <span className="ow-stack-actions">
+                    <Badge variant="muted">{prCounts.all}</Badge>
+                    {primary === 'prs' ? <BoardFreshness lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={refreshSources} /> : <MakePrimary id="prs" onPromote={promote} />}
+                  </span>
                 </summary>
-                <p className="ow-stack-sub">Open pull requests your work touches</p>
+                <p className="ow-stack-sub">Pull requests your work touches, and what is holding each one up</p>
+                {/* Pinned above the scroller, like the work card's filters: a
+                    control that scrolls away from the list it filters is only
+                    reachable by scrolling back. */}
+                {prCounts.all > 0 && (
+                  <div className="ow-pr-tools">
+                    <div className="ow-filters" role="group" aria-label="Filter by PR status">
+                      {(Object.keys(prFilterLabels) as PrFilterKey[]).map(key => (
+                        <Btn
+                          key={key}
+                          onClick={() => setPrFilter(key)}
+                          aria-pressed={prFilter === key}
+                          data-selected={prFilter === key}
+                          className="ow-filter"
+                        >
+                          {prFilterLabels[key]}
+                          <span className="ow-count">{prCounts[key]}</span>
+                        </Btn>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="ow-stack-body">
                   {prCounts.all === 0
                     ? (
@@ -3279,26 +3534,13 @@ export default function CrewOverviewApp() {
                     )
                     : (
                       <>
-                        <div className="ow-filters" role="group" aria-label="Filter by PR status">
-                          {(Object.keys(prFilterLabels) as PrFilterKey[]).map(key => (
-                            <Btn
-                              key={key}
-                              onClick={() => setPrFilter(key)}
-                              aria-pressed={prFilter === key}
-                              data-selected={prFilter === key}
-                              className="ow-filter"
-                            >
-                              {prFilterLabels[key]}
-                              <span className="ow-count">{prCounts[key]}</span>
-                            </Btn>
-                          ))}
-                        </div>
                         {/* The PR lens itself, unchanged — the same WorkSection the
                             rail used to switch to, rendered in its own card. Reads
                             `items`: this card is not downstream of the Sessions
                             filter, and its own status chips do its narrowing. */}
                         <WorkSection
                           title="Work by PR"
+                          hideHeader
                           items={items}
                           prChecks={prChecks}
                           prFilter={prFilter}
@@ -3323,17 +3565,17 @@ export default function CrewOverviewApp() {
                 </div>
               </details>
 
-              <details
-                  className="ow-card ow-stack-card"
-                  open={openStack === 'loops'}
-                >
-                <summary onClick={event => { event.preventDefault(); toggleStack('loops') }}>
+              <details {...panelShell('loops')}>
+                <summary onClick={event => { event.preventDefault(); if (primary !== 'loops') toggleStack('loops') }}>
                   <span className="ow-stack-title">
                     <ChevronRight className="ow-icon ow-stack-chevron" />
                     <Radar className="ow-icon" />
                     Loops
                   </span>
-                  <Badge variant="muted">{loopRows.length}</Badge>
+                  <span className="ow-stack-actions">
+                    <Badge variant="muted">{loopRows.length}</Badge>
+                    {primary === 'loops' ? <BoardFreshness lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={refreshSources} /> : <MakePrimary id="loops" onPromote={promote} />}
+                  </span>
                 </summary>
                 <p className="ow-stack-sub">Sessions repeating a goal until it is done</p>
                 <div className="ow-stack-body">
@@ -3367,19 +3609,19 @@ export default function CrewOverviewApp() {
                 </div>
               </details>
 
-              <details
-                  className="ow-card ow-stack-card"
-                  open={openStack === 'schedule'}
-                >
-                <summary onClick={event => { event.preventDefault(); toggleStack('schedule') }}>
+              <details {...panelShell('schedule')}>
+                <summary onClick={event => { event.preventDefault(); if (primary !== 'schedule') toggleStack('schedule') }}>
                   <span className="ow-stack-title">
                     <ChevronRight className="ow-icon ow-stack-chevron" />
                     <Clock3 className="ow-icon" />
                     Scheduled tasks
                   </span>
-                  <Badge variant={cronToday.failed > 0 ? 'err' : 'muted'}>
-                    {cronToday.done}/{cronToday.total} today
-                  </Badge>
+                  <span className="ow-stack-actions">
+                    <Badge variant={cronToday.failed > 0 ? 'err' : 'muted'}>
+                      {cronToday.done}/{cronToday.total} today
+                    </Badge>
+                    {primary === 'schedule' ? <BoardFreshness lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={refreshSources} /> : <MakePrimary id="schedule" onPromote={promote} />}
+                  </span>
                 </summary>
                 <p className="ow-stack-sub">
                   {cronToday.historyKnown
@@ -3425,18 +3667,27 @@ export default function CrewOverviewApp() {
                     })}
                 </div>
               </details>
-            </div>
+            <ColumnResizer
+              side="start"
+              containerRef={mainRef}
+              min={COLW.workMin}
+              reserve={COLW.railReserve}
+              max={Infinity}
+              value={panelW.work}
+              onChange={px => setPanelW(p => ({ ...p, work: px }))}
+              label="Resize the work column"
+            />
           </div>
 
-          {/* Column split. A button, not a bare div: it has to be reachable and it
-              is a real control. Double-click restores the default width. */}
-          <button
-            type="button"
-            className="ow-resizer"
-            aria-label="Resize columns"
-            data-dragging={resizing ? 'true' : undefined}
-            onMouseDown={event => { event.preventDefault(); setResizing(true) }}
-            onDoubleClick={() => setSplitPct(SPLIT_DEFAULT)}
+          <ColumnResizer
+            side="end"
+            containerRef={layoutRef}
+            min={COLW.conductorMin}
+            reserve={COLW.mainReserve}
+            max={COLW.conductorMax}
+            value={panelW.conductor}
+            onChange={px => setPanelW(p => ({ ...p, conductor: px }))}
+            label="Resize the Conductor panel"
           />
 
           <aside className="ow-conductor" aria-label="Conductor">

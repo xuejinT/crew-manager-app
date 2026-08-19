@@ -118,20 +118,219 @@ export type PrBucket = 'failing' | 'running' | 'merged' | 'other'
  * the coarse ci status; a merge conflict is failing because it needs you even
  * when checks are green. `other` (green/open/closed) shows only under All.
  */
-export function prBucket(
-  ref: { status?: string },
-  checks?: { available?: boolean; total?: number; failing?: number; pending?: number },
-): PrBucket {
-  if (ref.status === 'merged') return 'merged'
-  if (ref.status === 'conflict') return 'failing'
-  if (checks?.available && (checks.total ?? 0) > 0) {
-    if ((checks.failing ?? 0) > 0) return 'failing'
-    if ((checks.pending ?? 0) > 0) return 'running'
-    return 'other'
-  }
-  if (ref.status === 'checks failing') return 'failing'
-  if (ref.status === 'checks running') return 'running'
+/**
+ * Which filter chip a PR answers to. A projection of the verdict, not a second
+ * opinion: the chips and the row pills have to agree, or a Merged row sits in a
+ * list whose Merged chip reads 0.
+ */
+export function prBucket(pr: PrSignals): PrBucket {
+  const verdict = prVerdict(pr)
+  if (verdict === 'merged') return 'merged'
+  if (verdict === 'conflict' || verdict === 'ci-failing' || verdict === 'changes-requested') return 'failing'
+  if (verdict === 'checks-running') return 'running'
   return 'other'
+}
+
+/**
+ * One verdict per PR, in the order the user should act on them: a conflict has
+ * to be cleared before a re-run of CI means anything, and a merged or closed PR
+ * outranks everything because nothing about it is actionable.
+ */
+export type PrVerdict =
+  | 'merged' | 'closed' | 'draft' | 'conflict' | 'ci-failing' | 'behind'
+  | 'checks-running' | 'changes-requested' | 'comments-open' | 'needs-review'
+  | 'ready' | 'open'
+
+export const PR_VERDICT_LABELS: Record<PrVerdict, string> = {
+  merged: 'Merged',
+  closed: 'Closed',
+  draft: 'Draft',
+  conflict: 'Conflict',
+  'ci-failing': 'CI failing',
+  behind: 'Behind base',
+  'checks-running': 'Checks running',
+  'changes-requested': 'Changes requested',
+  'comments-open': 'Comments open',
+  'needs-review': 'Needs review',
+  ready: 'Ready',
+  open: 'Open',
+}
+
+/* Pill colour. Blocking-and-yours is red, waiting-on-someone is amber, mergeable
+   is green, and anything with no next move is grey. */
+export const PR_VERDICT_TONES: Record<PrVerdict, 'err' | 'warn' | 'ok' | 'muted'> = {
+  merged: 'muted',
+  closed: 'muted',
+  draft: 'muted',
+  conflict: 'err',
+  'ci-failing': 'err',
+  behind: 'warn',
+  'checks-running': 'warn',
+  'changes-requested': 'err',
+  'comments-open': 'warn',
+  'needs-review': 'warn',
+  ready: 'ok',
+  open: 'muted',
+}
+
+export interface PrSignals {
+  /** The platform's coarse status, used when the richer fields are absent. */
+  status?: string
+  state?: string
+  isDraft?: boolean
+  /** GitHub mergeStateStatus, or GitLab's mapped onto the same vocabulary. */
+  mergeState?: string
+  mergeable?: string
+  autoMerge?: boolean
+  base?: string
+  available?: boolean
+  total?: number
+  passing?: number
+  failing?: number
+  pending?: number
+  unresolved?: number
+  review?: 'approved' | 'changes-requested' | 'none'
+  updatedAt?: number
+}
+
+const STALE_DAYS = 2
+
+/* `status` is the platform's coarse reading and can be stale. Everywhere below it
+   is a FALLBACK: when the fetched fields answer the same question, they win. */
+function conflicting(pr: PrSignals): boolean {
+  if (pr.mergeable === 'conflicting' || pr.mergeState === 'dirty') return true
+  if (pr.mergeable || pr.mergeState) return false
+  return pr.status === 'conflict'
+}
+
+export function prVerdict(pr: PrSignals): PrVerdict {
+  const state = (pr.state ?? '').toUpperCase()
+  const live = Boolean(pr.available) && (pr.total ?? 0) > 0
+  if (state === 'MERGED' || (!state && pr.status === 'merged')) return 'merged'
+  if (state === 'CLOSED') return 'closed'
+  if (pr.isDraft || pr.mergeState === 'draft') return 'draft'
+  if (conflicting(pr)) return 'conflict'
+  if ((pr.failing ?? 0) > 0 || (!live && pr.status === 'checks failing')) return 'ci-failing'
+  // A person waiting on you outranks bookkeeping: a rebase does not answer a
+  // review, and a merge queue often handles being behind on its own.
+  if (pr.review === 'changes-requested') return 'changes-requested'
+  if ((pr.unresolved ?? 0) > 0) return 'comments-open'
+  if (pr.mergeState === 'behind' || pr.mergeState === 'need_rebase') return 'behind'
+  if ((pr.pending ?? 0) > 0 || (!live && pr.status === 'checks running')) return 'checks-running'
+  if (pr.mergeState === 'blocked') return 'needs-review'
+  if (pr.review === 'approved') return 'ready'
+  if (pr.mergeState === 'clean' && live && (pr.failing ?? 0) === 0) return 'ready'
+  return 'open'
+}
+
+const BLOCKER_PIECES = 4
+
+/**
+ * The row's one plain-English line: what is actually holding this PR up. Named
+ * facts, not a score — "2 checks failing · merge conflict with main" tells the
+ * user what to go and do, which a check ratio does not.
+ *
+ * Nothing here restates the verdict pill: a row reading "Draft — Draft" spends a
+ * line saying nothing, so any piece matching the pill's own label is dropped.
+ */
+export function prBlockers(pr: PrSignals, now: number = Date.now()): string[] {
+  const pieces: string[] = []
+  const state = (pr.state ?? '').toUpperCase()
+  if (state === 'MERGED' || pr.status === 'merged') return []
+  if (state === 'CLOSED') return []
+  if (pr.isDraft || pr.mergeState === 'draft') pieces.push('Draft')
+  if (pr.review === 'changes-requested') pieces.push('Changes requested')
+  else if (pr.review === 'approved') pieces.push('Approved')
+
+  const failing = pr.failing ?? 0
+  const pending = pr.pending ?? 0
+  if (failing > 0) pieces.push(`${failing} check${failing === 1 ? '' : 's'} failing`)
+  else if (pending > 0) pieces.push(`${pending} check${pending === 1 ? '' : 's'} running`)
+  else if (pr.available && (pr.total ?? 0) > 0) pieces.push('All checks passing')
+
+  if (conflicting(pr)) pieces.push(`merge conflict with ${pr.base || 'the base branch'}`)
+  else if (pr.mergeState === 'behind' || pr.mergeState === 'need_rebase') {
+    pieces.push(`behind ${pr.base || 'the base branch'}`)
+  }
+
+  const unresolved = pr.unresolved ?? 0
+  if (unresolved > 0) pieces.push(`${unresolved} unresolved comment${unresolved === 1 ? '' : 's'}`)
+  if (pr.mergeState === 'blocked' && pr.review !== 'changes-requested') pieces.push('waiting on review')
+  if (pr.autoMerge) pieces.push('auto-merge armed')
+  else if (prVerdict(pr) === 'ready') pieces.push('ready to merge')
+
+  // Staleness is the quiet killer: a PR nobody has touched in days shows nothing
+  // wrong on any individual field.
+  const days = pr.updatedAt ? Math.floor((now - pr.updatedAt) / 86_400_000) : 0
+  if (days >= STALE_DAYS) pieces.push(`no activity in ${days} days`)
+
+  const pill = PR_VERDICT_LABELS[prVerdict(pr)].toLowerCase()
+  return pieces.filter(piece => piece.toLowerCase() !== pill).slice(0, BLOCKER_PIECES)
+}
+
+/** A review comment as the platform PR payload reports it. */
+export interface PrReviewComment {
+  kind?: string
+  state?: string
+  author?: string
+  createdAt?: string
+  threadId?: string
+  id?: string
+  resolvable?: boolean
+  resolved?: boolean
+}
+
+/**
+ * The PR's review decision. Latest review per author wins: an approval that
+ * follows the same person's change request is no longer a block, and counting
+ * raw states would leave the PR blocked forever.
+ */
+export function reviewDecision(comments: PrReviewComment[]): 'approved' | 'changes-requested' | 'none' {
+  const latest = new Map<string, { at: number; state: string }>()
+  for (const comment of comments) {
+    if (comment.kind !== 'review') continue
+    const state = (comment.state ?? '').toUpperCase()
+    if (state !== 'APPROVED' && state !== 'CHANGES_REQUESTED') continue
+    const at = comment.createdAt ? Date.parse(comment.createdAt) || 0 : 0
+    const author = comment.author ?? ''
+    const prior = latest.get(author)
+    if (!prior || at >= prior.at) latest.set(author, { at, state })
+  }
+  const states = [...latest.values()].map(entry => entry.state)
+  if (states.includes('CHANGES_REQUESTED')) return 'changes-requested'
+  if (states.includes('APPROVED')) return 'approved'
+  return 'none'
+}
+
+/** Open review threads, counted once per thread rather than once per comment. */
+export function unresolvedThreads(comments: PrReviewComment[]): number {
+  const open = new Set<string>()
+  for (const comment of comments) {
+    if (!comment.resolvable || comment.resolved) continue
+    open.add(comment.threadId || comment.id || '')
+  }
+  return open.size
+}
+
+/**
+ * The repository a PR url belongs to. The board spans repos, so the row has to
+ * say which one — and the url is the PR's identity, so it is the honest source.
+ */
+export function repoFromUrl(url?: string): string | undefined {
+  if (!url) return undefined
+  let path: string
+  try {
+    path = new URL(url).pathname
+  } catch {
+    return undefined
+  }
+  const segments = path.split('/').filter(Boolean)
+  // GitLab nests groups and separates the project with /-/: .../project/-/merge_requests/12
+  const dash = segments.indexOf('-')
+  if (dash > 0) return segments[dash - 1]
+  const marker = segments.findIndex(segment => segment === 'pull' || segment === 'pulls' || segment === 'merge_requests')
+  if (marker > 0) return segments[marker - 1]
+  return segments.length > 1 ? segments[1] : undefined
 }
 
 export interface WorkItem {
