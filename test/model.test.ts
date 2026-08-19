@@ -23,6 +23,8 @@ import {
   initiativeFor,
   rollupStatus,
   sameGoal,
+  sessionNameMismatch,
+  suggestGoalNames,
   titleOverlap,
   titleWords,
   normalizeWorkItems as normalizeWorkItemsWithCopy,
@@ -1410,6 +1412,47 @@ describe('initiatives (the big-goal level)', () => {
     const candidates = initiativeCandidates(slots, buckets)
     // overwatch is already a Crew Manager alias; the conductor never counts.
     expect(candidates).toEqual([{ name: 'papyrus-app', sessions: 2 }])
+  })
+
+  it('mines a recurring title phrase from unbucketed work as a suggested goal', () => {
+    const noBuckets: { name: string; aliases: string[] }[] = []
+    const a = goal('a', 's1', { title: 'Papyrus Export flow polish' })
+    const b = goal('b', 's2', { title: 'Fix the Papyrus Export crash' })
+    const c = goal('c', 's3', { title: 'Book flights for the offsite' })
+    const suggestions = suggestGoalNames([a, b, c], noBuckets)
+    expect(suggestions[0]).toEqual({ name: 'Papyrus Export', sessions: 2 })
+    // A phrase living in one session only is not a goal, it is a title.
+    expect(suggestions.some(entry => entry.name.includes('Flights'))).toBe(false)
+  })
+
+  it('bucketed work feeds no suggestions', () => {
+    // Items a bucket already claims must not re-suggest their own bucket.
+    const a = goal('a', 's1', { title: 'overwatch verb badges' })
+    const b = goal('b', 's2', { title: 'overwatch stall backend' })
+    expect(suggestGoalNames([a, b], buckets)).toEqual([])
+  })
+
+  it('flags a session whose name only mentions another goal', () => {
+    const crossed = goal('a', 's1', {
+      title: 'Redesign the Crew Manager cards',
+      references: [{ kind: 'session', id: 's1', label: 'Crew Companion Open Bugs', sessionKey: 's1' }],
+    })
+    expect(sessionNameMismatch(crossed, buckets)).toEqual({
+      itemGoal: 'Crew Manager',
+      sessionGoal: 'Crew Companion',
+    })
+    // Once the name covers both topics, the flag vanishes — that is the fix.
+    const renamed = goal('b', 's1', {
+      title: 'Redesign the Crew Manager cards',
+      references: [{ kind: 'session', id: 's1', label: 'Crew Companion Open Bugs & Crew Manager', sessionKey: 's1' }],
+    })
+    expect(sessionNameMismatch(renamed, buckets)).toBeNull()
+    // A session name matching no goal at all is vague, not contradictory.
+    const vague = goal('c', 's2', {
+      title: 'Redesign the Crew Manager cards',
+      references: [{ kind: 'session', id: 's2', label: 'Tuesday chores', sessionKey: 's2' }],
+    })
+    expect(sessionNameMismatch(vague, buckets)).toBeNull()
   })
 })
 

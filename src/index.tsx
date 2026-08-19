@@ -68,6 +68,8 @@ import {
   rankWorkItem,
   sameGoal,
   searchWorkItems,
+  sessionNameMismatch,
+  suggestGoalNames,
   titleOverlap,
   workCounts,
   type AgentRow,
@@ -445,11 +447,11 @@ function GoalBootstrap({ candidates, prominent, busy, onAdd }: {
   return (
     <div className="ow-bootstrap" data-prominent={prominent ? 'true' : undefined}>
       <div className="ow-bootstrap-head">
-        {prominent ? 'No big goals defined yet' : 'Add a goal'}
+        {prominent ? 'No big goals defined yet' : shown.length > 0 ? 'Suggested goals' : 'Add a goal'}
       </div>
       {(prominent || shown.length > 0) && (
         <div className="ow-bootstrap-sub">
-          A goal gathers the same job across sessions. Make one from a project you are working in:
+          Found in your unassigned work — click one to confirm it as a goal, or name your own.
         </div>
       )}
       {shown.length > 0 && (
@@ -488,9 +490,31 @@ function GoalBootstrap({ candidates, prominent, busy, onAdd }: {
  * title); the rows underneath say who is on it. Split undoes a wrong merge:
  * heuristics guess, the user rules.
  */
-function GoalBlockHeader({ block, status, onSplit, selected, onSelect }: {
+function GoalDigest({ members }: { members: WorkItem[] }) {
+  // The most-urgent member's latest update IS the goal's one-line state — the
+  // list arrives sorted, so no extra judgement is needed.
+  const lead = members[0]
+  const sessions = new Set(members.map(item => item.sessionKey).filter(Boolean)).size
+  const needsYou = members.filter(item => item.state === 'needs-you').length
+  const running = members.filter(item => item.state === 'running').length
+  const done = members.filter(item => item.state === 'done').length
+  const parts = [`${sessions} session${sessions === 1 ? '' : 's'}`]
+  if (needsYou) parts.push(`${needsYou} need${needsYou === 1 ? 's' : ''} you`)
+  if (running) parts.push(`${running} running`)
+  if (done) parts.push(`${done} done`)
+  return (
+    <div className="ow-goal-digest">
+      {lead.summary && <p className="ow-digest-line">{lead.summary}</p>}
+      <div className="ow-digest-counts">{parts.join(' · ')}</div>
+    </div>
+  )
+}
+
+function GoalBlockHeader({ block, status, folded, onToggle, onSplit, selected, onSelect }: {
   block: WorkBlock
   status?: WorkState
+  folded?: boolean
+  onToggle?: () => void
   onSplit?: (pairs: string[]) => void
   selected?: boolean
   onSelect?: () => void
@@ -509,6 +533,19 @@ function GoalBlockHeader({ block, status, onSplit, selected, onSelect }: {
   // instruction to the goal's active session, not to a row the user must pick.
   const body = (
     <>
+      {onToggle && (
+        // The chevron is the universal fold affordance; the header itself keeps
+        // its select semantics, so the two gestures never fight.
+        <button
+          type="button"
+          className="ow-goal-fold"
+          aria-label={folded ? `Expand ${lead.title}` : `Collapse ${lead.title}`}
+          aria-expanded={!folded}
+          onClick={event => { event.stopPropagation(); onToggle() }}
+        >
+          <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
+        </button>
+      )}
       <Users className="ow-icon" aria-hidden="true" />
       <span className="ow-truncate ow-block-name">{lead.title}</span>
       {status && <span className="ow-init-status" data-status={status}>{stateLabels[status]}</span>}
@@ -753,6 +790,8 @@ function WorkRow({
   hideBadge,
   compact,
   headless,
+  sessionMismatch,
+  onFixSessionName,
 }: {
   item: WorkItem
   selected: boolean
@@ -760,6 +799,9 @@ function WorkRow({
   compact?: boolean
   /** The card header already states this row's badge+title — do not repeat. */
   headless?: boolean
+  /** The session's NAME only mentions another goal; offer the rename fix. */
+  sessionMismatch?: { itemGoal: string; sessionGoal: string }
+  onFixSessionName?: () => void
   onAnswerPermission?: (id: string, approve: boolean) => void
   permissionBusy?: boolean
   onRetry?: (path: string) => void
@@ -853,6 +895,26 @@ function WorkRow({
                   />
                 ))}
               </span>
+            </div>
+          )}
+          {/*
+            The one case where the goal grouping and the session chip visibly
+            contradict: the session's NAME was set by its first topic and now
+            speaks for work it does not cover. The fix is the name, not the
+            grouping — renaming it to mention both topics makes this vanish.
+          */}
+          {sessionMismatch && onFixSessionName && (
+            <div className="ow-row-mismatch">
+              <span className="ow-truncate">
+                This session's name only mentions {sessionMismatch.sessionGoal} — this is {sessionMismatch.itemGoal} work
+              </span>
+              <button
+                type="button"
+                className="ow-mismatch-fix"
+                onClick={event => { event.stopPropagation(); onFixSessionName() }}
+              >
+                Rename session to cover both
+              </button>
             </div>
           )}
         </div>
@@ -1105,6 +1167,8 @@ function WorkSection({
   onSplitGoal,
   onMergeGoal,
   initiativeBlocks,
+  initiatives: goalInitiatives,
+  onRenameSession,
   collapsedInitiatives,
   onToggleInitiative,
   selectedGoalKey,
@@ -1141,6 +1205,8 @@ function WorkSection({
   onMergeGoal?: (pair: string) => void
   /** Goal mode: the two-level initiative clustering, computed by the parent. */
   initiativeBlocks?: InitiativeBlock[]
+  initiatives?: Initiative[]
+  onRenameSession?: (sessionKey: string, title: string) => void
   collapsedInitiatives?: Record<string, boolean>
   onToggleInitiative?: (key: string, next: boolean) => void
   selectedGoalKey?: string | null
@@ -1249,12 +1315,23 @@ function WorkSection({
   // top-level unit is a card with a header tab and WorkRow rows. A bucket, an
   // auto-merged cluster, and a lone goal differ only in what the header says —
   // never in what KIND of thing they look like.
-  const goalRow = (item: WorkItem, headerTitle: string | null) => (
+  const goalRow = (item: WorkItem, headerTitle: string | null) => {
+    const mismatch = goalInitiatives && onRenameSession
+      ? sessionNameMismatch(item, goalInitiatives)
+      : null
+    const sessionLabel = item.references.find(ref => ref.kind === 'session')?.label ?? ''
+    return (
     <Fragment key={item.id}>
       <WorkRow
         item={item}
         selected={selectedId === item.id}
         headless={headerTitle !== null && item.title === headerTitle}
+        sessionMismatch={mismatch ?? undefined}
+        onFixSessionName={mismatch && item.sessionKey
+          // The proposed name simply appends the missing topic; the user can
+          // refine it later with the normal session rename.
+          ? () => onRenameSession!(item.sessionKey as string, `${sessionLabel} & ${mismatch.itemGoal}`.slice(0, 200))
+          : undefined}
         whyRanked={
           item.state === 'needs-you' && item.action !== 'resume'
             ? explainRank(rankWorkItem(item), workCopy)
@@ -1274,7 +1351,8 @@ function WorkSection({
         <GoalMergeHint item={item} items={items} onMerge={onMergeGoal} />
       )}
     </Fragment>
-  )
+    )
+  }
 
   const renderInitiative = (init: InitiativeBlock) => {
     // A user-defined goal: header names it, carries the rollup status and the
@@ -1292,31 +1370,35 @@ function WorkSection({
             <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
             <span className="ow-truncate ow-block-name">{init.name}</span>
             <span className="ow-init-status" data-status={init.status}>{stateLabels[init.status]}</span>
+            {/* A count, not a name list: the digest and the rows already name
+                sessions where there is room to read them. */}
             <span className="ow-block-tab-meta">
               <span aria-hidden="true">·</span>
-              <span className="ow-truncate">
-                {init.sessions.slice(0, 3).join(' · ')}
-                {init.sessions.length > 3 ? ` +${init.sessions.length - 3}` : ''}
-              </span>
+              <span className="ow-truncate">{init.sessions.length} session{init.sessions.length === 1 ? '' : 's'}</span>
             </span>
           </Clickable>
-          {!folded && members.map(item => goalRow(item, null))}
+          {folded ? <GoalDigest members={members} /> : members.map(item => goalRow(item, null))}
         </div>
       )
     }
     const block = init.blocks[0]
     // An auto-detected cross-session goal: same card, plus Split and routing.
     if (block.header === 'goal') {
+      const folded = collapsedInitiatives?.[init.key] ?? (init.status !== 'needs-you')
       return (
         <div key={init.key} className="ow-block" data-grouped="true">
           <GoalBlockHeader
             block={block}
             status={init.status}
+            folded={folded}
+            onToggle={onToggleInitiative ? () => onToggleInitiative(init.key, !folded) : undefined}
             onSplit={onSplitGoal}
             selected={selectedGoalKey === block.key}
             onSelect={onSelectGoal ? () => onSelectGoal(block.key) : undefined}
           />
-          {block.items.map(item => goalRow(item, block.items[0].title))}
+          {folded
+            ? <GoalDigest members={block.items} />
+            : block.items.map(item => goalRow(item, block.items[0].title))}
         </div>
       )
     }
@@ -1777,10 +1859,30 @@ export default function CrewOverviewApp() {
   const goalTarget = selectedGoal ? goalRouteTarget(selectedGoal.items) : null
 
   const [addingGoal, setAddingGoal] = useState(false)
-  const goalCandidates = useMemo(
-    () => (groupBy === 'goal' ? initiativeCandidates(sources?.slots ?? [], initiatives) : []),
-    [groupBy, sources, initiatives],
-  )
+  const goalCandidates = useMemo(() => {
+    if (groupBy !== 'goal') return []
+    // Two suggestion sources, merged: project dirs sessions run in, and
+    // phrases recurring across unbucketed titles. Dedupe by name.
+    const fromDirs = initiativeCandidates(sources?.slots ?? [], initiatives)
+    const fromTitles = suggestGoalNames(items, initiatives)
+    const seen = new Set<string>()
+    const merged: { name: string; sessions: number }[] = []
+    for (const entry of [...fromTitles, ...fromDirs]) {
+      if (seen.has(entry.name.toLowerCase())) continue
+      seen.add(entry.name.toLowerCase())
+      merged.push(entry)
+    }
+    return merged.sort((a, b) => b.sessions - a.sessions)
+  }, [groupBy, sources, items, initiatives])
+  const renameSession = useCallback(async (sessionKey: string, title: string) => {
+    try {
+      await apiRef.current.patch(`/api/chat/slots/${encodeURIComponent(sessionKey)}/title`, { title })
+      void loadSources()
+    } catch {
+      // The hint stays visible on failure, so the affordance is retryable.
+    }
+  }, [loadSources])
+
   const addInitiative = useCallback(async (name: string, aliases: string[] = []) => {
     if (!name.trim()) return
     setAddingGoal(true)
@@ -2145,6 +2247,8 @@ export default function CrewOverviewApp() {
                             onSplitGoal={splitGoal}
                             onMergeGoal={mergeGoal}
                             initiativeBlocks={initiativeBlocks}
+                            initiatives={initiatives}
+                            onRenameSession={(key, title) => { void renameSession(key, title) }}
                             collapsedInitiatives={collapsedInitiatives}
                             onToggleInitiative={toggleInitiative}
                             selectedGoalKey={selectedGoalKey}

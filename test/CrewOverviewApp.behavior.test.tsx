@@ -74,10 +74,12 @@ describe('Crew Manager Conductor boundaries', () => {
     renderApp()
 
     fireEvent.click(await screen.findByRole('button', { name: 'Goal' }))
-    // One merged card: the goal header names the job, member rows keep the
-    // Session-view work-card anatomy (badge left, own title, session in meta).
+    // One merged card, folded by default (nothing needs the user): digest shows.
     expect(await screen.findByText('2 sessions, one goal')).toBeInTheDocument()
-    expect(screen.getByTestId('work-item-session:s1')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Ship the avatar upload flow' }))
+    // Member rows keep the Session-view work-card anatomy (badge left, own
+    // title, session in meta).
+    expect(await screen.findByTestId('work-item-session:s1')).toBeInTheDocument()
     expect(screen.getByTestId('work-item-session:s2')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Split Ship the avatar upload flow' }))
@@ -118,8 +120,14 @@ describe('Crew Manager Conductor boundaries', () => {
     // header carries the same chip — one anatomy, so two chips render.
     expect(await screen.findByText('Crew Companion')).toBeInTheDocument()
     expect(screen.getAllByText('Running', { selector: '.ow-init-status' })).toHaveLength(2)
-    // The auto cluster: same card anatomy, header says the span.
+    // The auto cluster: same card anatomy, header says the span. It arrives
+    // FOLDED (nothing needs the user) showing the digest, not the rows.
     expect(screen.getByText('2 sessions, one goal')).toBeInTheDocument()
+    expect(screen.getByText('2 sessions · 1 running · 1 done')).toBeInTheDocument()
+    expect(screen.queryByTestId('work-item-session:s2')).not.toBeInTheDocument()
+    // The chevron unfolds to the member rows.
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Ship the avatar upload flow' }))
+    expect(await screen.findByTestId('work-item-session:s2')).toBeInTheDocument()
     // The add-goal entry is ALWAYS reachable — buckets existing must not hide it.
     expect(screen.getByLabelText('New goal name')).toBeInTheDocument()
 

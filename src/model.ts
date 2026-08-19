@@ -1642,14 +1642,45 @@ export interface InitiativeBlock {
 export function initiativeFor(item: WorkItem, initiatives: Initiative[]): string | null {
   const sessionLabel = item.references.find(ref => ref.kind === 'session')?.label ?? ''
   for (const field of [item.title, sessionLabel, item.provenance]) {
-    const haystack = field.toLowerCase()
-    for (const bucket of initiatives) {
-      if (bucket.aliases.some(alias => alias && haystack.includes(alias.toLowerCase()))) {
-        return bucket.name
-      }
+    const bucket = bucketMatching(field, initiatives)
+    if (bucket) return bucket
+  }
+  return null
+}
+
+function bucketMatching(text: string, initiatives: Initiative[]): string | null {
+  const haystack = text.toLowerCase()
+  for (const bucket of initiatives) {
+    if (bucket.aliases.some(alias => alias && haystack.includes(alias.toLowerCase()))) {
+      return bucket.name
     }
   }
   return null
+}
+
+/**
+ * A session whose NAME only mentions some other goal, carrying work that is
+ * this goal's. The name was set by the session's first topic and now speaks
+ * for work it does not cover — the one case where the goal grouping and the
+ * session chip visibly contradict. Renaming the session to mention both
+ * topics resolves it, and this returns null once the name covers the work.
+ */
+export function sessionNameMismatch(
+  item: WorkItem,
+  initiatives: Initiative[],
+): { itemGoal: string; sessionGoal: string } | null {
+  const label = item.references.find(ref => ref.kind === 'session')?.label ?? ''
+  if (!label) return null
+  const itemGoal = bucketMatching(item.title, initiatives)
+  if (!itemGoal) return null
+  // The name already mentions this work's goal: nothing to flag.
+  const covered = initiatives.find(bucket => bucket.name === itemGoal)
+  if (covered && covered.aliases.some(alias => alias && label.toLowerCase().includes(alias.toLowerCase()))) {
+    return null
+  }
+  const sessionGoal = bucketMatching(label, initiatives)
+  if (!sessionGoal || sessionGoal === itemGoal) return null
+  return { itemGoal, sessionGoal }
 }
 
 /**
@@ -1678,6 +1709,55 @@ export function initiativeCandidates(
   return [...counts.entries()]
     .map(([name, sessions]) => ({ name, sessions }))
     .sort((a, b) => b.sessions - a.sessions)
+}
+
+/**
+ * Goal names mined from the titles of UNBUCKETED work: a phrase recurring
+ * across sessions ("Crew Manager" in three session titles) IS the goal nobody
+ * has defined yet. Suggest it for one-click confirmation instead of making the
+ * user type what the board already says.
+ */
+export function suggestGoalNames(
+  items: WorkItem[],
+  initiatives: Initiative[],
+): { name: string; sessions: number }[] {
+  // Sessions of every gram, keyed by the lowercase phrase.
+  const support = new Map<string, Set<string>>()
+  for (const item of items) {
+    if (!item.sessionKey || initiativeFor(item, initiatives) !== null) continue
+    const label = item.references.find(ref => ref.kind === 'session')?.label ?? ''
+    for (const text of [item.title, label]) {
+      const tokens = text.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, ' ').split(/\s+/).filter(Boolean)
+      for (const size of [3, 2]) {
+        for (let start = 0; start + size <= tokens.length; start += 1) {
+          const gram = tokens.slice(start, start + size)
+          // A phrase must start and end on a distinctive word; interior
+          // stopwords are fine ("group by goal").
+          if (DUPLICATE_STOPWORDS.has(gram[0]) || DUPLICATE_STOPWORDS.has(gram[size - 1])) continue
+          if (gram[0].length < 3 || gram[size - 1].length < 3) continue
+          const key = gram.join(' ')
+          if (!support.has(key)) support.set(key, new Set())
+          support.get(key)!.add(item.sessionKey)
+        }
+      }
+    }
+  }
+  const entries = [...support.entries()]
+    .map(([phrase, sessions]) => ({ phrase, sessions: sessions.size }))
+    .filter(entry => entry.sessions >= 2)
+  // Prefer the longest phrasing: "crew manager group" absorbs "crew manager"
+  // only when it carries the SAME support; otherwise the shorter, broader
+  // phrase is the real goal.
+  const maximal = entries.filter(entry =>
+    !entries.some(other => other.phrase !== entry.phrase
+      && other.phrase.includes(entry.phrase)
+      && other.sessions >= entry.sessions))
+  return maximal
+    .sort((a, b) => b.sessions - a.sessions || b.phrase.length - a.phrase.length)
+    .map(entry => ({
+      name: entry.phrase.replace(/\p{L}+/gu, word => word[0].toUpperCase() + word.slice(1)),
+      sessions: entry.sessions,
+    }))
 }
 
 /** Members roll up: anything owed to the user outranks motion outranks done. */
