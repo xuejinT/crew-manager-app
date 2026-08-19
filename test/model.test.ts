@@ -23,6 +23,7 @@ import {
   initiativeFor,
   rollupStatus,
   sameGoal,
+  suggestGoalNames,
   titleOverlap,
   titleWords,
   normalizeWorkItems as normalizeWorkItemsWithCopy,
@@ -1410,6 +1411,24 @@ describe('initiatives (the big-goal level)', () => {
     const candidates = initiativeCandidates(slots, buckets)
     // overwatch is already a Crew Manager alias; the conductor never counts.
     expect(candidates).toEqual([{ name: 'papyrus-app', sessions: 2 }])
+  })
+
+  it('mines a recurring title phrase from unbucketed work as a suggested goal', () => {
+    const noBuckets: { name: string; aliases: string[] }[] = []
+    const a = goal('a', 's1', { title: 'Papyrus Export flow polish' })
+    const b = goal('b', 's2', { title: 'Fix the Papyrus Export crash' })
+    const c = goal('c', 's3', { title: 'Book flights for the offsite' })
+    const suggestions = suggestGoalNames([a, b, c], noBuckets)
+    expect(suggestions[0]).toEqual({ name: 'Papyrus Export', sessions: 2 })
+    // A phrase living in one session only is not a goal, it is a title.
+    expect(suggestions.some(entry => entry.name.includes('Flights'))).toBe(false)
+  })
+
+  it('bucketed work feeds no suggestions', () => {
+    // Items a bucket already claims must not re-suggest their own bucket.
+    const a = goal('a', 's1', { title: 'overwatch verb badges' })
+    const b = goal('b', 's2', { title: 'overwatch stall backend' })
+    expect(suggestGoalNames([a, b], buckets)).toEqual([])
   })
 })
 

@@ -1680,6 +1680,55 @@ export function initiativeCandidates(
     .sort((a, b) => b.sessions - a.sessions)
 }
 
+/**
+ * Goal names mined from the titles of UNBUCKETED work: a phrase recurring
+ * across sessions ("Crew Manager" in three session titles) IS the goal nobody
+ * has defined yet. Suggest it for one-click confirmation instead of making the
+ * user type what the board already says.
+ */
+export function suggestGoalNames(
+  items: WorkItem[],
+  initiatives: Initiative[],
+): { name: string; sessions: number }[] {
+  // Sessions of every gram, keyed by the lowercase phrase.
+  const support = new Map<string, Set<string>>()
+  for (const item of items) {
+    if (!item.sessionKey || initiativeFor(item, initiatives) !== null) continue
+    const label = item.references.find(ref => ref.kind === 'session')?.label ?? ''
+    for (const text of [item.title, label]) {
+      const tokens = text.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, ' ').split(/\s+/).filter(Boolean)
+      for (const size of [3, 2]) {
+        for (let start = 0; start + size <= tokens.length; start += 1) {
+          const gram = tokens.slice(start, start + size)
+          // A phrase must start and end on a distinctive word; interior
+          // stopwords are fine ("group by goal").
+          if (DUPLICATE_STOPWORDS.has(gram[0]) || DUPLICATE_STOPWORDS.has(gram[size - 1])) continue
+          if (gram[0].length < 3 || gram[size - 1].length < 3) continue
+          const key = gram.join(' ')
+          if (!support.has(key)) support.set(key, new Set())
+          support.get(key)!.add(item.sessionKey)
+        }
+      }
+    }
+  }
+  const entries = [...support.entries()]
+    .map(([phrase, sessions]) => ({ phrase, sessions: sessions.size }))
+    .filter(entry => entry.sessions >= 2)
+  // Prefer the longest phrasing: "crew manager group" absorbs "crew manager"
+  // only when it carries the SAME support; otherwise the shorter, broader
+  // phrase is the real goal.
+  const maximal = entries.filter(entry =>
+    !entries.some(other => other.phrase !== entry.phrase
+      && other.phrase.includes(entry.phrase)
+      && other.sessions >= entry.sessions))
+  return maximal
+    .sort((a, b) => b.sessions - a.sessions || b.phrase.length - a.phrase.length)
+    .map(entry => ({
+      name: entry.phrase.replace(/\p{L}+/gu, word => word[0].toUpperCase() + word.slice(1)),
+      sessions: entry.sessions,
+    }))
+}
+
 /** Members roll up: anything owed to the user outranks motion outranks done. */
 export function rollupStatus(items: WorkItem[]): WorkState {
   if (items.some(item => item.state === 'needs-you')) return 'needs-you'
