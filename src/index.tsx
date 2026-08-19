@@ -90,6 +90,17 @@ import {
 } from './summaries'
 import { OVERWATCH_STYLES } from './styles'
 
+/**
+ * Which bottom-stack card is open. Exactly one at a time, or none.
+ *
+ * They were independent `<details>` elements, so opening PRs left Loops and
+ * Schedule open around it and the list you wanted sat between two others.
+ * Native `<details name=...>` groups them in Chromium, but jsdom does not
+ * implement that grouping, so the open card is held in state -- otherwise this
+ * behaviour could not be tested in this suite at all.
+ */
+type StackCard = 'prs' | 'loops' | 'schedule'
+
 type FilterKey = 'all' | WorkState
 
 interface SourcesResponse {
@@ -107,6 +118,7 @@ const HANDLED_KEY = 'crew-manager.handled'
 const DONE_COLLAPSED_KEY = 'crew-manager.done-collapsed'
 const GOAL_VERDICTS_KEY = 'crew-manager.goal-verdicts'
 const INITIATIVE_COLLAPSED_KEY = 'crew-manager.initiative-collapsed'
+const OPEN_STACK_KEY = 'crew-manager.open-stack'
 const SPLIT_KEY = 'crew-manager.split'
 const TAB_KEY = 'crew-manager.tab'
 /* Left column width as a percentage: the default, and the drag clamp — past
@@ -1648,6 +1660,19 @@ export default function CrewOverviewApp() {
    * GroupMode, but PR grouping now lives permanently in the bottom stack's PRs
    * card rather than being a third thing this control switches to.
    */
+  const [openStack, setOpenStack] = useState<StackCard | null>(
+    () => readStore<StackCard | null>(OPEN_STACK_KEY, null) ?? 'prs',
+  )
+  // Clicking the open card closes it; clicking another switches. Toggling rather
+  // than always-opening keeps "collapse everything" reachable.
+  const toggleStack = useCallback((card: StackCard) => {
+    setOpenStack(current => {
+      const next = current === card ? null : card
+      writeStore(OPEN_STACK_KEY, next)
+      return next
+    })
+  }, [])
+
   const [groupBy, setGroupBy] = useState<GroupMode>(() => (
     readStore<GroupMode | null>(TAB_KEY, null) === 'session' ? 'session' : 'goal'
   ))
@@ -2572,8 +2597,11 @@ export default function CrewOverviewApp() {
                 is a lens on the list — each is its own kind of thing, which is
                 why they can live here permanently instead of behind a switch. */}
             <div className="ow-stack">
-              <details className="ow-card ow-stack-card">
-                <summary>
+              <details
+                  className="ow-card ow-stack-card"
+                  open={openStack === 'prs'}
+                >
+                <summary onClick={event => { event.preventDefault(); toggleStack('prs') }}>
                   <span className="ow-stack-title">
                     <ChevronRight className="ow-icon ow-stack-chevron" />
                     <GitPullRequest className="ow-icon" />
@@ -2633,8 +2661,11 @@ export default function CrewOverviewApp() {
                 </div>
               </details>
 
-              <details className="ow-card ow-stack-card">
-                <summary>
+              <details
+                  className="ow-card ow-stack-card"
+                  open={openStack === 'loops'}
+                >
+                <summary onClick={event => { event.preventDefault(); toggleStack('loops') }}>
                   <span className="ow-stack-title">
                     <ChevronRight className="ow-icon ow-stack-chevron" />
                     <Radar className="ow-icon" />
@@ -2674,8 +2705,11 @@ export default function CrewOverviewApp() {
                 </div>
               </details>
 
-              <details className="ow-card ow-stack-card">
-                <summary>
+              <details
+                  className="ow-card ow-stack-card"
+                  open={openStack === 'schedule'}
+                >
+                <summary onClick={event => { event.preventDefault(); toggleStack('schedule') }}>
                   <span className="ow-stack-title">
                     <ChevronRight className="ow-icon ow-stack-chevron" />
                     <Clock3 className="ow-icon" />
