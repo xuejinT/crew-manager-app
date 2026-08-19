@@ -58,11 +58,13 @@ export type WorkCopyKey =
   | 'stalled_because'
   | 'duplicate_same_change'
   | 'duplicate_same_artifact'
+  | 'duplicate_same_deliverable'
   | 'duplicate_same_topic'
   | 'duplicate_same_step'
   | 'related_sessions'
   | 'related_same_change'
   | 'related_same_artifact'
+  | 'related_same_deliverable'
   | 'related_same_topic'
   | 'related_same_step'
   | 'related_more'
@@ -141,6 +143,17 @@ export interface WorkItem {
   updatedAt: number
   references: WorkReference[]
   sessionKey?: string
+  /**
+   * The id of the work item that SPAWNED this one, when the platform knows it: a
+   * loop's owning session, an artifact's session, a subagent's parent.
+   *
+   * Recorded provenance is worth more than every title heuristic, because it is a
+   * fact rather than a guess — grouping a spawned item with its parent is a graph
+   * edge, not an inference. Absent whenever the parent is not itself on the board;
+   * it is deliberately an ITEM id, never a bare session key, so the edge either
+   * points at something groupable or is not there at all.
+   */
+  parentId?: string
   provenance: string
   action?: WorkAction
   /** Suggested next steps, present only for summarized intents. */
@@ -889,6 +902,9 @@ const DUPLICATE_OVERLAP = 0.6
 /** A title needs this many distinctive words before overlap means anything. */
 const DUPLICATE_MIN_WORDS = 2
 
+/** No board context supplied — every phrase counts as distinctive. */
+const NO_AMBIENT: Set<string> = new Set()
+
 export function titleWords(title: string): string[] {
   return [...new Set(
     title.toLowerCase()
@@ -933,17 +949,109 @@ function stepTexts(item: WorkItem): string[] {
 }
 
 /** Why two items are judged the same job, ordered strongest first. */
-export type GoalMatch = 'same_change' | 'same_artifact' | 'same_topic' | 'same_step'
+export type GoalMatch = 'same_change' | 'same_artifact' | 'same_deliverable' | 'same_topic' | 'same_step'
+
+/**
+ * Phrases that read like a deliverable but name none. Without this list, every
+ * PR in the board shares "Pull Request" and the whole view collapses to one goal.
+ */
+const GENERIC_PHRASES = new Set([
+  'pull request', 'pull requests', 'status update', 'work in progress',
+  'code review', 'follow up', 'next step', 'next steps', 'action item',
+  'action items', 'kiro crew', 'in progress', 'needs you',
+])
+
+/**
+ * The named THING a title is about — a capitalized multi-word phrase such as
+ * "Goal Extraction" or "Session Summary Panel". Two items naming the same
+ * deliverable are working toward the same outcome, which loose word overlap
+ * misses whenever the sentences around the name differ.
+ *
+ * Capitalization is the signal on purpose: it is what distinguishes a proper
+ * deliverable from ordinary prose, needs no model, and is stable. Normalized to
+ * lowercase with a trailing plural dropped so "Goal Cards" and "goal card" meet.
+ */
+export function deliverablePhrases(title: string): string[] {
+  const out = new Set<string>()
+  // Maximal runs of CONSECUTIVE capitalized words. Deliberately no lowercase
+  // joiner: allowing one glued "Restyle the Goal Cards" into a single phrase,
+  // which then matched nothing — the run has to be the name itself.
+  const runs = title.match(/\b\p{Lu}[\p{L}\p{N}]*(?:\s+\p{Lu}[\p{L}\p{N}]*)+/gu) ?? []
+  for (const run of runs) {
+    const words = run
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(word => (word.length > 3 && word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word))
+    // A name starts and ends on a distinctive word: a sentence-leading verb is
+    // part of the sentence, not of the thing ("Ship Goal Cards" -> "goal card").
+    while (words.length && DUPLICATE_STOPWORDS.has(words[0])) words.shift()
+    while (words.length && DUPLICATE_STOPWORDS.has(words[words.length - 1])) words.pop()
+    if (words.length < 2) continue
+    // Every contiguous phrase inside the run, longest first. Runs are not
+    // comparable whole: "Crew Manager PR view" and "Crew Manager cron history"
+    // name the same project and would share nothing if only the full run counted
+    // — which would also blind the saturation guard to exactly that project name.
+    for (let size = words.length; size >= 2; size -= 1) {
+      for (let start = 0; start + size <= words.length; start += 1) {
+        const phrase = words.slice(start, start + size).join(' ')
+        if (GENERIC_PHRASES.has(phrase)) continue
+        out.add(phrase)
+      }
+    }
+  }
+  return [...out]
+}
+
+/**
+ * Phrases too common on this board to tell anything apart — a project or product
+ * name that nearly every title carries ("Crew Manager"), as opposed to the name
+ * of one deliverable.
+ *
+ * This is the guard the spec asks for against the collapse failure: a name shared
+ * by almost everything would merge the whole board into a single goal, which is
+ * strictly worse than not grouping at all. The project level is already the
+ * initiative bucket's job, so a phrase operating at that level is not a goal.
+ *
+ * Only computed on a board big enough for "almost everything" to mean something;
+ * below that, a shared phrase genuinely is the deliverable.
+ */
+export function ambientPhrases(items: WorkItem[]): Set<string> {
+  const out = new Set<string>()
+  if (items.length < AMBIENT_MIN_ITEMS) return out
+  const counts = new Map<string, number>()
+  for (const item of items) {
+    for (const phrase of deliverablePhrases(item.title)) {
+      counts.set(phrase, (counts.get(phrase) ?? 0) + 1)
+    }
+  }
+  for (const [phrase, count] of counts) {
+    if (count / items.length >= AMBIENT_SHARE) out.add(phrase)
+  }
+  return out
+}
+
+/** Below this many items, a shared name is the deliverable, not the backdrop. */
+const AMBIENT_MIN_ITEMS = 4
+
+/** At or above this share of the board, a phrase distinguishes nothing. */
+const AMBIENT_SHARE = 0.75
 
 /**
  * The ONE judge of "these two items are the same job". Grouping and the
  * duplicate warning both call it, so the two can never disagree.
+ *
+ * `ambient` carries the phrases this board is saturated with; pass it from
+ * ambientPhrases() so a shared project name cannot pose as a shared deliverable.
  */
-export function sameGoal(a: WorkItem, b: WorkItem): GoalMatch | null {
+export function sameGoal(a: WorkItem, b: WorkItem, ambient: Set<string> = NO_AMBIENT): GoalMatch | null {
   const sharedChange = linkedSources(a).find(url => linkedSources(b).includes(url))
   if (sharedChange) return 'same_change'
   const sharedArtifact = artifactSources(a).find(id => artifactSources(b).includes(id))
   if (sharedArtifact) return 'same_artifact'
+  const phrases = deliverablePhrases(b.title).filter(phrase => !ambient.has(phrase))
+  if (deliverablePhrases(a.title).some(phrase => phrases.includes(phrase))) return 'same_deliverable'
   if (titleOverlap(a.title, b.title) >= DUPLICATE_OVERLAP) return 'same_topic'
   // Titles are named offhand per session; the concrete next step is what the
   // work actually is, so it catches matches the titles miss.
@@ -953,6 +1061,36 @@ export function sameGoal(a: WorkItem, b: WorkItem): GoalMatch | null {
     }
   }
   return null
+}
+
+/**
+ * A recorded provenance edge: this item was spawned by that one.
+ *
+ * Deliberately NOT part of `sameGoal`. A loop its own session started is the same
+ * GOAL but not a duplicate of it, and `sameGoal` also feeds the duplicate warning
+ * — so folding provenance in there would warn the user that their session
+ * duplicates its own loop. Clustering calls both; the warning calls only sameGoal.
+ */
+export function provenanceEdge(a: WorkItem, b: WorkItem): 'spawned' | 'references' | null {
+  if (a.parentId === b.id || b.parentId === a.id) return 'spawned'
+  if (referencedItemIds(a).includes(b.id) || referencedItemIds(b).includes(a.id)) return 'references'
+  return null
+}
+
+/**
+ * The item ids this item's own references point at. A session that folded in an
+ * artifact keeps a reference to it, so the edge is readable from either end even
+ * when only one side recorded a parent.
+ */
+function referencedItemIds(item: WorkItem): string[] {
+  const out: string[] = []
+  for (const ref of item.references) {
+    if (ref.kind === 'artifact') out.push(`artifact:${ref.id}`)
+    else if (ref.kind === 'workflow') out.push(`workflow:${ref.id}`)
+    else if (ref.kind === 'agent') out.push(`agent:${ref.id}`)
+    else if (ref.kind === 'monitor') out.push(`monitor:${ref.id}`, `loop:${ref.id}`)
+  }
+  return out.filter(id => id !== item.id)
 }
 
 /**
@@ -997,6 +1135,9 @@ export function markDuplicates(items: WorkItem[], verdicts: GoalVerdicts = EMPTY
   const live = items
     .filter(item => item.state !== 'done' && item.sessionKey)
     .sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0))
+  // The same distinctiveness guard grouping uses, over the same population — so
+  // the warning and the goal card can never disagree about what a shared name means.
+  const ambient = ambientPhrases(live)
 
   for (let newer = 1; newer < live.length; newer += 1) {
     const item = live[newer]
@@ -1006,7 +1147,7 @@ export function markDuplicates(items: WorkItem[], verdicts: GoalVerdicts = EMPTY
       // The user ruled this pair apart; a warning would re-litigate their call.
       if (verdicts.split.includes(goalPairKey(item, prior))) continue
 
-      const because = sameGoal(item, prior)
+      const because = sameGoal(item, prior, ambient)
       if (because) {
         item.duplicateOf = {
           sessionKey: prior.sessionKey as string,
@@ -1018,14 +1159,14 @@ export function markDuplicates(items: WorkItem[], verdicts: GoalVerdicts = EMPTY
     }
   }
 
-  markRelatedSessions(live, verdicts)
+  markRelatedSessions(live, verdicts, ambient)
 }
 
 /** How many related sessions a card names before it starts counting them. */
 export const RELATED_LIMIT = 3
 
 /** `GoalMatch` in its declared strength order, for ranking related rows. */
-const GOAL_MATCH_RANK: GoalMatch[] = ['same_change', 'same_artifact', 'same_topic', 'same_step']
+const GOAL_MATCH_RANK: GoalMatch[] = ['same_change', 'same_artifact', 'same_deliverable', 'same_topic', 'same_step']
 
 /**
  * Which OTHER live sessions are on the same job — the cross-session view.
@@ -1045,7 +1186,7 @@ const GOAL_MATCH_RANK: GoalMatch[] = ['same_change', 'same_artifact', 'same_topi
  * Capped in the model rather than in the view so the list, the card and the
  * Conductor's briefing all name the same sessions.
  */
-function markRelatedSessions(live: WorkItem[], verdicts: GoalVerdicts): void {
+function markRelatedSessions(live: WorkItem[], verdicts: GoalVerdicts, ambient: Set<string> = NO_AMBIENT): void {
   for (const item of live) {
     const related: RelatedSession[] = []
     const seen = new Set<string>()
@@ -1056,7 +1197,7 @@ function markRelatedSessions(live: WorkItem[], verdicts: GoalVerdicts): void {
       // their call in a second place, which is what one shared judge prevents.
       if (verdicts.split.includes(goalPairKey(item, other))) continue
 
-      const because = sameGoal(item, other)
+      const because = sameGoal(item, other, ambient)
       if (!because) continue
 
       seen.add(key)
@@ -1532,6 +1673,9 @@ export function normalizeWorkItems(
       issue: false,
       updatedAt: epoch(loop.last_fire_ts || loop.created_ts),
       sessionKey: onSession,
+      // The session that armed the loop is its parent, and that is a recorded
+      // fact — so the two group as one goal instead of reading as two.
+      parentId: onSession ? bySession.get(onSession)?.id : undefined,
       provenance: copy('loop'),
       // Stopping is the whole point of surfacing it, and it is not a retry.
       stopPath: `/api/autonudge/${encodeURIComponent(id)}`,
@@ -1565,6 +1709,8 @@ export function normalizeWorkItems(
       issue: false,
       updatedAt: epoch(artifact.updated_at || artifact.created_at),
       sessionKey: reachableSession,
+      // An output belongs to the work that produced it, when the platform says so.
+      parentId: reachableSession ? bySession.get(reachableSession)?.id : undefined,
       provenance: artifact.session_title || artifact.source || copy('artifact'),
       action: reachableSession ? 'open' : undefined,
       references: [
@@ -1730,6 +1876,7 @@ function clusterByPr(items: WorkItem[]): WorkBlock[] {
  * every item here already IS a goal — only the cross-session merge is news.
  */
 function clusterByGoal(items: WorkItem[], verdicts: GoalVerdicts): WorkBlock[] {
+  const ambient = ambientPhrases(items)
   const parent = items.map((_, index) => index)
   const find = (index: number): number => {
     while (parent[index] !== index) {
@@ -1744,12 +1891,18 @@ function clusterByGoal(items: WorkItem[], verdicts: GoalVerdicts): WorkBlock[] {
     for (let j = i + 1; j < items.length; j += 1) {
       const a = items[i]
       const b = items[j]
+      const pair = goalPairKey(a, b)
+      // Stage 0 — the user's ruling beats every later stage, in both directions.
+      if (verdicts.split.includes(pair)) continue
+      // Stage 2 — recorded provenance is a fact, not a guess, so it holds even
+      // WITHIN one session: a loop and the session that started it are one goal,
+      // where two unrelated intents in that same session are not.
+      if (provenanceEdge(a, b)) { union(i, j); continue }
+      if (verdicts.merged.includes(pair)) { union(i, j); continue }
       // Two intents inside one session are distinct goals; only sessions merge.
       if (!a.sessionKey || !b.sessionKey || a.sessionKey === b.sessionKey) continue
-      const pair = goalPairKey(a, b)
-      // The user's ruling beats every heuristic, in both directions.
-      if (verdicts.split.includes(pair)) continue
-      if (verdicts.merged.includes(pair) || sameGoal(a, b)) union(i, j)
+      // Stages 3 — deterministic key matching, then loose title/step overlap.
+      if (sameGoal(a, b, ambient)) union(i, j)
     }
   }
 
@@ -1773,7 +1926,236 @@ function clusterByGoal(items: WorkItem[], verdicts: GoalVerdicts): WorkBlock[] {
     byRoot.set(root, block)
     blocks.push(block)
   }
+  // A goal's identity must not move when its members are re-ranked. The lead
+  // member is the most-urgent one, so keying on it renamed the card (and dropped
+  // its fold state) every time a check went red. Key on the member set instead.
+  for (const block of blocks) block.key = intrinsicGoalKey(block.items)
   return blocks
+}
+
+/**
+ * A cluster's own key, derived from its membership rather than its lead. Stable
+ * under re-ranking; membership CHANGES are handled by reconcileGoalKeys, which
+ * carries the prior key forward so the goal keeps one identity across runs.
+ */
+function intrinsicGoalKey(items: WorkItem[]): string {
+  return `goal:${[...items.map(item => item.id)].sort()[0]}`
+}
+
+/** A goal as a previous run left it, for identity reconciliation. */
+export interface PriorGoal {
+  key: string
+  /** goalIdentity() of each member, so the record survives id churn. */
+  members: string[]
+}
+
+/** How much of the smaller set two runs must share to be the same goal. */
+export const GOAL_REUSE_OVERLAP = 0.5
+
+/**
+ * Stage 6 — map this run's clusters back onto the previous run's goal keys, so a
+ * goal keeps ONE identity as members join and leave.
+ *
+ * Without this, a goal's key changes the moment its membership does, and every
+ * per-goal thing the UI persists against that key — the fold state above all —
+ * silently resets. Unstable identity is what makes a board feel untrustworthy.
+ *
+ * Rules, following the spec: largest overlap wins; reuse the prior key only at
+ * >= 50% of the SMALLER set (so a goal absorbing one stray item keeps its key,
+ * while a genuinely new cluster does not inherit one); a prior key is claimed at
+ * most once, so a split keeps the key for the bigger part and the remainder mints
+ * a fresh one.
+ */
+export function reconcileGoalKeys(blocks: WorkBlock[], prior: PriorGoal[]): WorkBlock[] {
+  const claimed = new Set<string>()
+  // Bigger clusters choose first, so a split leaves the key with the larger part.
+  const order = [...blocks].sort((a, b) => b.items.length - a.items.length)
+  for (const block of order) {
+    const members = new Set(block.items.map(goalIdentity))
+    let best: { key: string; score: number } | null = null
+    for (const record of prior) {
+      if (claimed.has(record.key)) continue
+      const shared = record.members.filter(member => members.has(member)).length
+      if (!shared) continue
+      const score = shared / Math.min(members.size, record.members.length)
+      if (score < GOAL_REUSE_OVERLAP) continue
+      if (!best || score > best.score) best = { key: record.key, score }
+    }
+    if (best) {
+      claimed.add(best.key)
+      block.key = best.key
+    }
+  }
+  return blocks
+}
+
+/** This run's goals in the shape reconcileGoalKeys reads next time. */
+export function rememberGoals(blocks: WorkBlock[]): PriorGoal[] {
+  return blocks.map(block => ({ key: block.key, members: block.items.map(goalIdentity) }))
+}
+
+/**
+ * The normalized phrase as the title actually writes it, or null when the title
+ * does not contain it. Each word may carry the plural the normalizer dropped.
+ */
+function asWritten(title: string, phrase: string): string | null {
+  // Words may be separated by punctuation in the original ("16/20/24/48"),
+  // because the normalizer split on it to compare.
+  const pattern = phrase.split(' ').map(word => `${escapeForPattern(word)}s?`).join('[\\s/_,-]+')
+  return title.match(new RegExp(pattern, 'iu'))?.[0] ?? null
+}
+
+function escapeForPattern(word: string): string {
+  return word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Why these items are on one card, as a sentence the user can read.
+ *
+ * The grouping reason is a product surface, not a debug string: a card that
+ * merges two sessions has to be able to say what it merged them on, or the user
+ * has no basis to trust it — or to press Split. Reports the STRONGEST edge in the
+ * cluster, since that is the one that would survive if the others went away.
+ */
+export function explainGoal(items: WorkItem[], verdicts: GoalVerdicts = EMPTY_VERDICTS): string | null {
+  if (items.length < 2) return null
+  let match: GoalMatch | null = null
+  let phrase: string | null = null
+  for (let i = 0; i < items.length; i += 1) {
+    for (let j = i + 1; j < items.length; j += 1) {
+      const a = items[i]
+      const b = items[j]
+      if (provenanceEdge(a, b)) return `${b.parentId === a.id ? b.title : a.title} was started by this work`
+      if (verdicts.merged.includes(goalPairKey(a, b))) return 'you merged these'
+      const because = sameGoal(a, b)
+      if (!because) continue
+      if (!match || GOAL_MATCH_RANK.indexOf(because) < GOAL_MATCH_RANK.indexOf(match)) {
+        match = because
+        if (because === 'same_deliverable') {
+          const shared = deliverablePhrases(b.title)
+          const found = deliverablePhrases(a.title).find(candidate => shared.includes(candidate)) ?? null
+          // Phrases are normalized to match; the SENTENCE shows the name as the
+          // title writes it, so "GitLab Case Study" is not quoted back as
+          // "gitlab case study" next to the rows that spell it properly.
+          phrase = found ? asWritten(a.title, found) ?? asWritten(b.title, found) ?? found : null
+        }
+      }
+    }
+  }
+  if (!match) return null
+  if (match === 'same_change') return 'these sessions work on the same change'
+  if (match === 'same_artifact') return 'these sessions share the same output'
+  if (match === 'same_deliverable') return phrase ? `both are about ${phrase}` : 'both name the same deliverable'
+  if (match === 'same_step') return 'these sessions have the same next step'
+  return 'these sessions describe the same work'
+}
+
+/**
+ * Longest run of words a name may carry. Generous on purpose: a real title runs
+ * to ten words ("Icon at 16/20/24/48 on light and dark") and clipping the run
+ * drops its leading noun, which is the part that names the thing. The header
+ * truncates visually, so length costs nothing here.
+ */
+const NAME_MAX_WORDS = 12
+
+/**
+ * What to CALL a merged goal, derived from what its members actually share.
+ *
+ * A merged card used to be headed "N sessions, one goal" — true, and useless:
+ * it describes the grouping rather than the work, so the one line with the most
+ * prominence on the card said the least. Nothing here is invented: the name is a
+ * deliverable two members both name, a change they both point at, or the run of
+ * words their titles have in common — in the casing a title actually writes.
+ *
+ * Returns null when the members share no nameable thing, which is a real answer:
+ * the caller then falls back to the honest group label rather than to a guess.
+ */
+export function goalName(items: WorkItem[]): string | null {
+  if (items.length < 2) return null
+
+  // A deliverable named by two or more members is the strongest name available.
+  const byPhrase = new Map<string, number>()
+  for (const item of items) {
+    for (const phrase of deliverablePhrases(item.title)) {
+      byPhrase.set(phrase, (byPhrase.get(phrase) ?? 0) + 1)
+    }
+  }
+  const deliverable = bestShared(byPhrase)
+  if (deliverable) return writtenSomewhere(items, deliverable) ?? deliverable
+
+  // Else the change they are all working on — a shared entity, not a title.
+  const byChange = new Map<string, { label: string; members: number }>()
+  for (const item of items) {
+    for (const ref of item.references) {
+      if (ref.kind !== 'change' && ref.kind !== 'issue') continue
+      const seen = byChange.get(ref.id)
+      byChange.set(ref.id, { label: ref.label, members: (seen?.members ?? 0) + 1 })
+    }
+  }
+  const change = [...byChange.values()].filter(entry => entry.members >= 2)
+    .sort((a, b) => b.members - a.members)[0]
+  if (change) return change.label
+
+  // Else the words the titles have in common. Same principle as the deliverable
+  // rule, without the capitalization requirement — a lowercase phrase repeated
+  // across members is still the thing they are all about.
+  const byRun = new Map<string, Set<number>>()
+  items.forEach((item, index) => {
+    for (const run of titleRuns(item.title)) {
+      if (!byRun.has(run)) byRun.set(run, new Set())
+      byRun.get(run)!.add(index)
+    }
+  })
+  const counts = new Map<string, number>()
+  for (const [run, members] of byRun) counts.set(run, members.size)
+  const common = bestShared(counts)
+  return common ? writtenSomewhere(items, common) ?? common : null
+}
+
+/** The phrase with the widest support, longest first on a tie. */
+function bestShared(counts: Map<string, number>): string | null {
+  return [...counts.entries()]
+    .filter(([, count]) => count >= 2)
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0]?.[0] ?? null
+}
+
+/**
+ * The phrase as a member writes it, preferring a member that capitalizes it — a
+ * name is a heading, and "Avatar upload flow" reads as one where the same words
+ * lifted from mid-sentence do not.
+ */
+function writtenSomewhere(items: WorkItem[], phrase: string): string | null {
+  let fallback: string | null = null
+  for (const item of items) {
+    const written = asWritten(item.title, phrase)
+    if (!written) continue
+    if (/^\p{Lu}/u.test(written)) return written
+    fallback ??= written
+  }
+  return fallback
+}
+
+/**
+ * Contiguous word runs of a title, longest first, each starting and ending on a
+ * distinctive word — an interior stopword is fine ("icon at 16 on light and
+ * dark"), a leading or trailing one names nothing ("and dark").
+ */
+function titleRuns(title: string): string[] {
+  const words = title
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+  const out: string[] = []
+  for (let size = Math.min(words.length, NAME_MAX_WORDS); size >= 2; size -= 1) {
+    for (let start = 0; start + size <= words.length; start += 1) {
+      const run = words.slice(start, start + size)
+      if (DUPLICATE_STOPWORDS.has(run[0]) || DUPLICATE_STOPWORDS.has(run[size - 1])) continue
+      if (run[0].length < 2 || run[size - 1].length < 2) continue
+      out.push(run.join(' '))
+    }
+  }
+  return out
 }
 
 /** One project bucket from the workspace's projects.md, via the backend. */
@@ -2015,6 +2397,7 @@ export function clusterByInitiative(
   items: WorkItem[],
   initiatives: Initiative[],
   verdicts: GoalVerdicts = EMPTY_VERDICTS,
+  prior: PriorGoal[] = [],
 ): InitiativeBlock[] {
   const byName = new Map<string, WorkItem[]>()
   const loose: WorkItem[] = []
@@ -2032,8 +2415,10 @@ export function clusterByInitiative(
   }
 
   // Loose items dedup among THEMSELVES too — same-job across sessions merges
-  // whether or not a bucket claims it.
-  const looseBlocks = clusterByGoal(loose, verdicts)
+  // whether or not a bucket claims it. Their block key IS the card's identity
+  // here (a bucket card is named, these are not), so it is reconciled against
+  // the previous run to keep one goal's fold state through membership changes.
+  const looseBlocks = reconcileGoalKeys(clusterByGoal(loose, verdicts), prior)
   const looseByLead = new Map<string, WorkBlock>()
   for (const block of looseBlocks) looseByLead.set(block.items[0].id, block)
 

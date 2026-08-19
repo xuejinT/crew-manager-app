@@ -19,13 +19,21 @@ import {
   responseVerb,
   fleetBriefing,
   clusterByInitiative,
+  ambientPhrases,
+  deliverablePhrases,
+  explainGoal,
   goalPairKey,
   goalRouteTarget,
   initiativeCandidates,
   initiativeFor,
+  markDuplicates,
   memberDot,
   memberKind,
   goalComposition,
+  goalName,
+  provenanceEdge,
+  reconcileGoalKeys,
+  rememberGoals,
   rollupStatus,
   sameGoal,
   suggestGoalNames,
@@ -1896,5 +1904,277 @@ describe('related sessions', () => {
     expect(after.find(i => i.sessionKey === 'session-2')?.relatedSessions).toBeUndefined()
     // The duplicate warning honours it too, so the two agree.
     expect(after.find(i => i.sessionKey === 'session-2')?.duplicateOf).toBeUndefined()
+  })
+})
+
+/*
+ * Goal extraction: the deterministic stages, as the extraction spec fixes them.
+ * Recorded provenance is a fact and outranks every heuristic; a named deliverable
+ * merges where loose word overlap misses; nothing is force-fit; and a goal keeps
+ * one identity as its membership moves.
+ */
+describe('goal extraction', () => {
+  function goal(id: string, session: string | undefined, extra: Partial<WorkItem> = {}): WorkItem {
+    return {
+      id,
+      title: `work item ${id}`,
+      summary: 's',
+      state: 'running',
+      issue: false,
+      updatedAt: 1,
+      sessionKey: session,
+      provenance: 'p',
+      references: session
+        ? [{ kind: 'session', id: session, label: session, sessionKey: session }]
+        : [],
+      ...extra,
+    } as WorkItem
+  }
+
+  it('groups a loop with the session that started it, inside that one session', () => {
+    // Spec case 2. The loop records its parent, so this is a graph edge, not a
+    // guess -- and the same-session rule must not veto a recorded fact.
+    const session = goal('slot:s1', 's1', { title: 'rebuild the checkout flow' })
+    const loop = goal('loop:9', 's1', { title: 'watching pull request 12', parentId: 'slot:s1' })
+    expect(provenanceEdge(loop, session)).toBe('spawned')
+    const blocks = clusterBy([session, loop], 'goal')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].items.map(item => item.id)).toEqual(['slot:s1', 'loop:9'])
+  })
+
+  it('still keeps two unrelated intents of one session apart', () => {
+    // The provenance exception is narrow: without a recorded edge, two intents in
+    // one session remain the distinct goals they are.
+    const blocks = clusterBy([
+      goal('a', 's1', { title: 'one thing entirely' }),
+      goal('b', 's1', { title: 'another matter altogether' }),
+    ], 'goal')
+    expect(blocks).toHaveLength(2)
+  })
+
+  it('reads the edge from whichever side recorded it', () => {
+    // The session folded the artifact in as a reference; only one end knows.
+    const session = goal('slot:s1', 's1', {
+      title: 'draft the pricing note',
+      references: [
+        { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' },
+        { kind: 'artifact', id: 'pricing-note', label: 'Pricing note' },
+      ],
+    })
+    const artifact = goal('artifact:pricing-note', undefined, { title: 'Pricing note' })
+    expect(provenanceEdge(session, artifact)).toBe('references')
+    expect(clusterBy([session, artifact], 'goal')).toHaveLength(1)
+  })
+
+  it('a provenance pair is one goal but never a duplicate warning', () => {
+    // sameGoal feeds the duplicate warning too, which is why provenance is a
+    // separate judge: a session must never be told it duplicates its own loop.
+    const session = goal('slot:s1', 's1', { title: 'rebuild the checkout flow' })
+    const loop = goal('loop:9', 's1', { title: 'watching pull request 12', parentId: 'slot:s1' })
+    markDuplicates([session, loop])
+    expect(session.duplicateOf).toBeUndefined()
+    expect(loop.duplicateOf).toBeUndefined()
+  })
+
+  it('merges two sessions naming the same deliverable', () => {
+    // Spec case 6. The sentences around the name share almost nothing, so loose
+    // word overlap misses it; the named thing is what they have in common.
+    const a = goal('a', 's1', { title: 'Finish and proof the GitLab Case Study deck' })
+    const b = goal('b', 's2', { title: 'rehearse timings, slide order and stage cues for GitLab Case Study' })
+    expect(titleOverlap(a.title, b.title)).toBeLessThan(0.6)
+    expect(sameGoal(a, b)).toBe('same_deliverable')
+    expect(clusterBy([a, b], 'goal')).toHaveLength(1)
+  })
+
+  it('matches a deliverable across a plural', () => {
+    expect(deliverablePhrases('Restyle the Goal Cards')).toContain('goal card')
+    const a = goal('a', 's1', { title: 'Restyle the Goal Cards' })
+    const b = goal('b', 's2', { title: 'measure spacing on one Goal Card' })
+    expect(sameGoal(a, b)).toBe('same_deliverable')
+  })
+
+  it('does not merge on a generic phrase, or on a single capitalized word', () => {
+    // Spec cases 3 and 5: the collapse-everything failures. "Pull Request" is in
+    // every title on the board, and one shared word is not a deliverable.
+    expect(deliverablePhrases('Pull Request cleanup')).toEqual([])
+    const a = goal('a', 's1', { title: 'Pull Request triage for today' })
+    const b = goal('b', 's2', { title: 'Pull Request numbering convention' })
+    expect(sameGoal(a, b)).toBeNull()
+
+    const c = goal('c', 's1', { title: 'Fix the login redirect' })
+    const d = goal('d', 's2', { title: 'Fix the export encoding' })
+    expect(sameGoal(c, d)).toBeNull()
+    expect(clusterBy([a, b, c, d], 'goal')).toHaveLength(4)
+  })
+
+  it('does not treat the project name every title carries as a deliverable', () => {
+    // The collapse failure the spec warns about, in this product's real shape: a
+    // board where nearly everything says "Crew Manager" must not become ONE goal.
+    // The project level is the initiative bucket's job, not a goal's.
+    const board = [
+      goal('a', 's1', { title: 'Crew Manager needs-you queue ordering' }),
+      goal('b', 's2', { title: 'Crew Manager PR view filters' }),
+      goal('c', 's3', { title: 'Crew Manager Conductor quoting' }),
+      goal('d', 's4', { title: 'Crew Manager cron history counts' }),
+      goal('e', 's5', { title: 'unrelated irrigation timer install' }),
+    ]
+    expect(ambientPhrases(board).has('crew manager')).toBe(true)
+    // Four separate goals plus the stray, not one merged card.
+    expect(clusterBy(board, 'goal')).toHaveLength(5)
+  })
+
+  it('still merges on a shared name when the board is not saturated with it', () => {
+    const board = [
+      goal('a', 's1', { title: 'draft the Goal Extraction stages' }),
+      goal('b', 's2', { title: 'test fixtures for Goal Extraction' }),
+      goal('c', 's3', { title: 'unrelated irrigation timer install' }),
+      goal('d', 's4', { title: 'book the dentist appointment' }),
+      goal('e', 's5', { title: 'renew the parking permit' }),
+    ]
+    expect(ambientPhrases(board).has('goal extraction')).toBe(false)
+    const blocks = clusterBy(board, 'goal')
+    expect(blocks).toHaveLength(4)
+    expect(blocks[0].items.map(item => item.id)).toEqual(['a', 'b'])
+  })
+
+  it('leaves a genuinely unrelated item on its own', () => {
+    // Spec case 8, the one that decides whether the view is usable: a pipeline
+    // that never says "these are not the same" force-fits everything.
+    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
+    const b = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
+    const stray = goal('c', 's3', { title: 'book the irrigation timer install' })
+    const blocks = clusterBy([a, b, stray], 'goal')
+    expect(blocks).toHaveLength(2)
+    expect(blocks.find(block => block.items.some(item => item.id === 'c'))?.header).toBeNull()
+  })
+
+  it('the user ruling beats a recorded provenance edge', () => {
+    // Spec case 9. Pins are Stage 0 and win outright -- including over a fact.
+    const session = goal('slot:s1', 's1', { title: 'rebuild the checkout flow' })
+    const loop = goal('loop:9', 's1', { title: 'watching pull request 12', parentId: 'slot:s1' })
+    const blocks = clusterBy([session, loop], 'goal', {
+      merged: [],
+      split: [goalPairKey(session, loop)],
+    })
+    expect(blocks).toHaveLength(2)
+  })
+
+  it('keys a goal on its membership, not on which member is most urgent', () => {
+    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
+    const b = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
+    // Same cluster, opposite order: a re-rank must not rename the goal.
+    expect(clusterBy([a, b], 'goal')[0].key).toBe(clusterBy([b, a], 'goal')[0].key)
+  })
+
+  it('keeps one goal id when the goal gains a member', () => {
+    // Spec case 10. The fold state is stored against this key, so a goal that is
+    // renamed every poll silently reopens itself.
+    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
+    const b = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
+    const first = clusterBy([a, b], 'goal')
+    const prior = rememberGoals(first)
+
+    const c = goal('c', 's3', { title: 'print the GitLab Case Study handout' })
+    const second = reconcileGoalKeys(clusterBy([c, a, b], 'goal'), prior)
+    expect(second).toHaveLength(1)
+    expect(second[0].key).toBe(first[0].key)
+  })
+
+  it('gives a split the old id for the larger part and a new one for the rest', () => {
+    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
+    const b = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
+    const c = goal('c', 's3', { title: 'print the GitLab Case Study handout' })
+    const prior = rememberGoals(clusterBy([a, b, c], 'goal'))
+    const priorKey = prior[0].key
+
+    // The user pulls c out; a+b stay together and keep the goal's identity.
+    const split = reconcileGoalKeys(
+      clusterBy([a, b, c], 'goal', {
+        merged: [],
+        split: [goalPairKey(a, c), goalPairKey(b, c)],
+      }),
+      prior,
+    )
+    expect(split).toHaveLength(2)
+    const larger = split.find(block => block.items.length === 2)
+    const remainder = split.find(block => block.items.length === 1)
+    expect(larger?.key).toBe(priorKey)
+    expect(remainder?.key).not.toBe(priorKey)
+  })
+
+  it('does not hand a prior id to an unrelated new goal', () => {
+    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
+    const prior = rememberGoals(clusterBy([a], 'goal'))
+    const fresh = goal('z', 's9', { title: 'book the irrigation timer install' })
+    const next = reconcileGoalKeys(clusterBy([fresh], 'goal'), prior)
+    expect(next[0].key).not.toBe(prior[0].key)
+  })
+
+  it('names a merged goal from what its members share', () => {
+    // "N sessions, one goal" describes the grouping, not the work. A card gets a
+    // real name when the members share a nameable thing — and only falls back to
+    // the count label when they do not.
+    const deck = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
+    const drill = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
+    expect(goalName([deck, drill])).toBe('GitLab Case Study')
+
+    // A shared change is a shared ENTITY, so it names the goal without touching
+    // any member's title.
+    const change = { kind: 'change' as const, id: 'https://example.invalid/pull/6', label: 'github #6' }
+    const left = goal('c', 's1', { title: 'one thing entirely', references: [change] })
+    const right = goal('d', 's2', { title: 'another matter altogether', references: [change] })
+    expect(goalName([left, right])).toBe('github #6')
+
+    // Else the words the titles have in common, in a member's own casing — and
+    // preferring the member that capitalizes them, since a name is a heading.
+    const ship = goal('e', 's1', { title: 'Ship the avatar upload flow' })
+    const also = goal('f', 's2', { title: 'Avatar upload flow shipping' })
+    expect(goalName([ship, also])).toBe('Avatar upload flow')
+
+    // Punctuation between words survives the round trip: the run is compared on
+    // words but rendered as the title writes it.
+    const sizes = [
+      goal('g', 's1', { title: 'Icon at 16/20/24/48 on light and dark' }),
+      goal('h', 's2', { title: 'Icon at 16/20/24/48 on light and dark, after the contrast fix' }),
+    ]
+    expect(goalName(sizes)).toBe('Icon at 16/20/24/48 on light and dark')
+
+    // Nothing shared is a real answer, not a guess: the caller keeps its label.
+    expect(goalName([
+      goal('i', 's1', { title: 'book the dentist appointment' }),
+      goal('j', 's2', { title: 'renew the parking permit' }),
+    ])).toBeNull()
+    // One item is not a merge, so it has no group to name.
+    expect(goalName([deck])).toBeNull()
+  })
+
+  it('says why it grouped, in words the user can act on', () => {
+    // The reason is a product surface: it is what Split is judged against.
+    const change = [
+      { kind: 'session' as const, id: 's1', label: 's1', sessionKey: 's1' },
+      { kind: 'change' as const, id: '42', label: 'PR 42' },
+    ]
+    const a = goal('a', 's1', { references: change })
+    const b = goal('b', 's2', {
+      references: [{ kind: 'change' as const, id: '42', label: 'PR 42' }],
+    })
+    expect(explainGoal([a, b])).toBe('these sessions work on the same change')
+
+    const deck = goal('d1', 's1', { title: 'Finish the GitLab Case Study deck' })
+    const drill = goal('d2', 's2', { title: 'rehearse timings for GitLab Case Study' })
+    // The name is quoted as the title writes it, not as the matcher normalized it.
+    expect(explainGoal([deck, drill])).toBe('both are about GitLab Case Study')
+
+    const session = goal('slot:s1', 's1', { title: 'rebuild the checkout flow' })
+    const loop = goal('loop:9', 's1', { title: 'watching pull request 12', parentId: 'slot:s1' })
+    expect(explainGoal([session, loop])).toBe('watching pull request 12 was started by this work')
+
+    const pinnedA = goal('p1', 's1', { title: 'one thing entirely' })
+    const pinnedB = goal('p2', 's2', { title: 'another matter altogether' })
+    expect(explainGoal([pinnedA, pinnedB], { merged: [goalPairKey(pinnedA, pinnedB)], split: [] }))
+      .toBe('you merged these')
+
+    // A single item was never grouped, so it has nothing to explain.
+    expect(explainGoal([pinnedA])).toBeNull()
   })
 })

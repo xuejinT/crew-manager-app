@@ -559,10 +559,11 @@ export const OVERWATCH_STYLES = String.raw`
     color: var(--muted); background: var(--bg-hover); border: 1px solid var(--border);
   }
   .ow-goal-flag-warn { color: var(--warn); background: var(--warn-subtle, rgba(251,191,36,.12)); border-color: transparent; }
-  /* A lone goal has no name above its single item — this empty span just holds
-     the summary row's height so the chevron area and flag sit on one clean line. */
-  .ow-goalcard-lone { flex: 1; min-height: 18px; }
   .ow-goal-meta { margin: 4px 0 0 26px; color: var(--muted); font-size: 11px; }
+  /* Why the merge happened. Subdued below the meta: it answers a question the
+     user only asks when the grouping looks wrong, so it must not compete with
+     the goal's own name or its composition. */
+  .ow-goal-why { margin: 2px 0 0 26px; color: var(--muted); font-size: 11px; font-style: italic; opacity: 0.85; }
   /* Member rows: indent under the title, a divider between them, lighter label. */
   .ow-goalcard .ow-row { padding: 7px 4px 7px 26px; }
   .ow-goalcard .ow-row + .ow-row { border-top: 1px solid var(--border); }

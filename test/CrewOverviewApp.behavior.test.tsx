@@ -53,6 +53,7 @@ beforeEach(() => {
 describe('Crew Manager Conductor boundaries', () => {
   it('goal view merges same-titled sessions into one card and split undoes it', async () => {
     localStorage.removeItem('crew-manager.goal-verdicts')
+    localStorage.removeItem('crew-manager.goal-memory')
     // Two sessions whose slot titles clearly say the same job. Timestamps must be
     // recent: an idle session's card falls out of the done window otherwise.
     const now = new Date().toISOString()
@@ -75,8 +76,14 @@ describe('Crew Manager Conductor boundaries', () => {
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
     // One merged card, folded by default (nothing needs the user): digest shows.
-    expect(await screen.findByText('2 sessions, one goal')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Expand 2 sessions, one goal' }))
+    // It is NAMED from what the two sessions share, not labelled by their count.
+    expect(await screen.findByText('Avatar upload flow', { selector: '.ow-goalcard-title' }))
+      .toBeInTheDocument()
+    expect(screen.queryByText('2 sessions, one goal')).not.toBeInTheDocument()
+    // A merged card has to say what it merged on: the reason is what Split is
+    // judged against, so an unexplained merge is one the user cannot check.
+    expect(screen.getByText('Grouped because these sessions describe the same work.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Avatar upload flow' }))
     // Member rows carry a status dot + title; the lead is a row too (the header
     // names the GROUP, not a member, so nothing is duplicated).
     expect(await screen.findByTestId('work-item-session:s1')).toBeInTheDocument()
@@ -84,8 +91,109 @@ describe('Crew Manager Conductor boundaries', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Split Ship the avatar upload flow' }))
     // The ruling takes effect immediately: two plain cards, no merged header.
-    await waitFor(() => expect(screen.queryByText('2 sessions, one goal')).not.toBeInTheDocument())
+    await waitFor(() => expect(
+      screen.queryByText('Avatar upload flow', { selector: '.ow-goalcard-title' }),
+    ).not.toBeInTheDocument())
     localStorage.removeItem('crew-manager.goal-verdicts')
+  })
+
+  it('groups a session with the loop it started, naming the card by the session', async () => {
+    // Recorded provenance is a fact, so it groups even inside one session — and
+    // such a card must not be named by counting sessions ("1 sessions, one goal").
+    localStorage.removeItem('crew-manager.goal-verdicts')
+    localStorage.removeItem('crew-manager.goal-memory')
+    localStorage.removeItem('crew-manager.initiative-collapsed')
+    const now = new Date().toISOString()
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots') {
+        return [{ key: 's1', title: 'Ship the avatar upload flow', messages: 4, running: true, last_ts: now }]
+      }
+      if (path === '/api/autonudge') {
+        return {
+          loops: [{
+            id: 'nudge-1',
+            slot_key: 's1',
+            active: true,
+            message: 'watch the upload PR until checks pass',
+            cycle_count: 2,
+            max_cycles: 8,
+            last_fire_ts: now,
+          }],
+        }
+      }
+      if (path === '/api/approvals') return []
+      if (path === '/api/spawn') return { agents: [] }
+      if (path === '/api/workflows/runs') return { runs: [] }
+      if (path === '/api/crons') return { jobs: [] }
+      if (path === '/api/artifacts') return { artifacts: [] }
+      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
+    // One card, named by its session — never "1 sessions, one goal".
+    expect(await screen.findByText('Ship the avatar upload flow', { selector: '.ow-goalcard-title' }))
+      .toBeInTheDocument()
+    expect(screen.queryByText('1 sessions, one goal')).not.toBeInTheDocument()
+    expect(screen.getByText('Grouped because watch the upload PR until checks pass was started by this work.'))
+      .toBeInTheDocument()
+    // Both the session's work and its loop are members of that one card.
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Ship the avatar upload flow' }))
+    expect(await screen.findByTestId('work-item-session:s1')).toBeInTheDocument()
+    expect(screen.getByTestId('work-item-loop:nudge-1')).toBeInTheDocument()
+    localStorage.removeItem('crew-manager.goal-memory')
+  })
+
+  it('names a lone goal card by its session, and drops the shell when that would repeat the row', async () => {
+    localStorage.removeItem('crew-manager.goal-verdicts')
+    localStorage.removeItem('crew-manager.goal-memory')
+    localStorage.removeItem('crew-manager.initiative-collapsed')
+    const now = new Date().toISOString()
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots') {
+        return [
+          // Summarized: the intent's own work title differs from the session name,
+          // so the session names the card above it.
+          { key: 's1', title: 'Avatar upload work', messages: 6, running: true, last_ts: now },
+          // Not summarized: the item is titled after the session, so a header
+          // would print the same string twice.
+          { key: 's2', title: 'Irrigation timer planning', messages: 2, running: true, last_ts: now },
+        ]
+      }
+      if (path === '/api/chat/slots/s1/summary') {
+        return {
+          enabled: true,
+          intents: [{
+            id: 'i1',
+            title: 'Ship the cropping step',
+            state: 'in-progress',
+            progress: ['picked a library'],
+          }],
+        }
+      }
+      if (path === '/api/chat/slots/s2/summary') return { enabled: true, intents: [] }
+      if (path === '/api/approvals') return []
+      if (path === '/api/spawn') return { agents: [] }
+      if (path === '/api/workflows/runs') return { runs: [] }
+      if (path === '/api/crons') return { jobs: [] }
+      if (path === '/api/artifacts') return { artifacts: [] }
+      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
+    // The summarized session names its card; the row keeps the work's own title.
+    expect(await screen.findByText('Avatar upload work', { selector: '.ow-goalcard-title' }))
+      .toBeInTheDocument()
+    expect(screen.getByText('Ship the cropping step')).toBeInTheDocument()
+    // The unsummarized one renders as a plain row: its title appears, but never
+    // twice, and it is not wrapped in a goal card.
+    expect(screen.getAllByText('Irrigation timer planning')).toHaveLength(1)
+    expect(screen.queryByText('Irrigation timer planning', { selector: '.ow-goalcard-title' }))
+      .not.toBeInTheDocument()
+    localStorage.removeItem('crew-manager.goal-memory')
   })
 
   it('initiative buckets and auto clusters share one card anatomy; goal quote routes to the active session', async () => {
@@ -120,20 +228,22 @@ describe('Crew Manager Conductor boundaries', () => {
     // carries the same flag — one chrome, so two "Running" flags render.
     expect(await screen.findByText('Crew Companion')).toBeInTheDocument()
     expect(screen.getAllByText('Running', { selector: '.ow-goal-flag' })).toHaveLength(2)
-    // The auto cluster: same card chrome, header names the group. It arrives
-    // FOLDED (nothing needs the user) showing the digest, not the rows.
-    expect(screen.getByText('2 sessions, one goal')).toBeInTheDocument()
+    // The auto cluster: same card chrome, named from what its members share
+    // rather than labelled by their count. It arrives FOLDED (nothing needs the
+    // user) showing the digest, not the rows — and the count lives in the meta.
+    expect(screen.getByText('Avatar upload flow', { selector: '.ow-goalcard-title' })).toBeInTheDocument()
+    expect(screen.queryByText('2 sessions, one goal')).not.toBeInTheDocument()
     expect(screen.getByText('2 sessions · 1 running · 1 done')).toBeInTheDocument()
     expect(screen.queryByTestId('work-item-session:s2')).not.toBeInTheDocument()
     // The chevron unfolds to the member rows.
-    fireEvent.click(screen.getByRole('button', { name: 'Expand 2 sessions, one goal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Avatar upload flow' }))
     expect(await screen.findByTestId('work-item-session:s2')).toBeInTheDocument()
     // The add-goal entry is ALWAYS reachable — buckets existing must not hide it.
     expect(screen.getByLabelText('New goal name')).toBeInTheDocument()
 
     // Selecting the cluster header quotes the GOAL and names the routing target —
     // the ACTIVE session — before anything is sent. The header names the group.
-    fireEvent.click(screen.getByRole('button', { name: '2 sessions, one goal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Avatar upload flow' }))
     expect(await screen.findByText('Instructing goal')).toBeInTheDocument()
     expect(screen.getByText(/→ Ship the avatar upload flow \(active\)/)).toBeInTheDocument()
     expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', expect.anything())

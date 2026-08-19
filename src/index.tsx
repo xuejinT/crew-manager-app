@@ -52,13 +52,16 @@ import {
   explainRank,
   fleetBriefing,
   clusterByInitiative,
+  explainGoal,
   goalComposition,
+  goalName,
   goalPairKey,
   goalRouteTarget,
   initiativeCandidates,
   memberDot,
   normalizeWorkItems,
   rankWorkItem,
+  rememberGoals,
   sameGoal,
   suggestGoalNames,
   titleOverlap,
@@ -73,6 +76,7 @@ import {
   type InstructedItems,
   type MemberDot,
   type PendingPermission,
+  type PriorGoal,
   type ResponseVerb,
   type WorkBlock,
   type WorkItem,
@@ -117,6 +121,8 @@ const SNOOZE_KEY = 'crew-manager.snoozed'
 const HANDLED_KEY = 'crew-manager.handled'
 const DONE_COLLAPSED_KEY = 'crew-manager.done-collapsed'
 const GOAL_VERDICTS_KEY = 'crew-manager.goal-verdicts'
+/* Last run's goal membership, so a goal keeps one identity across polls. */
+const GOAL_MEMORY_KEY = 'crew-manager.goal-memory'
 const INITIATIVE_COLLAPSED_KEY = 'crew-manager.initiative-collapsed'
 const OPEN_STACK_KEY = 'crew-manager.open-stack'
 const SPLIT_KEY = 'crew-manager.split'
@@ -229,11 +235,13 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   stalled_because: '{{reason}} Silent for {{duration}}.',
   duplicate_same_change: 'Also being worked in “{{title}}” — same linked change',
   duplicate_same_artifact: 'Also being worked in “{{title}}” — same artifact',
+  duplicate_same_deliverable: 'Also being worked in “{{title}}” — same deliverable',
   duplicate_same_topic: 'Looks like the same work as “{{title}}”',
   duplicate_same_step: 'Next step matches “{{title}}” — may be the same work',
   related_sessions: '{{count}} other session(s) on this same work',
   related_same_change: 'same change',
   related_same_artifact: 'same artifact',
+  related_same_deliverable: 'same deliverable',
   related_same_topic: 'similar goal',
   related_same_step: 'same next step',
   related_more: 'and {{count}} more',
@@ -539,6 +547,7 @@ function GoalCard({
   flag,
   flagWarn,
   meta,
+  why,
   header,
   action,
   children,
@@ -550,6 +559,11 @@ function GoalCard({
   flag: string
   flagWarn?: boolean
   meta: string
+  /**
+   * Why these items are on one card. Only merged cards carry one: a goal the user
+   * named needs no defence, and a lone item was never grouped in the first place.
+   */
+  why?: string | null
   header: ReactNode
   action?: ReactNode
   children: ReactNode
@@ -573,6 +587,7 @@ function GoalCard({
         <span className={`ow-goal-flag${flagWarn ? ' ow-goal-flag-warn' : ''}`}>{flag}</span>
       </div>
       <div className="ow-goal-meta">{meta}</div>
+      {why && <div className="ow-goal-why">Grouped because {why}.</div>}
       {children}
     </div>
   )
@@ -1491,20 +1506,33 @@ function WorkSection({
       const pairs: string[] = []
       for (let i = 0; i < block.items.length; i += 1) {
         for (let j = i + 1; j < block.items.length; j += 1) {
-          if (block.items[i].sessionKey !== block.items[j].sessionKey) {
-            pairs.push(goalPairKey(block.items[i], block.items[j]))
-          }
+          // Every pair in the cluster, same-session ones included: provenance can
+          // now merge within a session, and a Split that skipped those pairs would
+          // leave the card looking splittable while doing nothing.
+          pairs.push(goalPairKey(block.items[i], block.items[j]))
         }
       }
+      // What to CALL this goal, derived from what its members share (a
+      // deliverable, a change, or the words their titles have in common). The
+      // count-label is the FALLBACK, not the default: "3 sessions, one goal"
+      // describes the grouping rather than the work, so it is what a card says
+      // only when the members share nothing nameable. The count is not lost —
+      // the composition meta below carries it. A single-session cluster with no
+      // shared name falls back to its session, never to "1 sessions, one goal".
+      const sessionCount = new Set(block.items.map(i => i.sessionKey).filter(Boolean)).size
+      const goalLabel = goalName(block.items) ?? (sessionCount > 1
+        ? `${sessionCount} sessions, one goal`
+        : lead.references.find(ref => ref.kind === 'session')?.label ?? lead.title)
       return (
         <GoalCard
           key={init.key}
           open={!folded}
           onToggle={() => onToggleInitiative?.(init.key, !folded)}
-          label={`${new Set(block.items.map(i => i.sessionKey).filter(Boolean)).size} sessions, one goal`}
+          label={goalLabel}
           flag={comp.needsYou > 0 ? `${comp.needsYou} need you` : stateLabels[init.status]}
           flagWarn={comp.needsYou > 0}
           meta={goalMetaLine(block.items)}
+          why={explainGoal(block.items, goalVerdicts)}
           header={
             <Clickable
               onActivate={() => onSelectGoal?.(block.key)}
@@ -1513,7 +1541,7 @@ function WorkSection({
               data-selected={selectedGoalKey === block.key ? 'true' : undefined}
             >
               <Users className="ow-icon" aria-hidden="true" />
-              <span className="ow-truncate ow-block-name ow-goalcard-title">{new Set(block.items.map(i => i.sessionKey).filter(Boolean)).size} sessions, one goal</span>
+              <span className="ow-truncate ow-block-name ow-goalcard-title">{goalLabel}</span>
             </Clickable>
           }
           action={onSplitGoal && (
@@ -1533,19 +1561,28 @@ function WorkSection({
         </GoalCard>
       )
     }
-    // A lone goal: nothing to name above a single item, so the header is just the
-    // grouping chrome (flag + composition); the item carries its own title in its
-    // row.
+    // A lone goal, named by its SESSION -- the group it belongs to -- so the card
+    // carries a header like every other. Two items of care:
+    //
+    // A session with no summarized intents titles its work after the session
+    // itself, so header and row would print the identical string twice. Such a
+    // card has nothing to say above its row, and a band that either sits empty
+    // or repeats the row is worse than no band, so the item renders as a plain
+    // row instead. Same for an item with no session at all (a bare approval, an
+    // orphaned run): there is no group to name.
     const item = block.items[0]
+    const sessionName = item.references.find(ref => ref.kind === 'session')?.label
+    if (!sessionName || sessionName === item.title) return goalRow(item)
     const comp = goalComposition(block.items)
     return (
       <GoalCard
         key={init.key}
         open
+        label={sessionName}
         flag={comp.needsYou > 0 ? `${comp.needsYou} need you` : stateLabels[item.state]}
         flagWarn={comp.needsYou > 0}
         meta={goalMetaLine(block.items)}
-        header={<span className="ow-goalcard-title ow-goalcard-lone" aria-hidden="true" />}
+        header={<span className="ow-truncate ow-block-name ow-goalcard-title">{sessionName}</span>}
       >
         {goalRow(item)}
       </GoalCard>
@@ -1698,6 +1735,7 @@ export default function CrewOverviewApp() {
   const [snoozed, setSnoozed] = useState<Record<string, number>>(() => readStore(SNOOZE_KEY))
   const [handled, setHandled] = useState<Record<string, number>>(() => readStore(HANDLED_KEY))
   const [goalVerdicts, setGoalVerdicts] = useState<GoalVerdicts>(() => readStore(GOAL_VERDICTS_KEY, { merged: [], split: [] }))
+  const priorGoals = useRef<PriorGoal[]>(readStore<PriorGoal[]>(GOAL_MEMORY_KEY, []))
   const [initiatives, setInitiatives] = useState<Initiative[]>([])
   const [collapsedInitiatives, setCollapsedInitiatives] = useState<Record<string, boolean>>(() => readStore(INITIATIVE_COLLAPSED_KEY))
   const [selectedGoalKey, setSelectedGoalKey] = useState<string | null>(null)
@@ -2043,9 +2081,19 @@ export default function CrewOverviewApp() {
    * Sessions pill changed.
    */
   const initiativeBlocks = useMemo(
-    () => clusterByInitiative(items, initiatives, goalVerdicts),
+    () => clusterByInitiative(items, initiatives, goalVerdicts, priorGoals.current),
     [items, initiatives, goalVerdicts],
   )
+  // A goal's key is what the fold state is stored against, so it has to survive
+  // the goal gaining or losing a member. Carrying the previous run's membership
+  // forward is what lets reconcileGoalKeys recognise the same goal next poll.
+  useEffect(() => {
+    const remembered = rememberGoals(
+      initiativeBlocks.filter(init => init.name === null).flatMap(init => init.blocks),
+    )
+    priorGoals.current = remembered
+    writeStore(GOAL_MEMORY_KEY, remembered)
+  }, [initiativeBlocks])
   // Re-derived each render: a poll can reshape the clusters, and a quote must
   // describe the board as it is now, not as it was when clicked.
   const selectedGoal = useMemo(() => {
