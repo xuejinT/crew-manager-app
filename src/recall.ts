@@ -70,13 +70,24 @@ export function describeAge(modified: number | undefined, now: number): string {
   return months === 1 ? 'last month' : `${months} months ago`
 }
 
+/**
+ * Which workspaces a recall query is allowed to answer from.
+ *
+ * `workspace` is the default and the safe one. `all` is a per-query widening the
+ * user asks for explicitly; it is never remembered across a reload, so nobody is
+ * left in it without knowing.
+ */
+export type RecallScope = 'workspace' | 'all'
+
 export interface RecallState {
   /** True once the gateway has told us it cannot answer recall at all. */
   unsupported: boolean
   hits: RecallHit[]
+  /** The scope the BACKEND says answered, not the one we asked for. */
+  scope: RecallScope
 }
 
-export const EMPTY_RECALL: RecallState = { unsupported: false, hits: [] }
+export const EMPTY_RECALL: RecallState = { unsupported: false, hits: [], scope: 'workspace' }
 
 /**
  * Read one recall response into state.
@@ -86,12 +97,23 @@ export const EMPTY_RECALL: RecallState = { unsupported: false, hits: [] }
  * keystroke for the rest of the session.
  */
 export function readRecallReport(report: RecallReport | null | undefined): RecallState {
-  if (!report || report.enabled === false) return { unsupported: true, hits: [] }
+  if (!report || report.enabled === false) {
+    return { unsupported: true, hits: [], scope: 'workspace' }
+  }
   const hits = Array.isArray(report.results) ? report.results : []
-  return { unsupported: false, hits: hits.filter(hit => Boolean(hit?.session_key)) }
+  return {
+    unsupported: false,
+    hits: hits.filter(hit => Boolean(hit?.session_key)),
+    // Trust the backend's account of what it searched over our own request. If a
+    // gateway ignores the parameter, the label must say "this workspace" rather
+    // than claim a reach the results do not have.
+    scope: report.scope === 'all' ? 'all' : 'workspace',
+  }
 }
 
-export function recallUrl(query: string, limit: number): string {
+export function recallUrl(query: string, limit: number, scope: RecallScope = 'workspace'): string {
   const params = new URLSearchParams({ q: query.trim(), limit: String(limit) })
+  // Sent only when widened, so a default query is byte-identical to before.
+  if (scope === 'all') params.set('scope', 'all')
   return `/api/apps/crew-manager/recall?${params.toString()}`
 }

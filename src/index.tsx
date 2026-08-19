@@ -31,6 +31,7 @@ import type {
   Artifact,
   ChatSlot,
   CronJob,
+  MonitorLoop,
   SessionSummary,
   ErrorLoopFinding,
   RecallHit,
@@ -46,6 +47,7 @@ import {
   readRecallReport,
   recallIsWorthAsking,
   recallUrl,
+  type RecallScope,
   type RecallState,
 } from './recall'
 import {
@@ -58,6 +60,7 @@ import {
   pendingPermissions,
   responseVerb,
   SNOOZE_MS,
+  describeSilence,
   explainRank,
   fleetBriefing,
   clusterByInitiative,
@@ -106,6 +109,7 @@ interface SourcesResponse {
   workflows: WorkflowRow[]
   crons: CronJob[]
   artifacts: Artifact[]
+  loops: MonitorLoop[]
 }
 
 const SNOOZE_KEY = 'crew-manager.snoozed'
@@ -160,6 +164,10 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   workflow_finished: 'Workflow finished',
   monitor_failed: 'The latest check stopped before finishing',
   monitor_running: 'Monitor is checking now',
+  monitor_next_check: 'Checks again in {{duration}}.',
+  loop: 'Monitor loop',
+  loop_watching: 'Re-prompting its own session — {{cycles}} cycles so far, no limit set',
+  loop_watching_capped: 'Re-prompting its own session — cycle {{cycles}} of {{cap}}',
   artifact_ready: '{{kind}} output is ready',
   stalled_for: 'Check on it — no activity for {{duration}}, still marked running',
   stalled_because: '{{reason}} Silent for {{duration}}.',
@@ -167,6 +175,14 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   duplicate_same_artifact: 'Also being worked in “{{title}}” — same artifact',
   duplicate_same_topic: 'Looks like the same work as “{{title}}”',
   duplicate_same_step: 'Next step matches “{{title}}” — may be the same work',
+  related_sessions: '{{count}} other session(s) on this same work',
+  related_same_change: 'same change',
+  related_same_artifact: 'same artifact',
+  related_same_topic: 'similar goal',
+  related_same_step: 'same next step',
+  related_more: 'and {{count}} more',
+  recall_scope_workspace: 'This workspace',
+  recall_scope_all: 'All workspaces',
   rank_approval_owed: 'only you can clear this approval',
   rank_subagent_gate: 'a sub-agent is held at the spawn gate',
   rank_input_requested: 'the agent asked you a question',
@@ -325,15 +341,33 @@ function PastWorkSection({
   hits,
   now,
   onOpenSession,
+  scope,
+  onScopeChange,
 }: {
   hits: RecallHit[]
   now: number
   onOpenSession: (slot: string) => void
+  scope: RecallScope
+  /** Widening is per query and never remembered, so this is a live control. */
+  onScopeChange: (scope: RecallScope) => void
 }) {
   if (hits.length === 0) return null
   return (
     <section className="ow-section" aria-label="From past work">
       <PanelSectionHeader label="From past work" count={hits.length} />
+      {/*
+        The reach of a search is stated, and changing it is one click. Labelled
+        with what IS being searched rather than as a checkbox, because "all
+        workspaces" as an unchecked box reads as a promise the default breaks.
+      */}
+      <div className="ow-recall-scope">
+        <Clickable
+          className="ow-recall-scope-toggle"
+          onActivate={() => onScopeChange(scope === 'all' ? 'workspace' : 'all')}
+        >
+          <span>{workCopy(scope === 'all' ? 'recall_scope_all' : 'recall_scope_workspace')}</span>
+        </Clickable>
+      </div>
       <div className="ow-section-list">
         {hits.map(hit => (
           <Clickable
@@ -347,6 +381,14 @@ function PastWorkSection({
                 <div className="ow-row-heading">
                   <span className="ow-row-title">{hit.title}</span>
                   <span className="ow-recall-age">{describeAge(hit.modified, now)}</span>
+                  {/*
+                    Shown only when the answer could have come from elsewhere. In
+                    the default scope every hit is local, so the label would be
+                    noise on every row.
+                  */}
+                  {scope === 'all' && hit.workspace && (
+                    <span className="ow-recall-workspace">{hit.workspace}</span>
+                  )}
                 </div>
                 {hit.snippet && <p className="ow-row-summary">{hit.snippet}</p>}
               </div>
@@ -783,6 +825,8 @@ function WorkRow({
   permissionBusy,
   onRetry,
   retryBusy,
+  onStop,
+  stopBusy,
   onPickStep,
   onSnooze,
   onHandled,
@@ -800,6 +844,9 @@ function WorkRow({
   permissionBusy?: boolean
   onRetry?: (path: string) => void
   retryBusy?: boolean
+  /** Stop work that continues on its own. Irreversible from this app. */
+  onStop?: (path: string) => void
+  stopBusy?: boolean
   /** Fill the Conductor input with a suggested next step, chosen on the card. */
   onPickStep?: (what: string) => void
   onSnooze?: (id: string) => void
@@ -863,6 +910,37 @@ function WorkRow({
                 )}
               </span>
             </Clickable>
+          )}
+          {/*
+            Who else is on this, both directions — including for the session that
+            started first, which `duplicateOf` deliberately never tells. Each name
+            opens that session, because the only useful response to "someone else
+            is on this" is to go and look. Advice: it changes no state and no order.
+          */}
+          {selected && item.relatedSessions && item.relatedSessions.length > 0 && (
+            <Expand><div className="ow-related">
+              <span className="ow-related-label">
+                {workCopy('related_sessions', { count: String(item.relatedSessions.length) })}
+              </span>
+              {item.relatedSessions.map(related => (
+                <Clickable
+                  key={related.sessionKey}
+                  className="ow-related-row"
+                  onActivate={() => onOpenSession(related.sessionKey)}
+                >
+                  <Users className="ow-icon" aria-hidden="true" />
+                  <span className="ow-truncate">{related.title}</span>
+                  <span className="ow-related-why">
+                    {workCopy(`related_${related.because}` as WorkCopyKey)}
+                  </span>
+                </Clickable>
+              ))}
+              {item.relatedMore ? (
+                <span className="ow-related-more">
+                  {workCopy('related_more', { count: String(item.relatedMore) })}
+                </span>
+              ) : null}
+            </div></Expand>
           )}
           {/*
             Only in Needs you. That is the one group ordered by score rather than
@@ -956,6 +1034,19 @@ function WorkRow({
         <Expand><div className="ow-retry">
           <Btn onClick={() => onRetry(item.retryPath as string)} disabled={Boolean(retryBusy)}>
             Retry
+          </Btn>
+        </div></Expand>
+      )}
+      {/*
+        A loop keeps prompting its own session until a budget runs out, so the
+        only intervention it has is to end it. Kept behind selection like Retry,
+        and worded as the consequence rather than as "Stop": the remaining cycles
+        are discarded and this app cannot put them back.
+      */}
+      {selected && item.stopPath && onStop && (
+        <Expand><div className="ow-retry">
+          <Btn onClick={() => onStop(item.stopPath as string)} disabled={Boolean(stopBusy)}>
+            {stopBusy ? 'Stopping…' : 'Stop this loop'}
           </Btn>
         </div></Expand>
       )}
@@ -1127,6 +1218,8 @@ function WorkSection({
   permissionBusy,
   onRetry,
   retryBusy,
+  onStop,
+  stopBusy,
   onPickStep,
   onSnooze,
   onHandled,
@@ -1157,6 +1250,9 @@ function WorkSection({
   permissionBusy?: boolean
   onRetry?: (path: string) => void
   retryBusy?: boolean
+  /** Stop work that continues on its own. Irreversible from this app. */
+  onStop?: (path: string) => void
+  stopBusy?: boolean
   onPickStep?: (what: string) => void
   onSnooze?: (id: string) => void
   onHandled?: (id: string, updatedAt: number) => void
@@ -1269,6 +1365,8 @@ function WorkSection({
               permissionBusy={permissionBusy}
               onRetry={onRetry}
               retryBusy={retryBusy}
+              onStop={onStop}
+              stopBusy={stopBusy}
               onPickStep={onPickStep}
               onSnooze={onSnooze}
               onHandled={onHandled}
@@ -1428,6 +1526,36 @@ function contextMessage(item: WorkItem | null, items: WorkItem[]): string {
     ].join('\n')
   }
   const references = item.references.map(ref => `${ref.kind}: ${ref.label} (${ref.id})`).join('\n')
+  // The facts that make an item actionable, named rather than left for the
+  // Conductor to infer from prose. Before this it received a title and a summary
+  // and had to guess whether a card was a stall, a loop, a dead run or a live
+  // one, which is exactly the judgement it is being asked to make. Background
+  // work -- a failed monitor, a running loop -- has no session to instruct, so
+  // WITHOUT these lines there was nothing concrete to reason about at all.
+  //
+  // Remedies are named but never granted: stopping and retrying are buttons the
+  // user presses. The Conductor may recommend one; it cannot perform either.
+  const diagnosis = [
+    item.stalledFor ? `Silent for ${describeSilence(item.stalledFor)} while still marked running.` : undefined,
+    item.loopRepeats ? `The same failure has repeated ${item.loopRepeats} times.` : undefined,
+    item.unverified ? 'Reported finished but never verified.' : undefined,
+    item.changeBlocked ? 'A linked change is failing or conflicting.' : undefined,
+    item.queuedBehind ? `${item.queuedBehind} further prompt(s) are queued in this same session.` : undefined,
+    item.approvalKind
+      ? `An approval is owed (${item.approvalKind}). Only the user can answer it; recommend, do not attempt it.`
+      : undefined,
+    item.runFailed
+      ? (item.retryPath
+        ? 'This run failed. The user has a Retry button on the card.'
+        : 'This run failed and the platform cannot re-run it, so there is no retry to recommend.')
+      : undefined,
+    item.stopPath
+      ? 'This is a live monitor loop: it re-prompts its own session unattended. The user has a Stop button on the card. You cannot stop it yourself.'
+      : undefined,
+    !item.sessionKey
+      ? 'This is background work with no session to instruct, so any recommendation must be something the user does on the card.'
+      : undefined,
+  ].filter((line): line is string => Boolean(line))
   return [
     `Crew Manager context: ${item.title}`,
     ...briefing,
@@ -1437,6 +1565,7 @@ function contextMessage(item: WorkItem | null, items: WorkItem[]): string {
     `Latest meaningful update: ${item.summary}`,
     `Provenance: ${item.provenance}`,
     item.sessionKey ? `Referenced session: ${item.sessionKey}` : 'Referenced session: none',
+    ...(diagnosis.length > 0 ? [`Why it is on the board:\n${diagnosis.join('\n')}`] : []),
     `References:\n${references}`,
     'This context was selected silently. Answer the user about it; the user sends any instruction to a session themselves.',
   ].filter((line): line is string => Boolean(line)).join('\n')
@@ -1467,6 +1596,7 @@ export default function CrewOverviewApp() {
   const [watchedSessions, setWatchedSessions] = useState<string[]>([])
   const [resolvingApproval, setResolvingApproval] = useState<string | null>(null)
   const [retrying, setRetrying] = useState<string | null>(null)
+  const [stopping, setStopping] = useState<string | null>(null)
   // Set-aside records live in the browser: the queue is re-derived every poll,
   // so without a persisted record a dismissed item returns within seconds.
   const [snoozed, setSnoozed] = useState<Record<string, number>>(() => readStore(SNOOZE_KEY))
@@ -1479,6 +1609,8 @@ export default function CrewOverviewApp() {
   // Instructions sent from here. They land in ANOTHER session's transcript, so the
   // Conductor has to keep its own record or the conversation loses the user's turn.
   const [recall, setRecall] = useState<RecallState>(EMPTY_RECALL)
+  // Not persisted on purpose: a widened search must be re-chosen, never inherited.
+  const [recallScope, setRecallScope] = useState<RecallScope>('workspace')
   const [loops, setLoops] = useState<Record<string, ErrorLoopFinding>>({})
   // Flips false the first time the backend route is unreachable.
   const stallProbeRef = useRef(true)
@@ -1502,13 +1634,20 @@ export default function CrewOverviewApp() {
     const request = ++sourceRequestRef.current
     const currentApi = apiRef.current
     try {
-      const [slots, approvals, agentEnvelope, workflowEnvelope, cronEnvelope, artifactEnvelope] = await Promise.all([
+      const [slots, approvals, agentEnvelope, workflowEnvelope, cronEnvelope, artifactEnvelope, loopEnvelope] = await Promise.all([
         currentApi.get<ChatSlot[]>('/api/chat/slots'),
         currentApi.get<ApprovalRow[]>('/api/approvals'),
         currentApi.get<{ agents?: AgentRow[] }>('/api/spawn'),
         currentApi.get<{ runs?: WorkflowRow[] }>('/api/workflows/runs'),
         currentApi.get<{ jobs?: CronJob[] }>('/api/crons'),
         currentApi.get<{ artifacts?: Artifact[] }>('/api/artifacts'),
+        // Swallowed on purpose, unlike its six siblings. Auto-nudge is optional
+        // in the gateway (it answers `enabled: false` when switched off) and this
+        // route is newer than the rest, so an install that cannot serve it must
+        // lose the loop rows only — not the whole board.
+        currentApi
+          .get<{ enabled?: boolean; loops?: MonitorLoop[] }>('/api/autonudge')
+          .catch(() => ({ loops: [] as MonitorLoop[] })),
       ])
       if (!mountedRef.current || request !== sourceRequestRef.current) return
       setSources({
@@ -1518,6 +1657,7 @@ export default function CrewOverviewApp() {
         workflows: Array.isArray(workflowEnvelope.runs) ? workflowEnvelope.runs : [],
         crons: Array.isArray(cronEnvelope.jobs) ? cronEnvelope.jobs : [],
         artifacts: Array.isArray(artifactEnvelope.artifacts) ? artifactEnvelope.artifacts : [],
+        loops: Array.isArray(loopEnvelope?.loops) ? loopEnvelope.loops : [],
       })
       setSourcesError(null)
     } catch (error) {
@@ -1635,24 +1775,26 @@ export default function CrewOverviewApp() {
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const report = await apiRef.current.get<RecallReport>(recallUrl(text, RECALL_LIMIT))
+          const report = await apiRef.current.get<RecallReport>(
+            recallUrl(text, RECALL_LIMIT, recallScope),
+          )
           if (cancelled || !mountedRef.current) return
           setRecall(readRecallReport(report))
         } catch {
           // A route that is not mounted yet (backend hook needs a restart) is not
           // worth retrying on every keystroke.
-          if (mountedRef.current) setRecall({ unsupported: true, hits: [] })
+          if (mountedRef.current) setRecall({ unsupported: true, hits: [], scope: 'workspace' })
         }
       })()
     }, RECALL_DEBOUNCE_MS)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [query, recall.unsupported])
+  }, [query, recall.unsupported, recallScope])
 
   const derived = useMemo(
     // Optimistic acknowledgements are applied on top of derived state, never baked
     // into it: real state wins on the next poll, and the ack expires on its own.
     () => applyInstructed(normalizeWorkItems(sources ?? {
-      slots: [], approvals: [], agents: [], workflows: [], crons: [], artifacts: [],
+      slots: [], approvals: [], agents: [], workflows: [], crons: [], artifacts: [], loops: [],
     }, workCopy, summaries, stalls, loops, goalVerdicts), instructed),
     [sources, summaries, stalls, loops, instructed, goalVerdicts],
   )
@@ -1944,6 +2086,33 @@ export default function CrewOverviewApp() {
     }
   }, [loadSources, retrying])
 
+  const stopLoop = useCallback(async (path: string) => {
+    if (stopping) return
+    setStopping(path)
+    setConductorError(null)
+    try {
+      await apiRef.current.del(path)
+      // Stopping is not undoable from here, so it gets the same treatment as a
+      // delivered instruction: a stated outcome, not just a row that vanishes on
+      // the next poll. A silent disappearance is indistinguishable from a
+      // rendering glitch, and the user cannot re-arm the loop from this app.
+      setDeliveryReceipt('Stopped the monitor loop. Re-arming it is done from the session itself.')
+      void loadSources()
+    } catch (error) {
+      // A loop that already ended on its own answers 404. That is the outcome the
+      // user wanted, so it must not read as a failure.
+      const message = error instanceof Error ? error.message : ''
+      if (/404|not found/i.test(message)) {
+        setDeliveryReceipt('That loop had already stopped.')
+      } else {
+        setConductorError(message ? `Could not stop it: ${message}` : 'Could not stop it')
+      }
+      void loadSources()
+    } finally {
+      if (mountedRef.current) setStopping(null)
+    }
+  }, [loadSources, stopping])
+
   /**
    * The one composer, routed. A quoted item's message is an instruction to that
    * session; anything else talks to the Conductor, whose transcript the embed
@@ -2234,6 +2403,8 @@ export default function CrewOverviewApp() {
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
+                onStop={path => { void stopLoop(path) }}
+                stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
                             groupBy={groupBy}
                             emptyLabel="Nothing needs your input right now."
@@ -2250,6 +2421,8 @@ export default function CrewOverviewApp() {
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
+                onStop={path => { void stopLoop(path) }}
+                stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
                             groupBy={groupBy}
                             emptyLabel="Nothing is in progress right now."
@@ -2267,6 +2440,8 @@ export default function CrewOverviewApp() {
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
+                onStop={path => { void stopLoop(path) }}
+                stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
                             groupBy={groupBy}
                             emptyLabel="No recent completed work."
@@ -2285,6 +2460,8 @@ export default function CrewOverviewApp() {
                 permissionBusy={resolvingApproval !== null}
                 onRetry={path => { void retryRun(path) }}
                 retryBusy={retrying !== null}
+                onStop={path => { void stopLoop(path) }}
+                stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
                           groupBy={groupBy}
                           emptyLabel="No matching work"
@@ -2296,6 +2473,8 @@ export default function CrewOverviewApp() {
                         hits={recalled}
                         now={Date.now()}
                         onOpenSession={openSession}
+                        scope={recall.scope}
+                        onScopeChange={setRecallScope}
                       />
                     )}
             </div>

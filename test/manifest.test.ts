@@ -39,6 +39,9 @@ describe('Crew Manager app manifest', () => {
       '/api/workflows',
       '/api/crons',
       '/api/artifacts',
+      // Live monitor loops: listed to show them, DELETEd to stop one. The loop
+      // is the only work on the board that spends budget with nobody watching.
+      '/api/autonudge',
       // Its own backend: stall findings, watcher settings, past-work recall.
       '/api/apps/crew-manager',
     ])

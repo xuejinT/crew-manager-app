@@ -214,6 +214,47 @@ check(
     len(detect_error_loops([loop_slot(varied)])) == 1,
     repr(detect_error_loops([loop_slot(varied)])),
 )
+
+
+def call_row(output: str, call_id: str, tool: str = "shell", done: bool = True) -> dict:
+    return {
+        "role": "tool",
+        "content": tool,
+        "meta": {"done": done, "output": output, "tool_call_id": call_id},
+    }
+
+
+# An auto-approved call is written twice, granted and completed, with the same
+# output both times. Counting rows would make two real failures look like four.
+duplicated = [
+    call_row("Error: connection refused", "call-a"),
+    call_row("Error: connection refused", "call-a"),
+    call_row("Error: connection refused", "call-b"),
+    call_row("Error: connection refused", "call-b"),
+]
+check(
+    "a repeated transcript row does not count as a second failure",
+    detect_error_loops([loop_slot(duplicated)]) == [],
+    repr(detect_error_loops([loop_slot(duplicated)])),
+)
+three_calls = duplicated + [call_row("Error: connection refused", "call-c")]
+check(
+    "three distinct failing calls are still a loop",
+    len(detect_error_loops([loop_slot(three_calls)])) == 1,
+)
+check(
+    "the loop counts calls, not transcript rows",
+    detect_error_loops([loop_slot(three_calls)])[0].repeats == 3,
+    repr(detect_error_loops([loop_slot(three_calls)])[0].repeats),
+)
+check(
+    "a call still in flight has no verdict to count",
+    detect_error_loops([loop_slot([
+        call_row("Error: connection refused", "call-a", done=False),
+        call_row("Error: connection refused", "call-b", done=False),
+        call_row("Error: connection refused", "call-c", done=False),
+    ])]) == [],
+)
 check(
     "old failures outside the tail are ignored",
     detect_error_loops([loop_slot(same_failure + [tool_row("ok") for _ in range(60)])]) == [],

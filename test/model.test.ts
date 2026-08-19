@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Artifact, ChatSlot, CronJob, SessionSummary } from '../src/types'
+import type { Artifact, ChatSlot, CronJob, MonitorLoop, SessionSummary } from '../src/types'
 import {
   describeSilence,
   explainRank,
@@ -12,8 +12,10 @@ import {
   rollUpSessions,
   applySetAside,
   DONE_WINDOW_MS,
+  EMPTY_VERDICTS,
   inDoneWindow,
   pendingPermissions,
+  RELATED_LIMIT,
   responseVerb,
   fleetBriefing,
   clusterByInitiative,
@@ -34,10 +36,14 @@ import {
   type WorkSources,
 } from '../src/model'
 
-function normalizeWorkItems(input: WorkSources, summaries: Record<string, SessionSummary> = {}) {
+function normalizeWorkItems(
+  input: WorkSources,
+  summaries: Record<string, SessionSummary> = {},
+  now?: number,
+) {
   return normalizeWorkItemsWithCopy(input, (key, values) => (
     [key, ...Object.values(values ?? {})].join(':')
-  ), summaries)
+  ), summaries, {}, {}, EMPTY_VERDICTS, now)
 }
 
 function sources(overrides: Partial<WorkSources> = {}): WorkSources {
@@ -1606,5 +1612,237 @@ describe('prBucket', () => {
   it('falls back to the coarse status when no live checks exist', () => {
     expect(prBucket({ status: 'checks failing' })).toBe('failing')
     expect(prBucket({ status: 'checks running' })).toBe('running')
+  })
+})
+
+describe('monitor loops', () => {
+  const NOW = Date.parse('2026-08-18T12:00:00Z')
+
+  function loop(overrides: Partial<MonitorLoop> = {}): MonitorLoop {
+    return {
+      id: 'loop-1',
+      slot_key: 'session-1',
+      message: 'Check PR #4161 for new CI results and fix anything red',
+      active: true,
+      cycle_count: 3,
+      max_cycles: 24,
+      last_fire_ts: NOW / 1000 - 120,
+      ...overrides,
+    }
+  }
+
+  it('surfaces a live loop as work in progress', () => {
+    const items = normalizeWorkItems(sources({ slots: [slot()], loops: [loop()] }))
+    const found = items.find(item => item.id === 'loop:loop-1')
+    expect(found).toBeDefined()
+    // Running, never needs-you: a loop is spending budget, not asking for a
+    // decision. Putting it in the queue would demand attention nobody requested.
+    expect(found?.state).toBe('running')
+    expect(found?.issue).toBe(false)
+    expect(responseVerb(found as WorkItem)).toBeNull()
+  })
+
+  it('offers a way to stop a loop, and does not call it a retry', () => {
+    const [found] = normalizeWorkItems(sources({ loops: [loop()] }))
+    expect(found.stopPath).toBe('/api/autonudge/loop-1')
+    // Stopping discards the remaining budget and cannot be undone here, so it
+    // must never arrive as the repeatable action.
+    expect(found.retryPath).toBeUndefined()
+  })
+
+  it('drops a loop that is no longer active', () => {
+    // An inactive loop is history. It stops costing anything the moment it ends,
+    // so a row for it would be a row nobody can act on.
+    expect(normalizeWorkItems(sources({ loops: [loop({ active: false })] }))).toEqual([])
+  })
+
+  it('names an uncapped loop as uncapped rather than counting toward nothing', () => {
+    const [found] = normalizeWorkItems(sources({ loops: [loop({ max_cycles: 0 })] }))
+    expect(found.summary).toBe('loop_watching:3')
+    const [capped] = normalizeWorkItems(sources({ loops: [loop({ max_cycles: 24 })] }))
+    expect(capped.summary).toBe('loop_watching_capped:3:24')
+  })
+
+  it('links a loop to its session only when that session is on the board', () => {
+    const [onBoard] = normalizeWorkItems(sources({ slots: [slot()], loops: [loop()] }))
+    expect(onBoard.sessionKey).toBe('session-1')
+    expect(onBoard.action).toBe('open')
+    // Never offer Open toward a session that is not present.
+    const [orphan] = normalizeWorkItems(sources({ loops: [loop({ slot_key: 'gone' })] }))
+    expect(orphan.sessionKey).toBeUndefined()
+    expect(orphan.action).toBeUndefined()
+  })
+
+  it('ignores a loop with no id rather than emitting an unstoppable row', () => {
+    expect(normalizeWorkItems(sources({ loops: [loop({ id: '' })] }))).toEqual([])
+  })
+})
+
+describe('next check countdown', () => {
+  const NOW = Date.parse('2026-08-18T12:00:00Z')
+
+  function monitor(overrides: Partial<CronJob> = {}): CronJob {
+    return {
+      id: 'cron-1',
+      name: 'Nightly dependency audit',
+      last_status: 'error',
+      last_run_ts: '2026-08-18T11:00:00Z',
+      ...overrides,
+    }
+  }
+
+  it('says when a failed check will run itself again', () => {
+    // The same red card means very different things depending on whether it
+    // recovers on its own in ten minutes or waits for a person indefinitely.
+    const [found] = normalizeWorkItems(
+      sources({ crons: [monitor({ next_run_ts: NOW / 1000 + 600 })] }), {}, NOW,
+    )
+    expect(found.summary).toBe('monitor_failed monitor_next_check:10 minutes')
+  })
+
+  it('phrases the countdown exactly as silence is phrased', () => {
+    const [found] = normalizeWorkItems(
+      sources({ crons: [monitor({ next_run_ts: NOW / 1000 + 5400 })] }), {}, NOW,
+    )
+    expect(found.summary).toContain(describeSilence(5400))
+  })
+
+  it('stays silent when there is no next run to report', () => {
+    const [none] = normalizeWorkItems(sources({ crons: [monitor()] }), {}, NOW)
+    expect(none.summary).toBe('monitor_failed')
+    // A paused job is not going to run, whatever time is still stored on it --
+    // and a future time IS still stored, because pausing does not clear it.
+    const [paused] = normalizeWorkItems(
+      sources({ crons: [monitor({ paused: true, next_run_ts: NOW / 1000 + 600 })] }), {}, NOW,
+    )
+    expect(paused.summary).toBe('monitor_failed')
+    // A run that is already due says nothing rather than claiming it is imminent.
+    const [due] = normalizeWorkItems(
+      sources({ crons: [monitor({ next_run_ts: NOW / 1000 - 5 })] }), {}, NOW,
+    )
+    expect(due.summary).toBe('monitor_failed')
+  })
+})
+
+describe('related sessions', () => {
+  function onChange(key: string, title: string, url: string, ts: string): ChatSlot {
+    return slot({
+      key,
+      title,
+      running: true,
+      last_ts: ts,
+      source_links: [{ provider: 'github', number: 2051, url, kind: 'change' }],
+    })
+  }
+
+  it('tells BOTH sessions about each other, not only the one that arrived second', () => {
+    const url = 'https://github.com/o/r/pull/2051'
+    const items = normalizeWorkItems(sources({
+      slots: [
+        onChange('session-1', 'Fix the upload gate', url, '2026-08-10T10:00:00Z'),
+        onChange('session-2', 'Upload gate follow-up', url, '2026-08-10T11:00:00Z'),
+      ],
+    }))
+    const first = items.find(item => item.sessionKey === 'session-1')
+    const second = items.find(item => item.sessionKey === 'session-2')
+    // duplicateOf keeps its one-directional warning: only the newer is marked.
+    expect(first?.duplicateOf).toBeUndefined()
+    expect(second?.duplicateOf).toBeDefined()
+    // Visibility is the other shape. The session that started first needs it most,
+    // because nothing else on its card says company has arrived.
+    expect(first?.relatedSessions?.map(r => r.sessionKey)).toEqual(['session-2'])
+    expect(second?.relatedSessions?.map(r => r.sessionKey)).toEqual(['session-1'])
+  })
+
+  it('names every related session, not just the first match', () => {
+    const url = 'https://github.com/o/r/pull/2051'
+    const items = normalizeWorkItems(sources({
+      slots: [
+        onChange('session-1', 'One', url, '2026-08-10T10:00:00Z'),
+        onChange('session-2', 'Two', url, '2026-08-10T11:00:00Z'),
+        onChange('session-3', 'Three', url, '2026-08-10T12:00:00Z'),
+      ],
+    }))
+    const found = items.find(item => item.sessionKey === 'session-1')
+    expect(found?.relatedSessions).toHaveLength(2)
+    expect(found?.duplicateOf).toBeUndefined()
+  })
+
+  it('puts a shared change above a merely similar title', () => {
+    const url = 'https://github.com/o/r/pull/2051'
+    const items = normalizeWorkItems(sources({
+      slots: [
+        slot({ key: 'session-1', title: 'Translate the gallery copy', running: true, last_ts: '2026-08-10T10:00:00Z', source_links: [{ provider: 'github', number: 1, url, kind: 'change' }] }),
+        slot({ key: 'session-2', title: 'Translate the gallery copy again', running: true, last_ts: '2026-08-10T11:00:00Z' }),
+        slot({ key: 'session-3', title: 'Something else entirely', running: true, last_ts: '2026-08-10T12:00:00Z', source_links: [{ provider: 'github', number: 1, url, kind: 'change' }] }),
+      ],
+    }))
+    const found = items.find(item => item.sessionKey === 'session-1')
+    // A shared change is a fact; an overlapping title is a guess.
+    expect(found?.relatedSessions?.[0]).toMatchObject({ sessionKey: 'session-3', because: 'same_change' })
+    expect(found?.relatedSessions?.map(r => r.because)).toEqual(['same_change', 'same_topic'])
+  })
+
+  it('caps the named sessions and counts the rest', () => {
+    const url = 'https://github.com/o/r/pull/2051'
+    const many = ['1', '2', '3', '4', '5', '6'].map((n, index) => (
+      onChange(`session-${n}`, `Job ${n}`, url, `2026-08-10T1${index}:00:00Z`)
+    ))
+    const found = normalizeWorkItems(sources({ slots: many }))
+      .find(item => item.sessionKey === 'session-1')
+    expect(found?.relatedSessions).toHaveLength(RELATED_LIMIT)
+    expect(found?.relatedMore).toBe(5 - RELATED_LIMIT)
+  })
+
+  it('never relates a finished session, and never changes state or order', () => {
+    const url = 'https://github.com/o/r/pull/2051'
+    const before = sources({
+      slots: [
+        onChange('session-1', 'Live work', url, '2026-08-10T10:00:00Z'),
+        slot({ key: 'session-2', title: 'Wrapped up', running: false, last_ts: '2026-08-10T09:00:00Z', source_links: [{ provider: 'github', number: 1, url, kind: 'change' }] }),
+      ],
+    })
+    const items = normalizeWorkItems(before)
+    const live = items.find(item => item.sessionKey === 'session-1')
+    // Done work is not company; it is history.
+    expect(live?.relatedSessions).toBeUndefined()
+    // Advice never promotes: the states are exactly what they were without it.
+    expect(items.find(item => item.sessionKey === 'session-2')?.state).toBe('done')
+    expect(live?.state).toBe('running')
+  })
+
+  it('does not relate a session to itself', () => {
+    const url = 'https://github.com/o/r/pull/2051'
+    const [only] = normalizeWorkItems(sources({
+      slots: [onChange('session-1', 'Alone on this', url, '2026-08-10T10:00:00Z')],
+    }))
+    expect(only.relatedSessions).toBeUndefined()
+    expect(only.relatedMore).toBeUndefined()
+  })
+
+  it('respects the user ruling a pair apart', () => {
+    const url = 'https://github.com/o/r/pull/2051'
+    const input = sources({
+      slots: [
+        onChange('session-1', 'Fix the upload gate', url, '2026-08-10T10:00:00Z'),
+        onChange('session-2', 'Upload gate follow-up', url, '2026-08-10T11:00:00Z'),
+      ],
+    })
+    // Without a ruling they are related in both directions.
+    const before = normalizeWorkItems(input)
+    expect(before.find(i => i.sessionKey === 'session-1')?.relatedSessions).toHaveLength(1)
+
+    // The user said these are not the same job. Relating them anyway would
+    // re-litigate that call in a second place, which is the whole point of
+    // sameGoal being the single judge.
+    const [a, b] = before
+    const verdicts = { merged: [], split: [goalPairKey(a, b)] }
+    const after = normalizeWorkItemsWithCopy(
+      input, key => key, {}, {}, {}, verdicts,
+    )
+    expect(after.find(i => i.sessionKey === 'session-1')?.relatedSessions).toBeUndefined()
+    expect(after.find(i => i.sessionKey === 'session-2')?.relatedSessions).toBeUndefined()
+    // The duplicate warning honours it too, so the two agree.
+    expect(after.find(i => i.sessionKey === 'session-2')?.duplicateOf).toBeUndefined()
   })
 })
