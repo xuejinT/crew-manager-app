@@ -313,7 +313,7 @@ export const OVERWATCH_STYLES = String.raw`
     flex-direction: column;
     background: var(--bg);
   }
-  .ow-conductor-header { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .ow-conductor-header { padding: 8px 10px; border-bottom: 1px solid var(--border); }
   .ow-conductor-title { display: flex; align-items: baseline; gap: 8px; }
   .ow-conductor-title h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 650; }
   .ow-conductor-sub { color: var(--muted); font-size: 12px; font-weight: 500; }
@@ -512,7 +512,7 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-next-step-why { display: block; color: var(--muted); font-size: 12px; }
   .ow-chat { display: flex; min-height: 0; flex: 1; }
   .ow-chat-loading { width: 100%; padding: 16px; }
-  .ow-chat-panel { position: relative; display: flex; min-height: 0; width: 100%; flex-direction: column; padding: 12px 16px; gap: 8px; }
+  .ow-chat-panel { position: relative; display: flex; min-height: 0; width: 100%; flex-direction: column; padding: 8px 10px; gap: 8px; }
   .ow-chat-panel > .ow-quote,
   .ow-chat-panel > .ow-permissions,
   .ow-chat-panel > .ow-conductor-receipt,
@@ -521,6 +521,11 @@ export const OVERWATCH_STYLES = String.raw`
      stays put instead of being overrun by the transcript. */
   .ow-embed { display: flex; flex: 1; min-height: 0; }
   .ow-embed > * { flex: 1; min-height: 0; }
+  /* The shared chat message rows carry px-4 (16px) on top of the panel's own
+     side padding, which pushes the transcript further in than the title/composer.
+     Cancel it inside the embed only, so the transcript lines up at the panel's
+     10px edge like the header row. */
+  .ow-embed .px-4 { padding-left: 0; padding-right: 0; }
   /* One visible way in, pushed to the trailing edge of the session header. */
   .ow-block-open { margin-left: auto; flex: none; }
   /* Icon-only open affordance in the PR header — replaces the redundant "Open"

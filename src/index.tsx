@@ -3738,6 +3738,7 @@ export default function CrewOverviewApp() {
                       slotKey={CONDUCTOR_SLOT}
                       frameless
                       startAtBottom
+                      slotControls
                       placeholder={selectedGoal
                         ? 'Instruction for this goal…'
                         : quoted?.sessionKey && scope === 'session' ? 'New instructions for this session…' : 'Ask across your work…'}

@@ -1,5 +1,5 @@
 import{Fragment as Oo,useCallback as D,useEffect as H,useMemo as V,useRef as le,useState as _}from"react";import{AlertTriangle as rr,
-Bot as Is,Check as sr,ChevronRight as de,Check as ar,Clock as ir,Package as Cs,ExternalLink as Nn,MessageSquare as Rn,RefreshCw as As,
+Bot as Cs,Check as sr,ChevronRight as de,Check as ar,Clock as ir,Package as Is,ExternalLink as Nn,MessageSquare as Rn,RefreshCw as As,
 Shield as Ws,Waves as lr,Search as Ps,Tag as Es,Users as Ft,Zap as Bs}from"lucide-react";import{useAppApi as Ms,useNavigate as Ks,
 useNavBadge as $s,ChatEmbed as Ls}from"@kirocrew/app-sdk";import{Badge as ee,Btn as G,ContentSkeleton as zo,EmptyState as Go,
 Input as Ts,PageHeader as Ds}from"@kirocrew/app-sdk/ui";function ot(e){let t=Math.max(1,Math.floor(e/60));if(t<60)return`${t} minute${t===1?"":"s"}`;let n=Math.floor(t/60),r=t%
@@ -197,13 +197,13 @@ let f=m.members.filter(l=>d.has(l)).length;if(!f)continue;let k=f/Math.min(d.siz
 (u={key:m.key,score:k})}if(u&&(n.add(u.key),i.key=u.key),r.has(i.key)){let m=2;for(;r.has(`${i.key}~${m}`);)m+=1;i.key=`${i.
 key}~${m}`}r.add(i.key)}return e}function Ro(e){return e.map(t=>({key:t.key,members:t.items.map(Tt)}))}function an(e,t){
 let n=t.split(" ").map(r=>`${_s(r)}s?`).join("[\\s/_,-]+");return e.match(new RegExp(n,"iu"))?.[0]??null}function _s(e){
-return e.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}function Io(e,t=kt,n){if(e.length<2)return null;let r=null,s=null,i=null;
+return e.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}function Co(e,t=kt,n){if(e.length<2)return null;let r=null,s=null,i=null;
 for(let d=0;d<e.length;d+=1)for(let u=d+1;u<e.length;u+=1){let m=e[d],f=e[u];if(ho(m,f))return`${f.parentId===m.id?f.title:
 m.title} was started by this work`;if(t.merged.includes(pe(m,f)))return"you merged these";i??=n?.get(pe(m,f))??null;let k=st(
 m,f);if(!(!k||!No.includes(k))&&(!r||Dt.indexOf(k)<Dt.indexOf(r))&&(r=k,k==="same_deliverable")){let l=rt(f.title),p=rt(
 m.title).find(b=>l.includes(b))??null;s=p?an(m.title,p)??an(f.title,p)??p:null}}return r==="same_change"?"these sessions\
  work on the same change":r==="same_artifact"?"these sessions share the same output":r==="same_deliverable"?s?`both are \
-about ${s}`:"both name the same deliverable":i}var Ss=12;function Co(e){if(e.length<2)return null;let t=new Map;for(let m of e)
+about ${s}`:"both name the same deliverable":i}var Ss=12;function Io(e){if(e.length<2)return null;let t=new Map;for(let m of e)
 for(let f of rt(m.title))t.set(f,(t.get(f)??0)+1);let n=Zn(t);if(n)return eo(e,n)??n;let r=new Map;for(let m of e)for(let f of m.
 references){if(f.kind!=="change"&&f.kind!=="issue")continue;let k=r.get(f.id);r.set(f.id,{label:f.label,members:(k?.members??
 0)+1})}let s=[...r.values()].filter(m=>m.members>=2).sort((m,f)=>f.members-m.members)[0];if(s)return s.label;let i=new Map;
@@ -560,7 +560,7 @@ return{summaries:n,support:r}}var Do=String.raw`
     flex-direction: column;
     background: var(--bg);
   }
-  .ow-conductor-header { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .ow-conductor-header { padding: 8px 10px; border-bottom: 1px solid var(--border); }
   .ow-conductor-title { display: flex; align-items: baseline; gap: 8px; }
   .ow-conductor-title h2 { margin: 0; color: var(--text-strong); font-size: 15px; font-weight: 650; }
   .ow-conductor-sub { color: var(--muted); font-size: 12px; font-weight: 500; }
@@ -759,7 +759,7 @@ return{summaries:n,support:r}}var Do=String.raw`
   .ow-next-step-why { display: block; color: var(--muted); font-size: 12px; }
   .ow-chat { display: flex; min-height: 0; flex: 1; }
   .ow-chat-loading { width: 100%; padding: 16px; }
-  .ow-chat-panel { position: relative; display: flex; min-height: 0; width: 100%; flex-direction: column; padding: 12px 16px; gap: 8px; }
+  .ow-chat-panel { position: relative; display: flex; min-height: 0; width: 100%; flex-direction: column; padding: 8px 10px; gap: 8px; }
   .ow-chat-panel > .ow-quote,
   .ow-chat-panel > .ow-permissions,
   .ow-chat-panel > .ow-conductor-receipt,
@@ -768,6 +768,11 @@ return{summaries:n,support:r}}var Do=String.raw`
      stays put instead of being overrun by the transcript. */
   .ow-embed { display: flex; flex: 1; min-height: 0; }
   .ow-embed > * { flex: 1; min-height: 0; }
+  /* The shared chat message rows carry px-4 (16px) on top of the panel's own
+     side padding, which pushes the transcript further in than the title/composer.
+     Cancel it inside the embed only, so the transcript lines up at the panel's
+     10px edge like the header row. */
+  .ow-embed .px-4 { padding-left: 0; padding-right: 0; }
   /* One visible way in, pushed to the trailing edge of the session header. */
   .ow-block-open { margin-left: auto; flex: none; }
   /* Icon-only open affordance in the PR header — replaces the redundant "Open"
@@ -1290,7 +1295,7 @@ essing \u2014 ordered by recency",rank_join:", and ",error_loop:"{{tool}} has fa
  row",untitled_work:"Untitled work"};function be(e,t={}){return Gs[e].replace(/\{\{(\w+)\}\}/g,(n,r)=>t[r]??"")}var qs={
 followup:"Follow up",unblock:"Unblock"},xe={"needs-you":"Needs you",running:"Running",done:"Done"},kn={all:"All","needs-\
 you":"Needs you",running:"Running",done:"Done"},Qo={all:"All",failing:"Failing",running:"Running",merged:"Merged"},Fs={session:Rn,
-approval:rr,agent:Is,workflow:Bs,monitor:lr,artifact:Cs,change:Nn,issue:Es};function We({children:e,onActivate:t,...n}){
+approval:rr,agent:Cs,workflow:Bs,monitor:lr,artifact:Is,change:Nn,issue:Es};function We({children:e,onActivate:t,...n}){
 return a("div",{...n,role:"button",tabIndex:0,onClick:t,onKeyDown:r=>{(r.key==="Enter"||r.key===" ")&&(r.preventDefault(),
 t())},children:e})}function Xo({label:e,count:t,subtitle:n}){return w("div",{className:"ow-section-header",children:[w("\
 div",{className:"ow-section-heading",children:[a("h2",{className:"ow-section-title",children:e}),a("span",{className:"ow\
@@ -1367,11 +1372,11 @@ available:!0,total:t.length,passing:t.filter(r=>r.bucket==="passed").length,fail
 pending:t.filter(r=>r.bucket==="pending").length,title:e.title,state:e.state?e.state.toUpperCase():void 0,is_draft:!!e.draft,
 head:e.headBranch,base:e.baseBranch,author:e.author,updated_at:e.updatedAt,additions:e.additions,deletions:e.deletions,changed_files:e.
 changedFiles,merge_state:e.mergeStateStatus?e.mergeStateStatus.toLowerCase():void 0,mergeable:e.mergeable?e.mergeable.toLowerCase():
-void 0,auto_merge:!!e.autoMerge,review:so(n),unresolved:ao(n)}}function In(e,t){let n=t?.updated_at?Date.parse(t.updated_at):
+void 0,auto_merge:!!e.autoMerge,review:so(n),unresolved:ao(n)}}function Cn(e,t){let n=t?.updated_at?Date.parse(t.updated_at):
 0;return{status:e.status,state:t?.state,isDraft:t?.is_draft,mergeState:t?.merge_state,mergeable:t?.mergeable,autoMerge:t?.
 auto_merge,base:t?.base,available:t?.available,total:t?.total,passing:t?.passing,failing:t?.failing,pending:t?.pending,unresolved:t?.
 unresolved,review:t?.review,updatedAt:n||void 0}}function Zs({reference:e,checks:t,folded:n,onToggle:r}){let s=t?.title||
-e.label,i=io(e.url),d=t?.updated_at?Date.parse(t.updated_at):0,u=In(e,t),m=yt(u),f=ro(u),k=d?Ut(d):null,l=w(Pe,{children:[
+e.label,i=io(e.url),d=t?.updated_at?Date.parse(t.updated_at):0,u=Cn(e,t),m=yt(u),f=ro(u),k=d?Ut(d):null,l=w(Pe,{children:[
 w("div",{className:"ow-pr-idline",children:[r&&a(de,{className:"ow-icon ow-init-chevron","data-open":n?void 0:"true","ar\
 ia-hidden":"true"}),i&&a("span",{className:"ow-pr-repo ow-truncate",children:i}),a("span",{className:"ow-pr-number",children:e.
 label.replace(/^github\s*/,"")}),t?.author&&a("span",{children:t.author}),k&&a("span",{className:"ow-pr-when",children:k})]}),
@@ -1392,31 +1397,31 @@ let[W,_e]=_(!1);return w(We,{onActivate:s,className:"ow-row","aria-pressed":t,"d
 -layout",children:[w("div",{className:"ow-row-content",children:[!$&&w("div",{className:"ow-row-heading",children:[E&&a(
 "span",{className:`ow-dot ow-dot-${E}`,"aria-hidden":"true"}),!O&&(S?e.state==="done"&&a(sr,{className:"ow-icon ow-row-c\
 heck","aria-hidden":"true"}):js(e)),a("span",{className:"ow-row-title",children:e.title})]}),(!M&&!O||t)&&e.summary&&!(e.
-nextSteps??[]).some(I=>I.what?.trim()===e.summary)&&a("p",{className:"ow-row-summary",children:e.summary}),e.duplicateOf&&
+nextSteps??[]).some(C=>C.what?.trim()===e.summary)&&a("p",{className:"ow-row-summary",children:e.summary}),e.duplicateOf&&
 (!O||t)&&w(We,{className:"ow-row-duplicate",onActivate:()=>i(e.duplicateOf.sessionKey),children:[a(Ft,{className:"ow-ico\
 n","aria-hidden":"true"}),a("span",{className:"ow-truncate",children:be(`duplicate_${e.duplicateOf.because}`,{title:e.duplicateOf.
 title})})]}),t&&e.relatedSessions&&e.relatedSessions.length>0&&a(_t,{children:w("div",{className:"ow-related",children:[
 a("span",{className:"ow-related-label",children:be("related_sessions",{count:String(e.relatedSessions.length)})}),e.relatedSessions.
-map(I=>w(We,{className:"ow-related-row",onActivate:()=>i(I.sessionKey),children:[a(Ft,{className:"ow-icon","aria-hidden":"\
-true"}),a("span",{className:"ow-truncate",children:I.title}),a("span",{className:"ow-related-why",children:be(`related_${I.
-because}`)})]},I.sessionKey)),e.relatedMore?a("span",{className:"ow-related-more",children:be("related_more",{count:String(
+map(C=>w(We,{className:"ow-related-row",onActivate:()=>i(C.sessionKey),children:[a(Ft,{className:"ow-icon","aria-hidden":"\
+true"}),a("span",{className:"ow-truncate",children:C.title}),a("span",{className:"ow-related-why",children:be(`related_${C.
+because}`)})]},C.sessionKey)),e.relatedMore?a("span",{className:"ow-related-more",children:be("related_more",{count:String(
 e.relatedMore)})}):null]})}),r&&(!O||t)&&a("div",{className:"ow-row-why",children:r}),!n&&(!O||t)&&w("div",{className:"o\
 w-row-meta",children:[a("span",{className:"ow-truncate",children:e.provenance}),Zo(e).length>0&&a("span",{"aria-hidden":"\
-true",children:"\xB7"}),a("span",{className:"ow-references",children:Zo(e).slice(0,3).map(I=>a(ea,{reference:I,onOpenSession:i},
-`${I.kind}:${I.id}`))})]}),L&&Y&&w("div",{className:"ow-row-mismatch",children:[w("span",{className:"ow-truncate",children:[
+true",children:"\xB7"}),a("span",{className:"ow-references",children:Zo(e).slice(0,3).map(C=>a(ea,{reference:C,onOpenSession:i},
+`${C.kind}:${C.id}`))})]}),L&&Y&&w("div",{className:"ow-row-mismatch",children:[w("span",{className:"ow-truncate",children:[
 "This session's name only mentions ",L.sessionGoal," \u2014 this is ",L.itemGoal," work"]}),a("button",{type:"button",className:"\
-ow-mismatch-fix",onClick:I=>{I.stopPropagation(),Y()},children:"Rename session to cover both"})]})]}),a("div",{className:"\
+ow-mismatch-fix",onClick:C=>{C.stopPropagation(),Y()},children:"Rename session to cover both"})]})]}),a("div",{className:"\
 ow-row-actions",children:a(de,{className:"ow-icon","aria-hidden":"true"})})]}),t&&p&&e.nextSteps&&e.nextSteps.length>0&&
 a(_t,{children:w("div",{className:"ow-row-steps",children:[a("div",{className:"ow-steps-head",children:"Suggested next s\
-teps"}),e.nextSteps.slice(0,W?void 0:xn).map((I,Se)=>a("button",{type:"button",className:"ow-quote-step",title:I.why??I.
-what,onClick:ut=>{ut.stopPropagation(),p(I.what)},children:I.what},`${Se}:${I.what}`)),e.nextSteps.length>xn&&a("button",
-{type:"button",className:"ow-steps-more",onClick:I=>{I.stopPropagation(),_e(Se=>!Se)},children:W?"Show fewer":`+${e.nextSteps.
+teps"}),e.nextSteps.slice(0,W?void 0:xn).map((C,Se)=>a("button",{type:"button",className:"ow-quote-step",title:C.why??C.
+what,onClick:ut=>{ut.stopPropagation(),p(C.what)},children:C.what},`${Se}:${C.what}`)),e.nextSteps.length>xn&&a("button",
+{type:"button",className:"ow-steps-more",onClick:C=>{C.stopPropagation(),_e(Se=>!Se)},children:W?"Show fewer":`+${e.nextSteps.
 length-xn} more`})]})}),t&&e.retryPath&&m&&a(_t,{children:a("div",{className:"ow-retry",children:a(G,{onClick:()=>m(e.retryPath),
 disabled:!!f,children:"Retry"})})}),t&&e.stopPath&&k&&a(_t,{children:a("div",{className:"ow-retry",children:a(G,{onClick:()=>k(
 e.stopPath),disabled:!!l,children:l?"Stopping\u2026":"Stop this loop"})})}),t&&e.permissionId&&te&&a(_t,{children:a(Hs,{
-item:e,busy:!!u,onDecide:I=>te(e,I)})}),e.state==="needs-you"&&b&&N&&w("div",{className:"ow-row-aside",children:[a("butt\
-on",{type:"button",className:"ow-aside-btn",onClick:I=>{I.stopPropagation(),b(e.id)},children:"Later"}),a("button",{type:"\
-button",className:"ow-aside-btn",onClick:I=>{I.stopPropagation(),N(e.id,e.updatedAt)},children:"Handled"})]})]})}var ta=[
+item:e,busy:!!u,onDecide:C=>te(e,C)})}),e.state==="needs-you"&&b&&N&&w("div",{className:"ow-row-aside",children:[a("butt\
+on",{type:"button",className:"ow-aside-btn",onClick:C=>{C.stopPropagation(),b(e.id)},children:"Later"}),a("button",{type:"\
+button",className:"ow-aside-btn",onClick:C=>{C.stopPropagation(),N(e.id,e.updatedAt)},children:"Handled"})]})]})}var ta=[
 "unblock","followup","running","done"],na={unblock:{label:"Unblock",cls:"ow-lane-unblock"},followup:{label:"Follow up",cls:"\
 ow-lane-followup"}};function oa(e){return e.state==="done"?"done":e.state==="running"?"running":Ot(e)??"unblock"}function ra({
 items:e,selectedId:t,onSelect:n,onOpenSession:r,onAnswerPermission:s,onDecideApproval:i,permissionBusy:d,onRetry:u,retryBusy:m,
@@ -1434,14 +1439,14 @@ M=>w("li",{className:"ow-row-goal-done",children:[a(sr,{className:"ow-icon","ari
 ow-truncate",children:M})]},M))})]})]})}function ct({title:e,items:t,selectedId:n,onSelect:r,onOpenSession:s,onAnswerPermission:i,
 onDecideApproval:d,permissionBusy:u,onRetry:m,retryBusy:f,onStop:k,stopBusy:l,onPickStep:p,onSnooze:b,onHandled:N,footer:S,
 collapsed:M,onToggleCollapsed:$,groupBy:E,prChecks:O,prFilter:te,doneBySession:L,goalVerdicts:Y,onSplitGoal:W,onMergeGoal:_e,
-initiativeBlocks:I,initiatives:Se,onRenameSession:ut,semanticWhy:Ht,goalNames:qe,collapsedInitiatives:Ee,onToggleInitiative:ve,
+initiativeBlocks:C,initiatives:Se,onRenameSession:ut,semanticWhy:Ht,goalNames:qe,collapsedInitiatives:Ee,onToggleInitiative:ve,
 selectedGoalKey:Fe,onSelectGoal:je,subtitle:pt,hideHeader:St,emptyLabel:gt}){let J=mn(t,E,Y),Ne=E==="pr"&&te&&te!=="all"?
-J.filter(y=>y.changeRef&&dn(In(y.changeRef,O?.[y.changeRef.url??""]))===te):J,se=I??[],mt=E==="goal"?se.length:E==="pr"?
-Ne.length:t.length,ye=y=>{let C=y.changeRef?O?.[y.changeRef.url??""]:void 0,Q=y.header==="pr"?Ee?.[y.key]??!((C?.failing??
+J.filter(y=>y.changeRef&&dn(Cn(y.changeRef,O?.[y.changeRef.url??""]))===te):J,se=C??[],mt=E==="goal"?se.length:E==="pr"?
+Ne.length:t.length,ye=y=>{let I=y.changeRef?O?.[y.changeRef.url??""]:void 0,Q=y.header==="pr"?Ee?.[y.key]??!((I?.failing??
 0)>0||y.items.some(z=>z.state==="needs-you")):!1,X=y.header==="session"?!!Ee?.[y.key]:!1;return w("div",{className:`ow-b\
 lock${y.header==="session"?" ow-goalcard":""}`,"data-grouped":y.header?"true":void 0,"data-open":y.header==="session"&&!X?
 "true":void 0,children:[y.header==="session"&&y.sessionKey&&a(Qs,{item:y.items[0],items:y.items,folded:X,onToggle:ve?()=>ve(
-y.key,!X):void 0,onOpen:()=>s(y.sessionKey)}),y.header==="pr"&&y.changeRef&&a(Zs,{reference:y.changeRef,checks:C,folded:Q,
+y.key,!X):void 0,onOpen:()=>s(y.sessionKey)}),y.header==="pr"&&y.changeRef&&a(Zs,{reference:y.changeRef,checks:I,folded:Q,
 onToggle:ve?()=>ve(y.key,!Q):void 0}),y.header==="goal"&&a(Ys,{block:y,onSplit:W,selected:Fe===y.key,onSelect:je?()=>je(
 y.key):void 0}),y.header==="pr"?!Q&&a(Pe,{children:w("div",{className:"ow-pr-sessions",children:[a("span",{className:"ow\
 -pr-sublabel-inline",children:"Sessions"}),So(y.items).map(z=>w("button",{type:"button",className:"ow-reference ow-refer\
@@ -1451,26 +1456,26 @@ sessionKey?L?.[y.sessionKey]:void 0,selectedId:n,onSelect:r,onOpenSession:s,onAn
 onRetry:m,retryBusy:f,onPickStep:p,onSnooze:b,onHandled:N}):y.items.map(z=>w(Oo,{children:[a(Sn,{item:z,selected:n===z.id,
 continuation:y.header==="session",whyRanked:z.state==="needs-you"&&z.action!=="resume"?at(Ae(z),be):void 0,onSelect:()=>r(
 z),onOpenSession:s,onAnswerPermission:i,onDecideApproval:d,permissionBusy:u,onRetry:m,retryBusy:f,onStop:k,stopBusy:l,onPickStep:p,
-onSnooze:b,onHandled:N}),E==="goal"&&_e&&n===z.id&&a(tr,{item:z,items:t,onMerge:_e})]},z.id))]},y.key)},Be=y=>{let C=Se&&
+onSnooze:b,onHandled:N}),E==="goal"&&_e&&n===z.id&&a(tr,{item:z,items:t,onMerge:_e})]},z.id))]},y.key)},Be=y=>{let I=Se&&
 ut?Wo(y,Se):null,Q=y.references.find(X=>X.kind==="session")?.label??"";return w(Oo,{children:[a(Sn,{item:y,selected:n===
-y.id,dot:Bo(y),simple:!0,sessionMismatch:C??void 0,onFixSessionName:C&&y.sessionKey?()=>ut(y.sessionKey,`${Q} & ${C.itemGoal}`.
+y.id,dot:Bo(y),simple:!0,sessionMismatch:I??void 0,onFixSessionName:I&&y.sessionKey?()=>ut(y.sessionKey,`${Q} & ${I.itemGoal}`.
 slice(0,200)):void 0,whyRanked:y.state==="needs-you"&&y.action!=="resume"?at(Ae(y),be):void 0,onSelect:()=>r(y),onOpenSession:s,
 onAnswerPermission:i,onDecideApproval:d,permissionBusy:u,onRetry:m,retryBusy:f,onPickStep:p,onSnooze:b,onHandled:N}),_e&&
 n===y.id&&a(tr,{item:y,items:t,onMerge:_e})]},y.id)},Nt=y=>{if(y.name){let q=Ee?.[y.key]??y.status!=="needs-you",ae=y.blocks.
 flatMap(Z=>Z.items),ge=it(ae);return a(_n,{open:!q,onToggle:()=>ve?.(y.key,!q),label:y.name,flag:ge.needsYou>0?`${ge.needsYou}\
  need you`:xe[y.status],flagWarn:ge.needsYou>0,meta:qt(ae),header:a("span",{className:"ow-truncate ow-block-name ow-goal\
-card-title",children:y.name}),children:q?a(er,{members:ae}):ae.map(Z=>Be(Z))},y.key)}let C=y.blocks[0];if(C.header==="go\
-al"){let q=Ee?.[y.key]??y.status!=="needs-you",ae=C.items[0],ge=it(C.items),Z=[];for(let U=0;U<C.items.length;U+=1)for(let Ie=U+
-1;Ie<C.items.length;Ie+=1)Z.push(pe(C.items[U],C.items[Ie]));let ft=new Set(C.items.map(U=>U.sessionKey).filter(Boolean)).
-size,Ke=qe?.[C.key]??Co(C.items)??(ft>1?`${ft} sessions, one goal`:ae.references.find(U=>U.kind==="session")?.label??ae.
+card-title",children:y.name}),children:q?a(er,{members:ae}):ae.map(Z=>Be(Z))},y.key)}let I=y.blocks[0];if(I.header==="go\
+al"){let q=Ee?.[y.key]??y.status!=="needs-you",ae=I.items[0],ge=it(I.items),Z=[];for(let U=0;U<I.items.length;U+=1)for(let Ce=U+
+1;Ce<I.items.length;Ce+=1)Z.push(pe(I.items[U],I.items[Ce]));let ft=new Set(I.items.map(U=>U.sessionKey).filter(Boolean)).
+size,Ke=qe?.[I.key]??Io(I.items)??(ft>1?`${ft} sessions, one goal`:ae.references.find(U=>U.kind==="session")?.label??ae.
 title);return a(_n,{open:!q,onToggle:()=>ve?.(y.key,!q),label:Ke,flag:ge.needsYou>0?`${ge.needsYou} need you`:xe[y.status],
-flagWarn:ge.needsYou>0,meta:qt(C.items),why:Io(C.items,Y,Ht),header:a(We,{onActivate:()=>je?.(C.key),className:"ow-goalc\
-ard-header ow-goal-tab","aria-pressed":Fe===C.key,"data-selected":Fe===C.key?"true":void 0,children:a("span",{className:"\
+flagWarn:ge.needsYou>0,meta:qt(I.items),why:Co(I.items,Y,Ht),header:a(We,{onActivate:()=>je?.(I.key),className:"ow-goalc\
+ard-header ow-goal-tab","aria-pressed":Fe===I.key,"data-selected":Fe===I.key?"true":void 0,children:a("span",{className:"\
 ow-truncate ow-block-name ow-goalcard-title",children:Ke})}),action:W&&a(G,{className:"ow-block-open ow-goal-split",title:"\
 Not the same goal \u2014 split into separate cards","aria-label":`Split ${ae.title}`,onClick:U=>{U.stopPropagation(),W(Z)},
-children:"Split"}),children:q?a(er,{members:C.items}):C.items.map(U=>Be(U))},y.key)}let Q=C.items[0],X=qe?.[`item:${Q.id}`],
-z=Q.references.find(q=>q.kind==="session")?.label,Re=X??z;if(!Re||Re===Q.title)return Be(Q);let Me=it(C.items);return a(
-_n,{open:!0,label:Re,flag:Me.needsYou>0?`${Me.needsYou} need you`:xe[Q.state],flagWarn:Me.needsYou>0,meta:qt(C.items),header:a(
+children:"Split"}),children:q?a(er,{members:I.items}):I.items.map(U=>Be(U))},y.key)}let Q=I.items[0],X=qe?.[`item:${Q.id}`],
+z=Q.references.find(q=>q.kind==="session")?.label,Re=X??z;if(!Re||Re===Q.title)return Be(Q);let Me=it(I.items);return a(
+_n,{open:!0,label:Re,flag:Me.needsYou>0?`${Me.needsYou} need you`:xe[Q.state],flagWarn:Me.needsYou>0,meta:qt(I.items),header:a(
 "span",{className:"ow-truncate ow-block-name ow-goalcard-title",children:Re}),children:Be(Q)},y.key)};return w("section",
 {className:"ow-section","aria-label":e,children:[St?null:$?w(We,{onActivate:$,className:"ow-section-toggle",children:[a(
 Xo,{label:e,count:mt,subtitle:pt}),a(de,{className:"ow-icon ow-section-chevron","data-open":M?void 0:"true","aria-hidden":"\
@@ -1508,20 +1513,20 @@ function aa(){let e=Ms(),t=le(e);t.current=e;let n=Ks(),r=$s(),[s,i]=_("all"),[d
 includes(o)?o:"work"}),[m,f]=_(()=>{let o=re(vn,null)??"prs",c=xt.includes(o)?o:"prs",g=re(yn,null),h=g&&xt.includes(g)?
 g:"work";return c===h?qo.find(v=>v!==h)??null:c}),k=D(o=>{f(c=>{let g=c===o?null:o;return j(vn,g),g})},[]),[l,p]=_(()=>re(
 Yo,null)==="session"?"session":"goal"),[b,N]=_("all"),[S,M]=_({}),[$,E]=_(null),[O,te]=_("session"),[L,Y]=_(null),[W,_e]=_(
-null),[I,Se]=_({}),[ut,Ht]=_("unknown"),qe=le("unknown"),Ee=le(new Map),[ve,Fe]=_({}),[je,pt]=_({}),[St,gt]=_([]),[J,Ne]=_(
-null),[se,mt]=_(null),[ye,Be]=_(null),[Nt,y]=_(()=>re(wn)),[C,Q]=_(()=>re(Fo)),[X,z]=_(()=>re(hn,{merged:[],split:[]})),
+null),[C,Se]=_({}),[ut,Ht]=_("unknown"),qe=le("unknown"),Ee=le(new Map),[ve,Fe]=_({}),[je,pt]=_({}),[St,gt]=_([]),[J,Ne]=_(
+null),[se,mt]=_(null),[ye,Be]=_(null),[Nt,y]=_(()=>re(wn)),[I,Q]=_(()=>re(Fo)),[X,z]=_(()=>re(hn,{merged:[],split:[]})),
 Re=le(null),Me=le(null),[q,ae]=_(()=>re(nr,{work:null,conductor:null}));H(()=>{j(nr,q)},[q]),H(()=>{let o=()=>ae(c=>{let g=Me.
 current?.clientWidth??0,h=Re.current?.clientWidth??0;return{work:c.work==null||g===0?c.work:jt(c.work,g,he.workMin,he.railReserve,
 1/0),conductor:c.conductor==null||h===0?c.conductor:jt(c.conductor,h,he.conductorMin,he.mainReserve,he.conductorMax)}});
 return o(),window.addEventListener("resize",o),()=>window.removeEventListener("resize",o)},[]);let ge=le(re(Uo,[])),[Z,ft]=_(
 ()=>{let o=re(cr,null);return{pairs:new Set(o?.pairs??[]),why:new Map(o?.why??[]),stamp:o?.stamp??""}}),[Ke,U]=_(()=>re(
-bn,{})),Ie=le([]),Vt=le(!1),[$e,Cn]=_([]),[Ue,ur]=_(()=>re(Vo)),[Rt,It]=_(null),[pr,gr]=_(()=>re(jo,null)??!0),[An,Wn]=_(
+bn,{})),Ce=le([]),Vt=le(!1),[$e,In]=_([]),[Ue,ur]=_(()=>re(Vo)),[Rt,Ct]=_(null),[pr,gr]=_(()=>re(jo,null)??!0),[An,Wn]=_(
 {}),[Yt,mr]=_([]),[fr,Jt]=_(!1),He=D(o=>{if(o===d)return;let c=m===o?qo.find(g=>g!==o)??null:m;j(yn,o),j(vn,c),u(o),f(c)},
 [d,m]),wr=D((o,c)=>{o.dataTransfer.setData("text/x-crew-panel",c),o.dataTransfer.effectAllowed="move";let g=o.currentTarget.
 querySelector("summary");if(!g)return;let h=g.getBoundingClientRect();o.dataTransfer.setDragImage(g,Math.min(Math.max(o.
 clientX-h.left,0),h.width),Math.min(Math.max(o.clientY-h.top,0),h.height))},[]),hr=D(o=>{o.preventDefault(),Jt(!1);let c=o.
 dataTransfer.getData("text/x-crew-panel");!c||!xt.includes(c)||He(c)},[He]),Pn=V(()=>xt.filter(o=>o!==d),[d]),br=m&&m!==
-d?String(Pn.indexOf(m)):"none",Ct=o=>{let c=o===d;return{className:"ow-card ow-stack-card",open:c||m===o,draggable:!0,"d\
+d?String(Pn.indexOf(m)):"none",It=o=>{let c=o===d;return{className:"ow-card ow-stack-card",open:c||m===o,draggable:!0,"d\
 ata-panel":o,"data-primary":c?"true":"false","data-rail-index":c?void 0:Pn.indexOf(o),"data-dragover":c&&fr?"true":void 0,
 onDragStart:g=>wr(g,o),onDragOver:c?g=>{g.preventDefault(),Jt(!0)}:void 0,onDragLeave:c?()=>Jt(!1):void 0,onDrop:c?hr:void 0}},
 En=le(!0),[vr,Bn]=_(!0),[Mn,Qt]=_(null),[At,yr]=_(null),[Ve,Kn]=_(!1),[kr,xr]=_(!1),[$n,ke]=_(null),T=le(!0),wt=le(0),Xt=le(
@@ -1541,13 +1546,13 @@ key]&&Ee.current.set(v.key,fn(v));Se(v=>({...v,...g}))}})(),()=>{c=!0}},[W]),H((
 try{let c=await t.current.get("/api/apps/crew-manager/stalls");if(o||!T.current)return;let g={};for(let v of c?.stalls??
 [])v?.key&&(g[v.key]=v);Fe(g);let h={};for(let v of c?.error_loops??[])v?.key&&(h[v.key]=v);Wn(h)}catch{En.current=!1,T.
 current&&(Fe({}),Wn({}))}})(),()=>{o=!0}},[W]),H(()=>{let o=!1;return(async()=>{try{let c=await t.current.get("/api/apps\
-/crew-manager/initiatives");if(o||!T.current)return;Cn((c?.initiatives??[]).filter(g=>g?.name))}catch{}})(),()=>{o=!0}},
-[]);let Ln=V(()=>bo(_o(W??{slots:[],approvals:[],agents:[],workflows:[],crons:[],artifacts:[],loops:[]},be,I,ve,An,X),je),
-[W,I,ve,An,je,X]),Pt=V(()=>yo(Ln,Nt,C),[Ln,Nt,C]),A=V(()=>Pt.items.filter(o=>ko(o)),[Pt]),Et=V(()=>gn(A),[A]),Tn=V(()=>{
+/crew-manager/initiatives");if(o||!T.current)return;In((c?.initiatives??[]).filter(g=>g?.name))}catch{}})(),()=>{o=!0}},
+[]);let Ln=V(()=>bo(_o(W??{slots:[],approvals:[],agents:[],workflows:[],crons:[],artifacts:[],loops:[]},be,C,ve,An,X),je),
+[W,C,ve,An,je,X]),Pt=V(()=>yo(Ln,Nt,I),[Ln,Nt,I]),A=V(()=>Pt.items.filter(o=>ko(o)),[Pt]),Et=V(()=>gn(A),[A]),Tn=V(()=>{
 let o={};for(let c of A){if(c.state!=="done"||!c.sessionKey)continue;let g=o[c.sessionKey];g?g.push(c.title):o[c.sessionKey]=
-[c.title]}return o},[A]),Ce=V(()=>A.find(o=>o.id===$)??null,[A,$]),ht=V(()=>s==="all"?A:A.filter(o=>o.state===s),[s,A]),
+[c.title]}return o},[A]),Ie=V(()=>A.find(o=>o.id===$)??null,[A,$]),ht=V(()=>s==="all"?A:A.filter(o=>o.state===s),[s,A]),
 Bt=V(()=>{let o={all:0,failing:0,running:0,merged:0};for(let c of mn(A,"pr")){if(!c.changeRef)continue;o.all++;let g=dn(
-In(c.changeRef,S[c.changeRef.url??""]));g!=="other"&&o[g]++}return o},[A,S]);H(()=>{let o=new Set;for(let g of A)for(let h of g.
+Cn(c.changeRef,S[c.changeRef.url??""]));g!=="other"&&o[g]++}return o},[A,S]);H(()=>{let o=new Set;for(let g of A)for(let h of g.
 references)h.kind==="change"&&h.url&&/\/pull\/\d|\/merge_requests\/\d/.test(h.url)&&o.add(h.url);let c=!1;for(let g of o)
 S[g]||t.current.post("/api/source/pull-request",{url:g}).then(h=>{!c&&T.current&&h?.title&&M(v=>({...v,[g]:Xs(h)}))}).catch(
 ()=>{});return()=>{c=!0}},[A,S]),H(()=>r(Et["needs-you"]),[Et,r]),H(()=>{$&&!A.some(o=>o.id===$)&&E(null)},[A,$]),H(()=>{
@@ -1555,10 +1560,10 @@ j(Yo,l)},[l]);let Zt=W?.slots.find(o=>o.key===dt),Sr=!!(Zt||kr);H(()=>{!W||Zt||X
 hat/slots",{name:dt,title:"Conductor"}).then(()=>{T.current&&(xr(!0),B())}).catch(o=>{T.current&&(Xt.current=!1,ke(o instanceof
 Error?`Conductor session could not be created: ${o.message}`:"Conductor session could not be created"))}))},[e,Zt,B,W]);
 let Dn=V(()=>lo(W?.approvals??[],St,o=>A.find(c=>c.sessionKey===o)?.title??W?.slots?.find(c=>c.key===o)?.title??o),[A,W,
-St]),Ye=Ce&&!Ce.permissionId?Ce:null,ce=V(()=>Ko(A,$e,X,ge.current,Z.pairs),[A,$e,X,Z]);H(()=>{let o=Ro(ce.filter(c=>c.name===
-null).flatMap(c=>c.blocks));ge.current=o,j(Uo,o)},[ce]),H(()=>{if(Ie.current.length===0)return;let o=ce.filter(h=>h.name===
-null).flatMap(h=>h.blocks),c={},g=[];for(let h of Ie.current){let v=o.find(x=>x.items.length>1&&h.ids.filter(ue=>x.items.
-some(fe=>fe.id===ue)).length>=2);v?c[v.key]=h.name:g.push(h)}Ie.current=g,Object.keys(c).length>0&&U(h=>{let v={...h,...c};
+St]),Ye=Ie&&!Ie.permissionId?Ie:null,ce=V(()=>Ko(A,$e,X,ge.current,Z.pairs),[A,$e,X,Z]);H(()=>{let o=Ro(ce.filter(c=>c.name===
+null).flatMap(c=>c.blocks));ge.current=o,j(Uo,o)},[ce]),H(()=>{if(Ce.current.length===0)return;let o=ce.filter(h=>h.name===
+null).flatMap(h=>h.blocks),c={},g=[];for(let h of Ce.current){let v=o.find(x=>x.items.length>1&&h.ids.filter(ue=>x.items.
+some(fe=>fe.id===ue)).length>=2);v?c[v.key]=h.name:g.push(h)}Ce.current=g,Object.keys(c).length>0&&U(h=>{let v={...h,...c};
 return j(bn,v),v})},[ce]),H(()=>{let o=ce.filter(v=>v.name===null).flatMap(v=>v.blocks),c=o.filter(v=>v.items.length>1).
 map(v=>({key:v.key,name:Ke[v.key]??null,items:v.items.map(x=>({id:x.id,title:x.title}))})),g=o.filter(v=>v.items.length===
 1).map(v=>({id:v.items[0].id,title:v.items[0].title,detail:v.items[0].summary??""}));if(g.length===0&&c.every(v=>v.name))
@@ -1572,7 +1577,7 @@ fe.add(De),R.why&&P.set(De,R.why)}else if(R.cluster.startsWith("new:")){let nt=i
 cluster,nt),R.why&&oe.set(K.id,R.why)}}}let vt=new Map;for(let R of v.names??[])R.cluster&&R.name&&vt.set(R.cluster,R.name);
 let zn=[];for(let[R,K]of ie){if(K.length<2)continue;for(let we=0;we<K.length;we+=1)for(let De=we+1;De<K.length;De+=1){let Kt=pe(
 K[we],K[De]);fe.add(Kt);let Gn=oe.get(K[we].id)??oe.get(K[De].id);Gn&&P.set(Kt,Gn)}let nt=vt.get(R);nt&&zn.push({ids:K.map(
-we=>we.id),name:nt})}Ie.current=zn;let Mt={};for(let[R,K]of vt)R.startsWith("new:")||(R.startsWith("item:")?!Ke[R]&&x.has(
+we=>we.id),name:nt})}Ce.current=zn;let Mt={};for(let[R,K]of vt)R.startsWith("new:")||(R.startsWith("item:")?!Ke[R]&&x.has(
 R.slice(5))&&(Mt[R]=K):ue.has(R)&&(Mt[R]=K));Object.keys(Mt).length>0&&U(R=>{let K={...R,...Mt};return j(bn,K),K}),ft(Ho(
 {pairs:fe,why:P,stamp:h}))}catch{}finally{Vt.current=!1}})())},[ce,Ke,Z]);let me=V(()=>{if(!Rt)return null;for(let o of ce){
 let c=o.blocks.find(g=>g.key===Rt);if(c&&c.items.length>0)return c}return null},[Rt,ce]),ne=me?Mo(me.items):null,en=V(()=>{
@@ -1589,9 +1594,9 @@ job:P,ran:ie,next:oe,dueToday:vt}}).filter(P=>P.ran||P.dueToday||P.job.is_runnin
 0).length,fe=x.filter(P=>P.ran&&P.ran.failed>0).length;return{rows:x,done:ue,failed:fe,total:x.length,historyKnown:Yt.length>
 0}},[W,Yt]),[Nr,On]=_(!1),Rr=V(()=>{if(l!=="goal")return[];let o=Po(W?.slots??[],$e),c=Eo(A,$e),g=new Set,h=[];for(let v of[
 ...c,...o])g.has(v.name.toLowerCase())||(g.add(v.name.toLowerCase()),h.push(v));return h.sort((v,x)=>x.sessions-v.sessions)},
-[l,W,A,$e]),Ir=D(async(o,c)=>{try{await t.current.patch(`/api/chat/slots/${encodeURIComponent(o)}/title`,{title:c}),B()}catch{}},
-[B]),Cr=D(async(o,c=[])=>{if(o.trim()){On(!0);try{let g=await t.current.post("/api/apps/crew-manager/initiatives",{name:o.
-trim(),aliases:c});T.current&&g?.initiatives&&Cn(g.initiatives.filter(h=>h?.name))}catch{}finally{T.current&&On(!1)}}},[]),
+[l,W,A,$e]),Cr=D(async(o,c)=>{try{await t.current.patch(`/api/chat/slots/${encodeURIComponent(o)}/title`,{title:c}),B()}catch{}},
+[B]),Ir=D(async(o,c=[])=>{if(o.trim()){On(!0);try{let g=await t.current.post("/api/apps/crew-manager/initiatives",{name:o.
+trim(),aliases:c});T.current&&g?.initiatives&&In(g.initiatives.filter(h=>h?.name))}catch{}finally{T.current&&On(!1)}}},[]),
 Le=D(async(o,c)=>{if(!J){Ne(o),ke(null);try{await t.current.post(`/api/approvals/${encodeURIComponent(o)}/${c?"approve":
 "reject"}`,{}),B()}catch(g){ke(g instanceof Error?`Could not answer that request: ${g.message}`:"Could not answer that r\
 equest"),B()}finally{T.current&&Ne(null)}}},[B,J]),Qe=D(async(o,c)=>{if(!(J||!o.permissionId||!o.sessionKey)){Ne(o.permissionId),
@@ -1614,21 +1619,21 @@ on is routed to you. Do not duplicate work already done in the other sessions."]
 `),source:"crew-manager",ephemeral:!0}).catch(()=>{}),await t.current.post("/api/chat",{message:o,slot:g}).catch(x=>{if(!(x instanceof
 SyntaxError))throw x}),!T.current)return;pt(x=>({...x,[ne.id]:Date.now()})),gt(x=>x.includes(g)?x:[...x,g]);let v=ne.references.
 find(x=>x.kind==="session")?.label??ne.title;Y(ne.moving||ne.state==="running"?`Sent to ${v} \u2014 the active session on thi\
-s goal`:`Sent to ${v} \u2014 resuming the last session on this goal`),It(null),B();return}let c=Ce&&!Ce.permissionId?Ce:
+s goal`:`Sent to ${v} \u2014 resuming the last session on this goal`),Ct(null),B();return}let c=Ie&&!Ie.permissionId?Ie:
 null;if(O==="session"&&c?.sessionKey){let g=c.sessionKey;if(await t.current.post("/api/chat",{message:o,slot:g}).catch(h=>{
 if(!(h instanceof SyntaxError))throw h}),!T.current)return;pt(h=>({...h,[c.id]:Date.now()})),gt(h=>h.includes(g)?h:[...h,
 g]),Y(`Sent new instructions to ${c.title}`),E(null),B();return}await t.current.post(`/api/chat/slots/${encodeURIComponent(
-dt)}/context`,{content:sa(Ce,A),source:"crew-manager",ephemeral:!0}).catch(()=>{}),await t.current.post("/api/chat",{message:o,
-slot:dt}).catch(g=>{if(!(g instanceof SyntaxError))throw g})},[Ce,me,ne,A,B,O]),tn={"needs-you":ht.filter(o=>o.state==="\
+dt)}/context`,{content:sa(Ie,A),source:"crew-manager",ephemeral:!0}).catch(()=>{}),await t.current.post("/api/chat",{message:o,
+slot:dt}).catch(g=>{if(!(g instanceof SyntaxError))throw g})},[Ie,me,ne,A,B,O]),tn={"needs-you":ht.filter(o=>o.state==="\
 needs-you"),running:ht.filter(o=>o.state==="running"),done:ht.filter(o=>o.state==="done")},Ze=D((o,c)=>{ur(g=>{let h={...g,
-[o]:c};return j(Vo,h),h})},[]),Kr=D(o=>{It(c=>c===o?null:o),E(null),Y(null)},[]),et=o=>n(`/chat?sid=${encodeURIComponent(
-o)}`),tt=o=>{E(c=>c===o.id?null:o.id),It(null),Y(null),te("session")};return w("div",{className:"ow-root","data-crew-man\
+[o]:c};return j(Vo,h),h})},[]),Kr=D(o=>{Ct(c=>c===o?null:o),E(null),Y(null)},[]),et=o=>n(`/chat?sid=${encodeURIComponent(
+o)}`),tt=o=>{E(c=>c===o.id?null:o.id),Ct(null),Y(null),te("session")};return w("div",{className:"ow-root","data-crew-man\
 ager-shell":"quiet-split",children:[a("style",{children:Do}),a("div",{className:"ow-titlebar",children:a(Ds,{title:w("sp\
 an",{className:"ow-title-line",children:["Crew Manager",a("span",{className:"ow-beta","aria-label":"Beta preview",children:"\
 Beta"})]}),subtitle:"See what needs your input, what is still running, and what finished recently."})}),a("div",{className:"\
 ow-body",children:w("div",{className:"ow-layout",ref:Re,style:q.conductor!=null?{"--ow-conductor-w":`${q.conductor}px`}:
 void 0,children:[w("div",{className:"ow-main","data-open-row":br,ref:Me,style:q.work!=null?{"--ow-work-w":`${q.work}px`}:
-void 0,children:[w("details",{...Ct("work"),"aria-label":"Work",children:[w("summary",{onClick:o=>{o.preventDefault(),d!==
+void 0,children:[w("details",{...It("work"),"aria-label":"Work",children:[w("summary",{onClick:o=>{o.preventDefault(),d!==
 "work"&&k("work")},children:[w("span",{className:"ow-stack-title",children:[a(de,{className:"ow-icon ow-stack-chevron"}),
 a(Ft,{className:"ow-icon"}),d==="work"?a("span",{className:"ow-tabs",role:"tablist","aria-label":"View",children:["goal",
 "session"].map(o=>a(G,{role:"tab","aria-selected":l===o,"data-selected":l===o,className:"ow-tab",onClick:()=>p(o),children:o===
@@ -1644,9 +1649,9 @@ ain"})}):(l==="goal"?A.length===0:ht.length===0)?a(Go,{icon:a(Ps,{className:"ow-
 "goal"?"No sessions are running yet.":"Change the filter to see sessions in another state."}):l==="goal"?a(ct,{title:"Wo\
 rk by goal",hideHeader:!0,items:A,selectedId:$,onSelect:tt,onOpenSession:et,onAnswerPermission:(o,c)=>{Le(o,c)},onDecideApproval:(o,c)=>{
 Qe(o,c)},permissionBusy:J!==null,onRetry:o=>{Xe(o)},retryBusy:se!==null,onPickStep:o=>{Te(o)},groupBy:l,goalVerdicts:X,onSplitGoal:Er,
-onMergeGoal:Br,initiativeBlocks:ce,initiatives:$e,onRenameSession:(o,c)=>{Ir(o,c)},semanticWhy:Z.why,goalNames:Ke,collapsedInitiatives:Ue,
+onMergeGoal:Br,initiativeBlocks:ce,initiatives:$e,onRenameSession:(o,c)=>{Cr(o,c)},semanticWhy:Z.why,goalNames:Ke,collapsedInitiatives:Ue,
 onToggleInitiative:Ze,selectedGoalKey:Rt,onSelectGoal:Kr,footer:a(Vs,{candidates:Rr,prominent:$e.length===0,busy:Nr,onAdd:(o,c)=>{
-Cr(o,c)}}),emptyLabel:"No matching work"}):s==="all"?w(Pe,{children:[a(ct,{title:"Needs you",subtitle:"Waiting on a deci\
+Ir(o,c)}}),emptyLabel:"No matching work"}):s==="all"?w(Pe,{children:[a(ct,{title:"Needs you",subtitle:"Waiting on a deci\
 sion or reply from you",items:tn["needs-you"],doneBySession:Tn,selectedId:$,onSelect:tt,onSnooze:Ar,onHandled:Wr,footer:Pt.
 snoozedCount>0?w("button",{type:"button",className:"ow-aside-note",onClick:Pr,children:[Pt.snoozedCount," set aside for \
 later \u2014 bring back"]}):void 0,onOpenSession:et,onAnswerPermission:(o,c)=>{Le(o,c)},onDecideApproval:(o,c)=>{Qe(o,c)},
@@ -1661,7 +1666,7 @@ Qe(o,c)},permissionBusy:J!==null,onRetry:o=>{Xe(o)},retryBusy:se!==null,onStop:o
 Te(o)},collapsedInitiatives:Ue,onToggleInitiative:Ze,groupBy:l,emptyLabel:"No recent completed work."})]}):a(ct,{title:kn[s],
 items:ht,selectedId:$,onSelect:tt,onOpenSession:et,onAnswerPermission:(o,c)=>{Le(o,c)},onDecideApproval:(o,c)=>{Qe(o,c)},
 permissionBusy:J!==null,onRetry:o=>{Xe(o)},retryBusy:se!==null,onStop:o=>{bt(o)},stopBusy:ye!==null,onPickStep:o=>{Te(o)},
-collapsedInitiatives:Ue,onToggleInitiative:Ze,groupBy:l,emptyLabel:"No matching work"})})})]}),w("details",{...Ct("prs"),
+collapsedInitiatives:Ue,onToggleInitiative:Ze,groupBy:l,emptyLabel:"No matching work"})})})]}),w("details",{...It("prs"),
 children:[w("summary",{onClick:o=>{o.preventDefault(),d!=="prs"&&k("prs")},children:[w("span",{className:"ow-stack-title",
 children:[a(de,{className:"ow-icon ow-stack-chevron"}),a(Nn,{className:"ow-icon"}),"PRs"]}),w("span",{className:"ow-stac\
 k-actions",children:[a(ee,{variant:"muted",children:Bt.all}),d==="prs"?a(Gt,{lastUpdated:At,refreshing:Ve,onRefresh:Wt}):
@@ -1674,7 +1679,7 @@ t now. Work links to one when a session mentions its URL."}):a(Pe,{children:a(ct
 prChecks:S,prFilter:b,collapsedInitiatives:Ue,onToggleInitiative:Ze,selectedId:$,onSelect:tt,onOpenSession:et,onAnswerPermission:(o,c)=>{
 Le(o,c)},onDecideApproval:(o,c)=>{Qe(o,c)},permissionBusy:J!==null,onRetry:o=>{Xe(o)},retryBusy:se!==null,onStop:o=>{bt(
 o)},stopBusy:ye!==null,onPickStep:o=>{Te(o)},groupBy:"pr",emptyLabel:"No PR matches that status."})})})]}),w("details",{
-...Ct("loops"),children:[w("summary",{onClick:o=>{o.preventDefault(),d!=="loops"&&k("loops")},children:[w("span",{className:"\
+...It("loops"),children:[w("summary",{onClick:o=>{o.preventDefault(),d!=="loops"&&k("loops")},children:[w("span",{className:"\
 ow-stack-title",children:[a(de,{className:"ow-icon ow-stack-chevron"}),a(lr,{className:"ow-icon"}),"Loops"]}),w("span",{
 className:"ow-stack-actions",children:[a(ee,{variant:"muted",children:en.length}),d==="loops"?a(Gt,{lastUpdated:At,refreshing:Ve,
 onRefresh:Wt}):a(zt,{id:"loops",onPromote:He})]})]}),a("p",{className:"ow-stack-sub",children:"Sessions repeating a goal\
@@ -1684,7 +1689,7 @@ No loop is running right now."}):en.map(o=>{let c=Ut(o.lastFire),g=[c&&`last tic
 ail",style:{background:"var(--warn)"}}),w("div",{children:[w("div",{className:"ow-mini-title",children:[o.goalName??o.title,
 a("span",{className:"ow-mini-chip",children:o.progress})]}),o.instruction&&a("div",{className:"ow-mini-desc",title:o.instruction,
 children:o.instruction}),g&&a("div",{className:"ow-mini-when",children:g})]}),a(ee,{variant:"ok",children:"Active"})]},o.
-key)})})]}),w("details",{...Ct("schedule"),children:[w("summary",{onClick:o=>{o.preventDefault(),d!=="schedule"&&k("sche\
+key)})})]}),w("details",{...It("schedule"),children:[w("summary",{onClick:o=>{o.preventDefault(),d!=="schedule"&&k("sche\
 dule")},children:[w("span",{className:"ow-stack-title",children:[a(de,{className:"ow-icon ow-stack-chevron"}),a(ir,{className:"\
 ow-icon"}),"Scheduled tasks"]}),w("span",{className:"ow-stack-actions",children:[w(ee,{variant:Je.failed>0?"err":"muted",
 children:[Je.done,"/",Je.total," today"]}),d==="schedule"?a(Gt,{lastUpdated:At,refreshing:Ve,onRefresh:Wt}):a(zt,{id:"sc\
@@ -1707,17 +1712,17 @@ rk, or ask across all"})]})}),a("div",{className:"ow-chat",children:Sr?w("div",{
 0&&a("div",{className:"ow-permissions",role:"alert",children:Dn.map(o=>a(Us,{tool:o.tool,purpose:o.purpose,where:o.sessionLabel,
 busy:J!==null,onAnswer:c=>{Le(o.id,c)}},o.id))}),L&&w("div",{className:"ow-conductor-receipt",role:"status",children:[a(
 ar,{className:"ow-icon"}),L]}),$n&&a("div",{className:"ow-chat-error",role:"alert",children:$n}),a("div",{className:"ow-\
-embed",children:a(Ls,{slotKey:dt,frameless:!0,startAtBottom:!0,placeholder:me?"Instruction for this goal\u2026":Ye?.sessionKey&&
-O==="session"?"New instructions for this session\u2026":"Ask across your work\u2026",onSend:Te})}),me&&ne?w("div",{className:"\
-ow-quote ow-quote-docked",children:[w("div",{className:"ow-quote-body ow-quote-goal",children:[w("div",{className:"ow-qu\
-ote-line",children:[a("span",{className:"ow-eyebrow",children:"Instructing goal"}),a("span",{className:"ow-quote-title",
-title:me.items[0].title,children:me.items[0].title})]}),w("span",{className:"ow-quote-route ow-truncate",children:["\u2192 ",
-ne.references.find(o=>o.kind==="session")?.label??ne.title,ne.moving||ne.state==="running"?" (active)":" (will resume)"]})]}),
-a(G,{className:"ow-quote-clear","aria-label":"Remove the quoted goal",onClick:()=>{It(null),Y(null)},children:"Clear"})]}):
-Ye&&w("div",{className:"ow-quote ow-quote-docked",children:[w("div",{className:"ow-quote-body",children:[Ye.sessionKey?a(
-"button",{type:"button",className:"ow-scope-toggle","aria-pressed":O==="conductor","aria-label":O==="session"?"Sending t\
-o this session. Activate to send to the Conductor instead.":"Sending to the Conductor. Activate to send to this session \
-instead.",onClick:()=>te(o=>o==="session"?"conductor":"session"),children:O==="session"?"Instructing":"To Conductor"}):a(
-"span",{className:"ow-eyebrow",children:"Quoted"}),a("span",{className:"ow-quote-title",title:Ye.title,children:Ye.title})]}),
-a(G,{className:"ow-quote-clear","aria-label":"Remove the quoted work item",onClick:()=>{E(null),Y(null)},children:"Clear"})]})]}):
-a("div",{className:"ow-chat-loading",children:a(zo,{rows:4})})})]})]})})]})}export{aa as default};
+embed",children:a(Ls,{slotKey:dt,frameless:!0,startAtBottom:!0,slotControls:!0,placeholder:me?"Instruction for this goal\
+\u2026":Ye?.sessionKey&&O==="session"?"New instructions for this session\u2026":"Ask across your work\u2026",onSend:Te})}),
+me&&ne?w("div",{className:"ow-quote ow-quote-docked",children:[w("div",{className:"ow-quote-body ow-quote-goal",children:[
+w("div",{className:"ow-quote-line",children:[a("span",{className:"ow-eyebrow",children:"Instructing goal"}),a("span",{className:"\
+ow-quote-title",title:me.items[0].title,children:me.items[0].title})]}),w("span",{className:"ow-quote-route ow-truncate",
+children:["\u2192 ",ne.references.find(o=>o.kind==="session")?.label??ne.title,ne.moving||ne.state==="running"?" (active\
+)":" (will resume)"]})]}),a(G,{className:"ow-quote-clear","aria-label":"Remove the quoted goal",onClick:()=>{Ct(null),Y(
+null)},children:"Clear"})]}):Ye&&w("div",{className:"ow-quote ow-quote-docked",children:[w("div",{className:"ow-quote-bo\
+dy",children:[Ye.sessionKey?a("button",{type:"button",className:"ow-scope-toggle","aria-pressed":O==="conductor","aria-l\
+abel":O==="session"?"Sending to this session. Activate to send to the Conductor instead.":"Sending to the Conductor. Act\
+ivate to send to this session instead.",onClick:()=>te(o=>o==="session"?"conductor":"session"),children:O==="session"?"I\
+nstructing":"To Conductor"}):a("span",{className:"ow-eyebrow",children:"Quoted"}),a("span",{className:"ow-quote-title",title:Ye.
+title,children:Ye.title})]}),a(G,{className:"ow-quote-clear","aria-label":"Remove the quoted work item",onClick:()=>{E(null),
+Y(null)},children:"Clear"})]})]}):a("div",{className:"ow-chat-loading",children:a(zo,{rows:4})})})]})]})})]})}export{aa as default};
