@@ -1685,12 +1685,43 @@ describe('goal-card member presentation', () => {
   }
 
   it('the dot follows the same state language as the badge', () => {
-    expect(memberDot(item('a', { state: 'needs-you', issue: true }))).toBe('crit')
-    expect(memberDot(item('b', { state: 'running', issue: true }))).toBe('crit')
-    expect(memberDot(item('c', { state: 'needs-you', action: 'reply' }))).toBe('warn')
-    expect(memberDot(item('d', { state: 'needs-you', unattendedGoals: 1, action: 'resume' }))).toBe('idle')
+    // Red means the developer is owed an action -- the same thing the lane and the
+    // badge mean by "unblock".
+    expect(memberDot(item('c', { state: 'needs-you', action: 'reply' }))).toBe('crit')
+    expect(memberDot(item('d', { state: 'needs-you', unattendedGoals: 1, action: 'resume' }))).toBe('warn')
     expect(memberDot(item('e', { state: 'running' }))).toBe('good')
-    expect(memberDot(item('f', { state: 'done' }))).toBe('good')
+    expect(memberDot(item('f', { state: 'done' }))).toBe('idle')
+  })
+
+  it('a red linked change does not by itself paint the row critical', () => {
+    // `issue` is a fact about the world, not a measure of what is owed. Leading
+    // with it painted every row with a failing PR red -- on a real account that
+    // was nearly the whole list, while only two rows carried a needs-you badge, so
+    // the dot stopped discriminating. Work that is RUNNING needs nobody, whatever
+    // its checks say.
+    expect(memberDot(item('b', { state: 'running', issue: true }))).toBe('good')
+    expect(memberDot(item('g', { state: 'done', issue: true }))).toBe('idle')
+    // It still colours work that genuinely needs the developer, because the state
+    // says so -- not because the flag is set.
+    expect(memberDot(item('a', { state: 'needs-you', issue: true, changeBlocked: true }))).toBe('crit')
+  })
+
+  it('stays discriminating on a fleet where most work has a red change', () => {
+    // The shape that broke it: a developer with many failing pull requests. Twenty
+    // sessions running fine with red checks, two actually owed something. Leading
+    // with `issue` painted twenty-two rows red; the badge said two. A signal that
+    // fires on nearly every row is not a signal.
+    const busy = Array.from({ length: 20 }, (_, index) => (
+      item(`running-${index}`, { state: 'running', issue: true, changeBlocked: true })
+    ))
+    const owed = [
+      item('reply', { state: 'needs-you', action: 'reply' }),
+      item('approval', { state: 'needs-you', approvalKind: 'tool' }),
+    ]
+    const dots = [...busy, ...owed].map(work => memberDot(work))
+
+    expect(dots.filter(dot => dot === 'crit')).toHaveLength(owed.length)
+    expect(dots.filter(dot => dot === 'good')).toHaveLength(busy.length)
   })
 
   it('the kind names the response owed when it needs you, else the entity', () => {

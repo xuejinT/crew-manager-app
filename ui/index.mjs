@@ -250,7 +250,7 @@ let r=[...n.entries()].map(([i,d])=>({phrase:i,sessions:d.size})).filter(i=>i.se
 phrase!==i.phrase&&d.phrase.includes(i.phrase)&&d.sessions>=i.sessions)).sort((i,d)=>d.sessions-i.sessions||d.phrase.length-
 i.phrase.length).map(i=>({name:i.phrase.replace(/\p{L}+/gu,d=>d[0].toUpperCase()+d.slice(1)),sessions:i.sessions}))}function mo(e){
 return e.some(t=>t.state==="needs-you")?"needs-you":e.some(t=>t.state==="running")?"running":"done"}function Fo(e,t=Date.
-now()){return e.issue?"crit":e.state==="needs-you"?Ut(e,t)==="followup"?"idle":"warn":"good"}function dt(e){let t=new Set,n=new Set,r=new Set,s=0,i=0,d=0,u=0,f=0;for(let w of e){w.sessionKey&&t.add(w.sessionKey);for(let x of w.
+now()){return e.state==="done"?"idle":e.state==="needs-you"?Ut(e,t)==="followup"?"warn":"crit":"good"}function dt(e){let t=new Set,n=new Set,r=new Set,s=0,i=0,d=0,u=0,f=0;for(let w of e){w.sessionKey&&t.add(w.sessionKey);for(let x of w.
 references)x.kind==="change"?n.add(x.id):x.kind==="issue"&&r.add(x.id);w.id.startsWith("workflow:")?s+=1:w.id.startsWith(
 "monitor:")?i+=1:w.id.startsWith("agent:")&&(d+=1),w.state==="needs-you"&&(u+=1),w.updatedAt>f&&(f=w.updatedAt)}return{sessions:t.
 size,prs:n.size,issues:r.size,loops:s,crons:i,agents:d,needsYou:u,lastActivityAt:f}}function jo(e){let t=e.find(r=>r.moving);
@@ -555,7 +555,22 @@ support:r}}var Vo=String.raw`
   /* Hugs its text like the "N need you" count pill so the two read as one
      family; sentence-case labels make a fixed alignment width pointless. */
   .ow-verb { flex: none; font-size: 11px; }
-  .ow-row-title { overflow: hidden; color: var(--text-strong); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+  .ow-row-title {
+    min-width: 0;
+    color: var(--text-strong);
+    font-weight: 650;
+    /* TWO lines, not one line with an ellipsis.
+       Auto-generated session titles frequently share a long leading phrase, so a
+       single-line clamp cut away the only part that differed: five separate rows
+       all read "Open ONE PR on kirodotdev/KiroCrew fixin…" and were impossible to
+       tell apart. Two lines is still bounded -- the row cannot grow without
+       limit -- while reaching the words that distinguish one from another. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
   .ow-row-summary {
     display: -webkit-box;
     margin: 4px 0 0;

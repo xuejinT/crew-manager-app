@@ -286,7 +286,22 @@ export const OVERWATCH_STYLES = String.raw`
   /* Hugs its text like the "N need you" count pill so the two read as one
      family; sentence-case labels make a fixed alignment width pointless. */
   .ow-verb { flex: none; font-size: 11px; }
-  .ow-row-title { overflow: hidden; color: var(--text-strong); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+  .ow-row-title {
+    min-width: 0;
+    color: var(--text-strong);
+    font-weight: 650;
+    /* TWO lines, not one line with an ellipsis.
+       Auto-generated session titles frequently share a long leading phrase, so a
+       single-line clamp cut away the only part that differed: five separate rows
+       all read "Open ONE PR on kirodotdev/KiroCrew fixin…" and were impossible to
+       tell apart. Two lines is still bounded -- the row cannot grow without
+       limit -- while reaching the words that distinguish one from another. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
   .ow-row-summary {
     display: -webkit-box;
     margin: 4px 0 0;

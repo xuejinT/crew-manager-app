@@ -2883,10 +2883,25 @@ export function rollupStatus(items: WorkItem[]): WorkState {
  */
 export type MemberDot = 'crit' | 'warn' | 'good' | 'idle'
 
+/**
+ * The leading status dot, derived from the SAME computation as the lane and the
+ * badge so the three cannot disagree.
+ *
+ * It used to lead with `item.issue`, which meant any work whose linked change had
+ * a failing check or a conflict was painted critical -- including work that was
+ * running perfectly well and needed nobody. On a real account with a dozen red
+ * pull requests that painted nearly every row red while only two carried a
+ * "needs you" badge, so the dot stopped discriminating and became decoration. A
+ * red dot that is always on says nothing.
+ *
+ * `issue` is a fact about the world, not a measure of what is owed. It still
+ * ranks (via `change_blocked`) and still shows on the card; it no longer decides
+ * the colour by itself.
+ */
 export function memberDot(item: WorkItem, now: number = Date.now()): MemberDot {
-  if (item.issue) return 'crit'
+  if (item.state === 'done') return 'idle'
   if (item.state === 'needs-you') {
-    return responseVerb(item, now) === 'followup' ? 'idle' : 'warn'
+    return responseVerb(item, now) === 'followup' ? 'warn' : 'crit'
   }
   return 'good'
 }
