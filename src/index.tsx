@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import {
   AlertTriangle as AlertCircle,
   Bot,
@@ -323,6 +323,12 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   rank_join: ', and ',
   error_loop: '{{tool}} has failed the same way {{repeats}} times in a row',
   untitled_work: 'Untitled work',
+  card_asked_for: 'You asked for',
+  card_where_it_stands: 'Where it stands',
+  card_suggested_next: 'Suggested next',
+  // The platform records ONE turn number per goal (`last_touched_turn`), not a
+  // span, so this says "turn 7" and never "turns 2-3".
+  card_turn: 'turn {{turn}}',
 }
 
 function workCopy(key: WorkCopyKey, values: Record<string, string> = {}): string {
@@ -477,6 +483,27 @@ function PermissionDecision({ tool, purpose, busy, onAnswer, where }: {
  */
 function Expand({ children }: { children: ReactNode }) {
   return <div className="ow-expand"><div className="ow-expand-inner">{children}</div></div>
+}
+
+/**
+ * One labelled section inside an expanded card: a rule-separated label, then its
+ * body.
+ *
+ * `role="group"` and NOT a heading, deliberately. The page's headings are its
+ * sections — "Needs you", "In progress" — and a card lives inside one of them,
+ * so an <h3> per card section would inject three headings per row and turn the
+ * document outline into a transcript of the list. A named group gives a screen
+ * reader the same "this content belongs to that label" relationship while
+ * staying out of the heading order entirely.
+ */
+function DetailSection({ label, children }: { label: string; children: ReactNode }) {
+  const labelId = useId()
+  return (
+    <div className="ow-detail" role="group" aria-labelledby={labelId}>
+      <div className="ow-detail-label" id={labelId}>{label}</div>
+      {children}
+    </div>
+  )
 }
 
 /** Steps beyond this crowd the composer; the rest stay in the session itself. */
@@ -739,11 +766,50 @@ function WorkRow({
   onOpenSession: (slot: string) => void
 }) {
   const [showAllSteps, setShowAllSteps] = useState(false)
+  /*
+   * What this card can reveal. Computed up front because it decides three
+   * separate things: whether the row claims to be expandable at all
+   * (`aria-expanded`), whether the detail block renders, and — per section —
+   * whether a label and its rule are drawn. A missing section must leave NO
+   * trace, not an empty heading over a gap.
+   */
+  const detailSteps = (item.nextSteps ?? []).filter(step => step.what?.trim())
+  const progressFacts = (item.progress ?? []).filter(entry => entry.trim())
+  const askedFor = item.initialIntent?.trim()
+  // Steps are the picker: without a handler there is nothing to pick, which is
+  // the condition this block has always had.
+  const hasSteps = Boolean(onPickStep) && detailSteps.length > 0
+  const hasDetail = Boolean(askedFor) || progressFacts.length > 0 || hasSteps
+  const shownSteps = showAllSteps ? detailSteps : detailSteps.slice(0, MAX_QUOTE_STEPS)
+  const badge = hideBadge
+    ? (item.state === 'done' ? <Check className="ow-icon ow-row-check" aria-hidden="true" /> : null)
+    : stateBadge(item)
+  /*
+   * ONE number, never a span. The platform records `last_touched_turn` per goal
+   * and nothing that could bound the other end, so this reads "turn 7". A range
+   * would have to be invented, and 0 means "not recorded" rather than turn zero.
+   */
+  const turnLabel = item.lastTouchedTurn
+    ? workCopy('card_turn', { turn: String(item.lastTouchedTurn) })
+    : null
   return (
     <Clickable
       onActivate={onSelect}
       className="ow-row"
+      /*
+       * Short and stable. The row is the disclosure control, and letting its
+       * accessible name fall out of its contents meant the name grew to include
+       * every revealed section the moment it was expanded. The title is what the
+       * control is for; the rest is content, and is read as content.
+       */
+      aria-label={item.title}
       aria-pressed={selected}
+      /*
+       * Only on rows that actually disclose something. Claiming expandability on
+       * a row with no original ask, no progress and no steps would promise detail
+       * that never arrives.
+       */
+      aria-expanded={hasDetail ? selected : undefined}
       data-selected={selected}
       data-instructed={item.instructed ? 'true' : undefined}
       data-continuation={continuation ? 'true' : undefined}
@@ -752,17 +818,38 @@ function WorkRow({
       <div className="ow-row-layout">
         <div className="ow-row-content">
           {!headless && (
+          <>
           <div className="ow-row-heading">
-            {hideBadge
-              ? (item.state === 'done' && <Check className="ow-icon ow-row-check" aria-hidden="true" />)
-              : stateBadge(item)}
             <span className="ow-row-title">{item.title}</span>
+            {/*
+              The chevron belongs with the title because the title is what it
+              opens. Decorative: the row itself carries role=button and
+              aria-expanded, so a focusable chevron would be a second tab stop
+              for one action.
+            */}
+            <ChevronRight
+              className="ow-icon ow-row-chevron"
+              data-expanded={selected ? 'true' : undefined}
+              aria-hidden="true"
+            />
           </div>
+          {/* State, then which turn this goal was last touched on. */}
+          {(badge || turnLabel) && (
+            <div className="ow-row-metaline">
+              {badge}
+              {turnLabel && <span className="ow-row-turn">{turnLabel}</span>}
+            </div>
+          )}
+          </>
           )}
           {/* Compact rows show the title only at rest; selecting one expands its
               summary here, so a click always reveals content (every item has a
-              summary) rather than only the ones that happen to carry next-steps. */}
-          {(!compact || selected) && item.summary && !(item.nextSteps ?? []).some(step => step.what?.trim() === item.summary) && (
+              summary) rather than only the ones that happen to carry next-steps.
+              Suppressed when it merely repeats a next step, or the original ask
+              that the expanded card now quotes in full under its own label. */}
+          {(!compact || selected) && item.summary
+            && !(item.nextSteps ?? []).some(step => step.what?.trim() === item.summary)
+            && !(selected && askedFor === item.summary.trim()) && (
             <p className="ow-row-summary">{item.summary}</p>
           )}
           {/*
@@ -849,52 +936,82 @@ function WorkRow({
           types there. Opening a session belongs to the session title above, which
           is the thing a session actually is. An Open button per row also multiplied
           the same destination across every goal in one session.
+
+          The disclosure chevron used to live here, in a column of its own. It now
+          sits with the title it opens, so this side of the layout is empty and the
+          content takes the full width.
         */}
-        <div className="ow-row-actions">
-          <ChevronRight className="ow-icon" aria-hidden="true" />
-        </div>
       </div>
       {/*
         A yes/no is answered where it is asked. Sending this item to the composer
         would ask the user to compose a message when the session wants one bit.
       */}
       {/*
-        Selecting a card expands its next steps HERE, where the content lives.
-        Clicking one puts it in the Conductor's input — chosen on the left, sent
-        on the right. The quote stays a reference.
+        The card's account of itself, revealed on selection: what was asked for,
+        where it stands, what comes next.
+
+        PROGRESSIVE DISCLOSURE, and it is the whole reason this sits behind
+        selection rather than in the resting row. This board answers one question
+        — what needs me now — and it answers it by being scannable. Three
+        labelled sections is most of a paragraph per row, and eight rows of that
+        is a document to read before the first decision can be made; a previous
+        design was rejected for exactly that length. So the resting row keeps
+        title, state, turn and one summary line, and the account appears for the
+        ONE row the user picked. Clicking a step still puts it in the Conductor's
+        input — chosen on the left, sent on the right.
       */}
-      {selected && onPickStep && item.nextSteps && item.nextSteps.length > 0 && (
-        <Expand><div className="ow-row-steps">
-          {/* "Suggested" because these are the model's inferences, not a task
-              list the user wrote. It was "Open items", which collided with the
-              Open button (one word, two meanings) and called them items when the
-              cards are the items. */}
-          <div className="ow-steps-head">Suggested next steps</div>
-          {item.nextSteps.slice(0, showAllSteps ? undefined : MAX_QUOTE_STEPS).map((step, index) => (
-            <button
-              type="button"
-              key={`${index}:${step.what}`}
-              className="ow-quote-step"
-              title={step.why ?? step.what}
-              onClick={event => {
-                // Selection already happened; picking a step must not re-toggle it.
-                event.stopPropagation()
-                onPickStep(step.what)
-              }}
-            >
-              {step.what}
-            </button>
-          ))}
-          {item.nextSteps.length > MAX_QUOTE_STEPS && (
-            <button
-              type="button"
-              className="ow-steps-more"
-              onClick={event => { event.stopPropagation(); setShowAllSteps(show => !show) }}
-            >
-              {showAllSteps
-                ? 'Show fewer'
-                : `+${item.nextSteps.length - MAX_QUOTE_STEPS} more`}
-            </button>
+      {selected && hasDetail && (
+        <Expand><div className="ow-row-detail">
+          {askedFor && (
+            <DetailSection label={workCopy('card_asked_for')}>
+              {/* Verbatim and quoted rather than paraphrased: it is the user's
+                  own sentence, and that it has NOT been rewritten is the point
+                  of showing it. */}
+              <blockquote className="ow-detail-quote">{askedFor}</blockquote>
+            </DetailSection>
+          )}
+          {progressFacts.length > 0 && (
+            <DetailSection label={workCopy('card_where_it_stands')}>
+              <ul className="ow-detail-facts">
+                {progressFacts.map((fact, index) => (
+                  <li key={`${index}:${fact}`}>{fact}</li>
+                ))}
+              </ul>
+            </DetailSection>
+          )}
+          {hasSteps && (
+            <DetailSection label={workCopy('card_suggested_next')}>
+              {shownSteps.map((step, index) => (
+                <button
+                  type="button"
+                  key={`${index}:${step.what}`}
+                  className="ow-quote-step ow-detail-step"
+                  title={step.why ?? step.what}
+                  onClick={event => {
+                    // Selection already happened; picking a step must not re-toggle it.
+                    event.stopPropagation()
+                    onPickStep?.(step.what)
+                  }}
+                >
+                  {/* Three tiers, loudest first: the action, then why it is
+                      being suggested, then what it should leave behind. */}
+                  <span className="ow-detail-step-what">{step.what}</span>
+                  {step.why && <span className="ow-detail-step-why">{step.why}</span>}
+                  {step.expect && <span className="ow-detail-step-expect">{step.expect}</span>}
+                </button>
+              ))}
+              {detailSteps.length > MAX_QUOTE_STEPS && (
+                <button
+                  type="button"
+                  className="ow-steps-more"
+                  onClick={event => { event.stopPropagation(); setShowAllSteps(show => !show) }}
+                >
+                  {showAllSteps
+                    ? 'Show fewer'
+                    : `+${detailSteps.length - MAX_QUOTE_STEPS} more`}
+                </button>
+              )}
+            </DetailSection>
           )}
         </div></Expand>
       )}
