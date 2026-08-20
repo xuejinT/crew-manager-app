@@ -266,7 +266,20 @@ export const OVERWATCH_STYLES = String.raw`
   }
   .ow-row-layout { display: flex; align-items: flex-start; gap: 12px; }
   .ow-row-content { min-width: 0; flex: 1; }
-  .ow-row-heading { display: flex; min-width: 0; align-items: center; gap: 8px; }
+  /* Title line. The chevron is pushed to the trailing edge by the title's own
+     flex growth, so it lands in the same place on every card. */
+  .ow-row-heading { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
+  .ow-row-chevron { margin-top: 3px; margin-left: auto; color: var(--muted); transition: transform 140ms ease; }
+  .ow-row-chevron[data-expanded='true'] { transform: rotate(90deg); }
+  /* State, then turn. The turn is monospace so a number reads as a coordinate
+     into the transcript rather than as prose. */
+  .ow-row-metaline { display: flex; min-width: 0; align-items: center; gap: 8px; margin-top: 5px; }
+  .ow-row-turn {
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    white-space: nowrap;
+  }
   /* Hugs its text like the "N need you" count pill so the two read as one
      family; sentence-case labels make a fixed alignment width pointless. */
   .ow-verb { flex: none; font-size: 11px; }
@@ -300,7 +313,6 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ow-references { display: flex; min-width: 0; align-items: center; gap: 4px; overflow: hidden; }
   .ow-reference { display: inline-flex; min-width: 0; align-items: center; gap: 4px; }
-  .ow-row-actions { display: flex; flex-shrink: 0; align-self: center; align-items: center; gap: 4px; }
   .ow-primary-action { flex-shrink: 0; }
   .ow-icon { width: 14px; height: 14px; flex-shrink: 0; }
   /* Sizing only. The resizer hairline to its left is the divider now, so the
@@ -651,8 +663,6 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-goalcard .ow-row { padding: 7px 4px 7px 26px; }
   .ow-goalcard .ow-row + .ow-row { border-top: 1px solid var(--border); }
   .ow-goalcard .ow-row-title { color: var(--text); font-weight: 500; }
-  .ow-goalcard .ow-row-actions .ow-icon { transition: transform 0.15s ease; }
-  .ow-goalcard .ow-row[data-selected='true'] .ow-row-actions .ow-icon { transform: rotate(90deg); }
   .ow-goalcard .ow-row[data-selected='true'] .ow-row-title { color: var(--text-strong); font-weight: 700; }
   .ow-quote-docked .ow-eyebrow { flex: none; white-space: nowrap; }
   /* Looks like the eyebrow but reads as a control: accent colour + pointer signal
@@ -681,10 +691,81 @@ export const OVERWATCH_STYLES = String.raw`
   @keyframes ow-expand { from { grid-template-rows: 0fr; opacity: 0; } to { grid-template-rows: 1fr; opacity: 1; } }
   .ow-expand { display: grid; animation: ow-expand 160ms ease; }
   .ow-expand-inner { min-height: 0; overflow: hidden; }
-  .ow-steps-head { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
   .ow-steps-more { padding: 2px 0; border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
   .ow-steps-more:hover { color: var(--text); text-decoration: underline; }
-  .ow-row-steps { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 10px 0 2px; }
+  /*
+   * The expanded card's three sections. One rule per section, drawn as part of
+   * the LABEL rather than as a separate element, so a section that has no data
+   * takes its rule with it when it is not rendered — no stray hairline over a
+   * gap.
+   */
+  .ow-row-detail { display: flex; flex-direction: column; gap: 12px; margin: 12px 0 2px; }
+  .ow-detail { display: flex; flex-direction: column; gap: 6px; }
+  .ow-detail-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .ow-detail-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  /* Indented with a left border: the visual grammar of a quotation, because this
+     is the user's own sentence reproduced rather than the app's account of it. */
+  .ow-detail-quote {
+    margin: 0;
+    padding: 2px 0 2px 10px;
+    border-left: 2px solid var(--border-strong, var(--border));
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .ow-detail-facts {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .ow-detail-facts li { position: relative; padding-left: 12px; overflow-wrap: anywhere; }
+  .ow-detail-facts li::before {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 8px;
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  /* Each suggestion is one clickable block of three tiers. The accent edge marks
+     it as the actionable part of the card — the only thing here that does
+     something when clicked. Two classes deep on purpose: .ow-quote-step sets the
+     border SHORTHAND further down this sheet, which at equal specificity would
+     win on source order and flatten this edge back to a plain hairline. */
+  .ow-quote-step.ow-detail-step {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 100%;
+    border-left: 2px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+  }
+  .ow-detail-step-what { color: var(--text); font-size: 13px; font-weight: 400; line-height: 1.45; }
+  .ow-detail-step-why { color: var(--muted); font-size: 12px; line-height: 1.45; }
+  .ow-detail-step-expect { color: var(--muted); font-size: 12px; font-style: italic; line-height: 1.45; opacity: 0.8; }
   /* Reveal-on-hover, top-right. Hidden and non-interactive at rest so the card
      is clean; shown on hover OR keyboard focus so it is not mouse-only. Floated
      over the corner (not in flow) so appearing shifts no layout. A backing panel

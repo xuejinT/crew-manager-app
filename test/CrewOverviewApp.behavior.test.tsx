@@ -850,3 +850,202 @@ describe('the row title has room to distinguish itself', () => {
     expect(rule).not.toContain('white-space: nowrap')
   })
 })
+
+/*
+ * The summary card: what was asked for, where it stands, what comes next.
+ *
+ * These are the three sections the platform already sends and the card used to
+ * throw away -- `progress` in particular was carried all the way onto
+ * `WorkItem.progress` and rendered nowhere. The tests assert the CONTENT, not the
+ * markup: a section counts as rendered only when its own text is on screen under
+ * its own label.
+ */
+describe('a work card accounts for the goal it stands for', () => {
+  const ASK = 'Make the cards say what I asked for and where it got to.'
+  const FACTS = [
+    'Read the summary payload and found progress was never rendered.',
+    'Drafted the three-section card against the existing styles.',
+  ]
+  const STEP = {
+    what: 'Render the progress list inside the expanded card',
+    why: 'The payload already carries it and nothing puts it on screen',
+    expect: 'Each card states what has happened without opening the session',
+  }
+
+  function withIntents(intents: unknown[]) {
+    const base = appSdkMocks.get.getMockImplementation() as (path: string) => Promise<unknown>
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots/session-2/summary') {
+        return { enabled: true, intents, user_turns: 7 }
+      }
+      // Every other session answers with a summary that contributes no intents,
+      // so this suite's rows come from exactly one place.
+      if (path.endsWith('/summary')) return { enabled: true, intents: [] }
+      return base(path)
+    })
+  }
+
+  /** The full payload: an ask, two progress facts, one three-tier suggestion. */
+  function withFullIntent() {
+    withIntents([{
+      title: 'Restyle the work cards',
+      initial_intent: ASK,
+      progress: FACTS,
+      next_steps: [STEP],
+      state: 'needs-you',
+      verified: false,
+      last_touched_turn: 7,
+    }])
+  }
+
+  const rowId = 'work-item-intent:session-2:0'
+
+  it('renders all three sections with their content once the row is expanded', async () => {
+    withFullIntent()
+    renderApp()
+
+    const row = await screen.findByTestId(rowId)
+    fireEvent.click(row)
+
+    // "You asked for" -- the ORIGINAL request, verbatim, quoted rather than
+    // paraphrased. Before this it reached the model only as a last-resort
+    // fallback for the one-line summary.
+    expect(within(row).getByText('You asked for')).toBeInTheDocument()
+    expect(within(row).getByText(ASK)).toBeInTheDocument()
+    expect(row.querySelector('.ow-detail-quote')?.textContent).toBe(ASK)
+
+    // "Where it stands" -- every progress fact, as a list. This is the payload
+    // the card used to discard entirely.
+    expect(within(row).getByText('Where it stands')).toBeInTheDocument()
+    for (const fact of FACTS) expect(within(row).getByText(fact)).toBeInTheDocument()
+    expect(row.querySelectorAll('.ow-detail-facts li')).toHaveLength(FACTS.length)
+
+    // "Suggested next" -- three tiers of one suggestion, all three present.
+    expect(within(row).getByText('Suggested next')).toBeInTheDocument()
+    expect(within(row).getByText(STEP.what)).toBeInTheDocument()
+    expect(within(row).getByText(STEP.why)).toBeInTheDocument()
+    expect(within(row).getByText(STEP.expect)).toBeInTheDocument()
+  })
+
+  it('keeps the resting row compact and says so, revealing nothing until asked', async () => {
+    withFullIntent()
+    renderApp()
+
+    const row = await screen.findByTestId(rowId)
+
+    // The board answers "what needs me now" by being scannable. None of the
+    // three sections may cost a row anything before it is picked.
+    expect(within(row).queryByText('You asked for')).toBeNull()
+    expect(within(row).queryByText('Where it stands')).toBeNull()
+    expect(within(row).queryByText('Suggested next')).toBeNull()
+    expect(within(row).queryByText(ASK)).toBeNull()
+    expect(within(row).queryByText(FACTS[0])).toBeNull()
+    expect(row.querySelector('.ow-row-detail')).toBeNull()
+
+    // Reachable and labelled, and honest about being closed: a row that hides
+    // detail must announce that it has detail to hide.
+    expect(row).toHaveAttribute('aria-label', 'Restyle the work cards')
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    expect(row).toHaveAttribute('tabindex', '0')
+
+    // The turn stays on the resting row, and it is ONE number. `last_touched_turn`
+    // is the only turn datum the payload carries, so a span would be invented.
+    expect(within(row).getByText('turn 7')).toBeInTheDocument()
+    expect(row.textContent).not.toMatch(/turns \d/)
+  })
+
+  it('expands and collapses on the same affordance', async () => {
+    withFullIntent()
+    renderApp()
+
+    const row = await screen.findByTestId(rowId)
+    fireEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(within(row).getByText('Where it stands')).toBeInTheDocument()
+
+    fireEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'false')
+    expect(within(row).queryByText('Where it stands')).toBeNull()
+  })
+
+  it('drops a section it has no data for, label and rule together', async () => {
+    // An ask and nothing else: no progress, no next steps.
+    withIntents([{
+      title: 'Restyle the work cards',
+      initial_intent: ASK,
+      state: 'needs-you',
+      verified: false,
+      last_touched_turn: 4,
+    }])
+    renderApp()
+
+    const row = await screen.findByTestId(rowId)
+    fireEvent.click(row)
+
+    expect(within(row).getByText('You asked for')).toBeInTheDocument()
+    // No empty labelled section, and therefore no rule hanging over a gap: the
+    // rule is drawn by the label, so an absent section takes its rule with it.
+    expect(within(row).queryByText('Where it stands')).toBeNull()
+    expect(within(row).queryByText('Suggested next')).toBeNull()
+    expect(row.querySelectorAll('.ow-detail')).toHaveLength(1)
+    expect(row.querySelectorAll('.ow-detail-label')).toHaveLength(1)
+    expect(row.querySelectorAll('.ow-detail-facts')).toHaveLength(0)
+    expect(row.querySelectorAll('.ow-detail-step')).toHaveLength(0)
+  })
+
+  it('renders no detail block at all for an intent carrying none of the three', async () => {
+    withIntents([{
+      title: 'Restyle the work cards',
+      progress: [],
+      next_steps: [],
+      state: 'needs-you',
+      verified: false,
+      last_touched_turn: 2,
+    }])
+    renderApp()
+
+    const row = await screen.findByTestId(rowId)
+    fireEvent.click(row)
+
+    // Nothing to disclose, so the row must not claim to be a disclosure.
+    expect(row).not.toHaveAttribute('aria-expanded')
+    expect(row.querySelector('.ow-row-detail')).toBeNull()
+    expect(row.querySelectorAll('.ow-detail-label')).toHaveLength(0)
+  })
+
+  it('still picks a step from inside the section, and still caps how many show', async () => {
+    withIntents([{
+      title: 'Restyle the work cards',
+      initial_intent: ASK,
+      progress: FACTS,
+      next_steps: [
+        STEP,
+        { what: 'Second suggestion' },
+        { what: 'Third suggestion' },
+        { what: 'Fourth suggestion' },
+      ],
+      state: 'needs-you',
+      verified: false,
+      last_touched_turn: 7,
+    }])
+    renderApp()
+
+    const row = await screen.findByTestId(rowId)
+    fireEvent.click(row)
+
+    // The cap survives the restyle: three shown, the rest behind the toggle.
+    expect(row.querySelectorAll('.ow-detail-step')).toHaveLength(3)
+    expect(within(row).queryByText('Fourth suggestion')).toBeNull()
+    fireEvent.click(within(row).getByRole('button', { name: '+1 more' }))
+    expect(row.querySelectorAll('.ow-detail-step')).toHaveLength(4)
+
+    // And so does the picking affordance: the block is the button.
+    fireEvent.click(within(row).getByText(STEP.what))
+    await waitFor(() => {
+      expect(appSdkMocks.post).toHaveBeenCalledWith('/api/chat', {
+        message: STEP.what,
+        slot: 'session-2',
+      })
+    })
+  })
+})

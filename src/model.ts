@@ -96,6 +96,12 @@ export type WorkCopyKey =
   | 'rank_join'
   | 'error_loop'
   | 'untitled_work'
+  // The summary card's own chrome. Frontend strings, but kept in the copy table
+  // with everything else so display English lives in exactly one file.
+  | 'card_asked_for'
+  | 'card_where_it_stands'
+  | 'card_suggested_next'
+  | 'card_turn'
 
 export type WorkCopy = (key: WorkCopyKey, values?: Record<string, string>) => string
 
@@ -145,6 +151,19 @@ export interface WorkItem {
   parentId?: string
   provenance: string
   action?: WorkAction
+  /**
+   * The request that OPENED this goal, in the user's own words, as the platform
+   * recorded it (`SummaryIntent.initial_intent`).
+   *
+   * Deliberately a field of its own rather than a reuse of `summary`. The two
+   * answer different questions: `summary` is the one line describing the item
+   * NOW, and it falls back through next step, then latest progress, and only
+   * then to this — so reading the original ask out of it is right by accident on
+   * some items and wrong on most. This field is only ever the original ask,
+   * which is what lets a card quote it verbatim. Present only for summarized
+   * intents.
+   */
+  initialIntent?: string
   /** Suggested next steps, present only for summarized intents. */
   nextSteps?: SummaryNextStep[]
   /** What already happened on this intent, newest last. */
@@ -791,6 +810,7 @@ function intentWorkItems(
         ...intentSourceRefs(sources, intent),
       ],
       nextSteps,
+      initialIntent: intent.initial_intent?.trim() || undefined,
       progress: (intent.progress ?? []).filter(entry => entry.trim()),
       stale: Boolean(summary.stale),
       lastTouchedTurn: intent.last_touched_turn ?? 0,
@@ -827,6 +847,7 @@ function intentWorkItems(
         ...intentSourceRefs(sources, intent),
       ],
       nextSteps,
+      initialIntent: intent.initial_intent?.trim() || undefined,
       progress: (intent.progress ?? []).filter(entry => entry.trim()),
       stale: Boolean(summary.stale),
       lastTouchedTurn: intent.last_touched_turn ?? 0,
