@@ -15,6 +15,9 @@ Endpoints:
   manual refresh, so nobody has to wait out a sweep interval to see a change)
 * ``GET  /recall``   -- past work matching a query, from the transcript history
   the live board cannot see
+* ``GET  /peek``     -- the recent transcript rows of ONE named session, so the
+  Conductor can look at what a session did instead of only reading a summary
+  written about it
 * ``POST /goal-pass`` -- one semantic clustering pass over the items the
   rule-based grouper left ungrouped; degrades to ``available: false``
 """
@@ -35,6 +38,7 @@ from aiohttp import web
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import goalpass  # noqa: E402
+from peek import peek_session, name_is_safe, normalize_name  # noqa: E402
 from recall import search_past_work  # noqa: E402
 from prchecks import pr_check_counts  # noqa: E402
 from initiatives import add_initiative, load_initiatives, remove_initiative  # noqa: E402
@@ -150,6 +154,51 @@ async def handle_recall(request: web.Request, ctx: Any) -> web.Response:
         # Anything other than the literal "all" means the default scope: an
         # unrecognised value must narrow, never widen.
         all_workspaces=(request.query.get("scope") == "all"),
+    )
+    return web.json_response(payload)
+
+
+async def handle_peek(request: web.Request, ctx: Any) -> web.Response:
+    """GET /peek?session=<key or title>&rows=N -- what that session just did.
+
+    The board can say what a session is ABOUT; this says what it actually SAID.
+    Everything the Conductor sees today about a session's activity is second-hand
+    -- a title, a stall verdict, a generated summary -- so when the summary is
+    stale or too coarse there is nowhere to go but opening the session by hand.
+    Peek is that step down to the evidence.
+
+    ``session`` is required and must be a key or an exact title; ``rows`` is
+    clamped to ``peek.PEEK_ROWS_MAX``.
+
+    Status codes follow the house rule. A missing or path-bearing ``session`` is
+    malformed input and answers 400. Everything else -- including every privacy
+    refusal -- answers HTTP 200 with ``{"available": false, "reason": ...}``,
+    because peek only ENRICHES the board: an error status would make the view look
+    broken when the honest answer is "not for you to read".
+
+    Refusals, all of them enforced in ``peek.py`` and covered by
+    ``backend/selftest.py``: a private (incognito/temporary) session is never
+    read, a session outside the caller's workspace is never read, an
+    UNDETERMINABLE caller workspace refuses rather than widens, and an
+    unreachable redaction helper refuses rather than returning raw text.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+
+    wanted = normalize_name(request.query.get("session"))
+    if not wanted:
+        return web.json_response({"error": "session is required"}, status=400)
+    if not name_is_safe(wanted):
+        return web.json_response({"error": "invalid session"}, status=400)
+
+    payload = await peek_session(
+        wanted,
+        rows=request.query.get("rows"),
+        # Same resolver recall uses, and the same fail-closed intent -- but peek
+        # treats an unresolvable workspace as a REFUSAL rather than as "do not
+        # filter", because the payload here is one named session's own words.
+        workspace=_caller_workspace(request),
     )
     return web.json_response(payload)
 
@@ -360,6 +409,7 @@ def register_routes(ctx: Any) -> list:
         AppRoute(method="POST", path="/sweep", handler=handle_sweep),
         AppRoute(method="POST", path="/settings", handler=handle_settings),
         AppRoute(method="GET", path="/recall", handler=handle_recall),
+        AppRoute(method="GET", path="/peek", handler=handle_peek),
         AppRoute(method="GET", path="/pr-checks", handler=handle_pr_checks),
         AppRoute(method="GET", path="/initiatives", handler=handle_initiatives),
         AppRoute(method="POST", path="/initiatives", handler=handle_add_initiative),
