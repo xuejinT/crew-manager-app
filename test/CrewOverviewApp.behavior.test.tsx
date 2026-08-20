@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CrewOverviewApp, { noticedSinceLastTurn } from '../src/index'
 import { appSdkMocks } from './mocks/app-sdk'
+import { OVERWATCH_STYLES } from '../src/styles'
 
 function renderApp() {
   return render(<CrewOverviewApp />)
@@ -1316,5 +1317,23 @@ describe('rebinding a Conductor that already exists', () => {
     view.rerender(<CrewOverviewApp />)
     await waitFor(() => expect(appSdkMocks.get).toHaveBeenCalledWith('/api/chat/slots'))
     expect(rebinds()).toHaveLength(1)
+  })
+})
+
+describe('the row title has room to distinguish itself', () => {
+  // jsdom performs no layout, so the visual result cannot be asserted here. This
+  // is a shape guard, not a behaviour test: it exists so that reverting the clamp
+  // cannot happen silently, because the failure it prevents is invisible in code
+  // review -- five rows reading "Open ONE PR on kirodotdev/KiroCrew fixin…" look
+  // fine in a diff and are useless on screen.
+  it('clamps the title to two lines rather than one with an ellipsis', () => {
+    const rule = OVERWATCH_STYLES
+      .split('}')
+      .find(block => block.includes('.ow-row-title'))
+
+    expect(rule).toBeDefined()
+    expect(rule).toContain('-webkit-line-clamp: 2')
+    // A single-line nowrap rule is what truncated away the distinguishing words.
+    expect(rule).not.toContain('white-space: nowrap')
   })
 })
