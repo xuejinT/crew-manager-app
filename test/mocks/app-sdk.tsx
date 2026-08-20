@@ -26,9 +26,10 @@ export function useNavBadge() {
   return appSdkMocks.setNavBadge
 }
 
-export function ChatEmbed({ slotKey, onSend, placeholder }: { slotKey?: string; onSend?: (message: string) => Promise<void> | void; placeholder?: string }) {
+export function ChatEmbed({ slotKey, onSend, placeholder, aboveComposer }: { slotKey?: string; onSend?: (message: string) => Promise<void> | void; placeholder?: string; aboveComposer?: ReactNode }) {
   return (
     <div data-testid="chat-embed" data-slot={slotKey}>
+      {aboveComposer}
       <input
         aria-label="Message to Conductor"
         placeholder={placeholder}

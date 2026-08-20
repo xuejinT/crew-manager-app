@@ -163,10 +163,11 @@ describe('Crew Manager Conductor boundaries', () => {
     renderApp()
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
-    // The model's outcome title, not the derived "github #6" ref label.
-    expect(await screen.findByText('Ship the app store art', { selector: '.ow-goalcard-title' }))
+    // The model's outcome title, not the derived "github #6" ref label. Scoped
+    // to the Goals region: the PR rail now shares the .ow-goalcard-title class.
+    expect(await screen.findByText('Ship the app store art', { selector: 'section[aria-label="Work by goal"] .ow-goalcard-title' }))
       .toBeInTheDocument()
-    expect(screen.queryByText('github #6', { selector: '.ow-goalcard-title' })).not.toBeInTheDocument()
+    expect(screen.queryByText('github #6', { selector: 'section[aria-label="Work by goal"] .ow-goalcard-title' })).not.toBeInTheDocument()
     localStorage.removeItem('crew-manager.goal-semantic')
     localStorage.removeItem('crew-manager.goal-names')
     localStorage.removeItem('crew-manager.goal-memory')
@@ -616,17 +617,19 @@ describe('Crew Manager Conductor boundaries', () => {
     renderApp()
 
     expect(await screen.findByText('feat: one card anatomy in Goal view')).toBeInTheDocument()
-    const head = within(document.querySelector('.ow-pr-head') as HTMLElement)
-    // Which repo, whose PR, how recent — the identity line. The branch is not
-    // here: at rail width it crowded out the title, and the link goes to it.
-    expect(head.getByText('crew-manager-app')).toBeInTheDocument()
-    expect(head.getByText('xuejinT')).toBeInTheDocument()
+    // The PR card now uses the shared goal-card anatomy: title tab, a right-aligned
+    // verdict pill, and one meta line. Target the card by its verdict pill.
+    const prCard = document.querySelector('.ow-pr-verdict')?.closest('.ow-block') as HTMLElement
+    const head = within(prCard)
+    const meta = prCard.querySelector('.ow-goal-meta')?.textContent ?? ''
+    // Which repo, whose PR — the identity line. The branch is not here: at rail
+    // width it crowded out the title, and the link goes to it.
+    expect(meta).toContain('crew-manager-app')
+    expect(meta).toContain('xuejinT')
     // One verdict. A conflict outranks the failing checks: rebasing re-runs them.
     expect(head.getByText('Conflict')).toBeInTheDocument()
-    // The blocker line names every real obstacle, threads counted once each.
-    expect(document.querySelector('.ow-pr-status-line')?.textContent).toBe(
-      '2 checks failing · merge conflict with main · 1 unresolved comment',
-    )
+    // Every real obstacle folds into the meta line, threads counted once each.
+    expect(meta).toContain('2 checks failing · merge conflict with main · 1 unresolved comment')
     // The diff itself is the forge's job — no file list, at rest or expanded.
     expect(screen.queryByText('src/index.tsx')).not.toBeInTheDocument()
     expect(screen.queryByText(/Files Changed/)).not.toBeInTheDocument()
@@ -649,8 +652,18 @@ describe('Crew Manager Conductor boundaries', () => {
     fireEvent.click(chips.getByRole('button', { name: /Ship goal grouping/ }))
     expect(appSdkMocks.navigate).toHaveBeenCalledWith('/chat?sid=s1')
 
-    // Clicking the title still folds it away.
-    fireEvent.click(screen.getByText('feat: one card anatomy in Goal view'))
+    // Selecting the PR header quotes it into the Conductor — the same gesture a
+    // goal header carries. Selection shows on the header itself (the quote bar
+    // lives inside the async-mounted Conductor embed).
+    fireEvent.click(prCard.querySelector('.ow-pr-header') as HTMLElement)
+    await waitFor(() => expect(prCard.querySelector('.ow-pr-header')?.getAttribute('data-selected')).toBe('true'))
+    // Clicking again deselects — a mode you can leave from where you entered it.
+    fireEvent.click(prCard.querySelector('.ow-pr-header') as HTMLElement)
+    await waitFor(() => expect(prCard.querySelector('.ow-pr-header')?.getAttribute('data-selected')).toBeNull())
+
+    // The chevron folds it away, like every other card; the title is now a
+    // select target, not the fold toggle.
+    fireEvent.click(screen.getByRole('button', { name: /Collapse feat: one card anatomy/ }))
     await waitFor(() => expect(document.querySelector('.ow-pr-sessions')).toBeNull())
   })
 
