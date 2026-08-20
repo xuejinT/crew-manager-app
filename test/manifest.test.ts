@@ -163,9 +163,6 @@ describe('Crew Manager app manifest', () => {
       // Live monitor loops: listed to show them, DELETEd to stop one. The loop
       // is the only work on the board that spends budget with nobody watching.
       '/api/autonudge',
-      // The platform's own PR source — the sidebar Changes panel's data. The
-      // PR cards read the same payload so both surfaces always agree.
-      '/api/source/pull-request',
       // Its own backend: stall findings, watcher settings, past-work recall.
       '/api/apps/crew-manager',
     ])

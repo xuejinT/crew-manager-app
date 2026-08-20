@@ -134,7 +134,6 @@ export const OVERWATCH_STYLES = String.raw`
     flex-direction: column;
     overflow: hidden;
   }
-  .ow-tabs { display: flex; gap: 4px; }
   /* Grab a card by its header; the body keeps normal text selection. */
   .ow-stack-card > summary { cursor: grab; }
   .ow-stack-card:active > summary { cursor: grabbing; }
@@ -171,21 +170,6 @@ export const OVERWATCH_STYLES = String.raw`
      Symmetric padding and the same 13px as every other card title — the tab row
      shares a header line with the count badge, and asymmetric padding pushed the
      badge off the tab's text baseline. */
-  .ow-tab {
-    padding: 4px 8px;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-    background: none;
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 650;
-  }
-  .ow-tab:hover { background: none; color: var(--text); }
-  .ow-tab[data-selected='true'] {
-    border-bottom-color: var(--text-strong);
-    color: var(--text-strong);
-  }
   .ow-listcard-tools { display: flex; flex: none; flex-direction: column; gap: 10px; padding: 0 14px 12px; }
   .ow-listcard-sub { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
   /* The only scroll container in the column. */
@@ -382,30 +366,6 @@ export const OVERWATCH_STYLES = String.raw`
    * element as a default <button> — which is why its icon wrapped onto its own
    * line rather than sitting beside the name.
    */
-  .ow-block-tab {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    min-width: 0;
-    flex-wrap: nowrap;
-    overflow: hidden;
-    /*
-     * No single theme token is reliably distinct from --card: --bg-accent EQUALS
-     * --card in monokai (#2d2e27) and solarized (#073642), and --bg-elevated
-     * equals it (#ffffff) in every light theme. Mixing the FOREGROUND into the
-     * card guarantees a visible delta on every theme by definition, with
-     * --bg-accent kept as the fallback for engines without color-mix.
-     */
-    background: var(--bg-accent);
-    background: color-mix(in srgb, var(--text) 6%, var(--card));
-    border: 0;
-    padding: 10px 16px;
-    font-size: 12px;
-    color: var(--text);
-    cursor: pointer;
-    text-align: left;
-  }
   .ow-block-name { font-weight: 600; }
   /* The NAME is the point of the header — the meta list yields, never the name. */
   .ow-block-tab .ow-block-name { flex: none; max-width: 40ch; }
@@ -428,13 +388,6 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-block[data-grouped='true'] .ow-row[data-selected='true'] {
     background: var(--aim-subtle);
     box-shadow: inset 3px 0 0 var(--accent);
-  }
-  .ow-block-tab-meta {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    min-width: 0;
-    color: var(--muted);
   }
   .ow-reference-link {
     background: none;
@@ -561,7 +514,6 @@ export const OVERWATCH_STYLES = String.raw`
     background: var(--aim-subtle);
     color: var(--accent);
   }
-  .ow-pr-head { padding: 10px 12px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--text) 6%, var(--card)); }
   /* Title block takes the width; the verdict and the forge link hold the right
      edge, so the pill lands in the same place on every row. */
   .ow-pr-head-row { display: flex; align-items: flex-start; gap: 8px; }
@@ -580,30 +532,6 @@ export const OVERWATCH_STYLES = String.raw`
     white-space: nowrap;
   }
   .ow-pr-when { flex: none; }
-  .ow-pr-verdict {
-    flex: none;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 650;
-    white-space: nowrap;
-  }
-  .ow-pr-verdict::before {
-    content: '';
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    margin-right: 6px;
-    border-radius: 50%;
-    background: currentColor;
-    vertical-align: 1px;
-  }
-  .ow-pr-verdict[data-tone='err'] { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
-  .ow-pr-verdict[data-tone='warn'] { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
-  .ow-pr-verdict[data-tone='ok'] { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
-  .ow-pr-verdict[data-tone='muted'] { background: var(--bg-hover); color: var(--muted); }
-  .ow-pr-tools { flex: none; padding: 8px 14px 4px; }
-  .ow-pr-sublabel { padding: 6px 12px 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
   .ow-pr-number { flex: none; color: var(--muted); font-size: 12px; }
   /* Which repository — the board spans several, so the row has to say. */
   .ow-pr-repo { flex: none; color: var(--text-strong); font-size: 13px; font-weight: 650; }
@@ -626,60 +554,9 @@ export const OVERWATCH_STYLES = String.raw`
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
   }
-  .ow-pr-sessions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 16px 12px;
-  }
-  .ow-pr-sublabel-inline { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
   /* A jump-link, not a title: quieter and smaller than the PR name above it,
      matching the goal card's secondary text rather than inheriting the 14px base. */
-  .ow-pr-session-chip { border: 0; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
   .ow-pr-session-chip .ow-icon { width: 13px; height: 13px; }
-  .ow-goal-digest { padding: 10px 16px 12px; border-top: 1px solid var(--border); }
-  .ow-digest-line {
-    display: -webkit-box;
-    margin: 0;
-    overflow: hidden;
-    color: var(--text);
-    font-size: 13px;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-  }
-  .ow-digest-counts { margin-top: 4px; color: var(--muted); font-size: 12px; }
-  .ow-goal-fold {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    padding: 2px;
-    border: 0;
-    border-radius: 4px;
-    background: none;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  .ow-goal-fold:hover { background: var(--bg-hover); color: var(--text); }
-  .ow-row-mismatch {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    min-width: 0;
-    margin-top: 6px;
-    font-size: 12px;
-    color: var(--warn);
-  }
-  .ow-mismatch-fix {
-    flex: none;
-    border: 0;
-    background: none;
-    padding: 0;
-    font-size: 12px;
-    color: var(--accent);
-    cursor: pointer;
-  }
-  .ow-mismatch-fix:hover { text-decoration: underline; }
   .ow-focus-head {
     display: flex;
     flex: none;
@@ -777,18 +654,6 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-goalcard-header[data-selected='true'] .ow-goalcard-title { color: var(--accent); }
   .ow-goalcard-title { flex: 1; min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; max-width: none; }
   .ow-goalcard .ow-block-open { flex: none; margin: 0; }
-  /* Split is a correction, not a primary action, so it stays out of the way
-     until the card is hovered. Kept reachable without a mouse: it also shows
-     while it (or anything in the card) holds focus, and reduced-motion users
-     get no fade. */
-  .ow-goal-split {
-    opacity: 0;
-    transition: opacity 120ms ease;
-  }
-  .ow-goalcard:hover .ow-goal-split,
-  .ow-goalcard:focus-within .ow-goal-split,
-  .ow-goal-split:focus-visible { opacity: 1; }
-  @media (prefers-reduced-motion: reduce) { .ow-goal-split { transition: none; } }
   .ow-goal-flag {
     flex: none; margin-left: auto; padding: 1px 8px; border-radius: 999px;
     font-size: 11px; font-weight: 600; white-space: nowrap;
@@ -799,7 +664,6 @@ export const OVERWATCH_STYLES = String.raw`
   /* Why the merge happened. Subdued below the meta: it answers a question the
      user only asks when the grouping looks wrong, so it must not compete with
      the goal's own name or its composition. */
-  .ow-goal-why { margin: 2px 0 0 26px; color: var(--muted); font-size: 11px; font-style: italic; opacity: 0.85; }
   /* Member rows: indent under the title, a divider between them, lighter label. */
   .ow-goalcard .ow-row { padding: 7px 4px 7px 26px; }
   .ow-goalcard .ow-row + .ow-row { border-top: 1px solid var(--border); }
@@ -809,31 +673,7 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-goalcard .ow-row[data-selected='true'] .ow-row-title { color: var(--text-strong); font-weight: 700; }
   .ow-goalcard .ow-goal-digest { border-top: 0; padding: 8px 0 0 26px; }
   /* Status dot on a goal member row (mockup goal-item language). */
-  .ow-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
-  .ow-dot-good { background: var(--ok); }
-  .ow-dot-warn { background: var(--warn); }
-  .ow-dot-crit { background: var(--danger); }
-  .ow-dot-idle { background: var(--muted); }
-  .ow-init-status {
-    flex: none;
-    padding: 1px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--muted-strong);
-    background: var(--bg-hover);
-  }
-  .ow-init-status[data-status='needs-you'] { color: var(--warn); background: var(--warn-subtle, rgba(251,191,36,.12)); }
-  .ow-init-status[data-status='running'] { color: var(--info); background: var(--accent-subtle); }
-  .ow-goal-tab { cursor: pointer; }
   .ow-goal-tab .ow-block-open { flex: none; }
-  .ow-goal-tab[data-selected='true'] {
-    background: var(--aim-subtle);
-    box-shadow: inset 3px 0 0 var(--accent);
-  }
-  .ow-quote-route { flex: none; min-width: 0; color: var(--muted); font-size: 12px; }
-  .ow-quote-goal { flex-direction: column; align-items: stretch; gap: 2px; }
-  .ow-quote-line { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
   .ow-quote-docked .ow-eyebrow { flex: none; white-space: nowrap; }
   /* Looks like the eyebrow but reads as a control: accent colour + pointer signal
      the destination is switchable. Text carries the active target. */
@@ -844,57 +684,6 @@ export const OVERWATCH_STYLES = String.raw`
     cursor: pointer;
   }
   .ow-scope-toggle:hover { text-decoration: underline; }
-  .ow-bootstrap {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 12px;
-    padding: 12px 14px;
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-lg, 8px);
-    color: var(--muted);
-  }
-  .ow-bootstrap[data-prominent='true'] { border-style: solid; background: var(--bg-elevated); }
-  .ow-bootstrap-head { color: var(--text-strong); font-size: 13px; font-weight: 600; }
-  .ow-bootstrap-sub { font-size: 12px; }
-  .ow-bootstrap-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .ow-bootstrap-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--card);
-    color: var(--text);
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .ow-bootstrap-chip:hover { border-color: var(--accent); }
-  .ow-bootstrap-chip:disabled { opacity: 0.6; cursor: default; }
-  .ow-bootstrap-count { color: var(--muted); font-size: 11px; }
-  .ow-bootstrap-custom { display: flex; gap: 8px; }
-  .ow-bootstrap-custom input { flex: 1; min-width: 0; }
-  .ow-merge-hint {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    padding: 4px 12px 2px;
-    font-size: 12px;
-  }
-  .ow-merge-hint-label { color: var(--muted); flex: none; }
-  .ow-merge-hint-btn {
-    max-width: 46ch;
-    border: 0;
-    background: none;
-    padding: 2px 0;
-    font-size: 12px;
-    color: var(--accent);
-    cursor: pointer;
-    text-align: left;
-  }
-  .ow-merge-hint-btn:hover { text-decoration: underline; }
   .ow-srow { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--border); cursor: pointer; }
   .ow-srow[data-selected='true'] { background: var(--aim-subtle); }
   .ow-srow-body { min-width: 0; flex: 1; }
