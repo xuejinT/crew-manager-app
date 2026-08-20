@@ -996,6 +996,328 @@ check(
 
 print()
 
+# ---------------------------------------------------------------------------
+# Session peek. The point of these cases is the REFUSALS, not the happy path:
+# peek returns one named session's own words, so every case below asserts that a
+# specific ambiguity resolves to "no content" rather than to content.
+# ---------------------------------------------------------------------------
+import asyncio as _aio  # noqa: E402
+import peek as _peek  # noqa: E402
+
+print("peek: input handling")
+check("a missing name is not a usable name", not _peek.name_is_safe(_peek.normalize_name(None)))
+check("an empty name is not usable", not _peek.name_is_safe(""))
+check("a path separator is refused", not _peek.name_is_safe("../../etc/passwd"))
+check("a backslash is refused", not _peek.name_is_safe("dashboard\\chat"))
+check("a bare dotdot is refused", not _peek.name_is_safe(".."))
+check(
+    "a real key with dots is still usable",
+    _peek.name_is_safe("dashboard_chat-2026-08-20.1"),
+)
+check("a junk row count falls back", _peek.clamp_rows("abc") == _peek.PEEK_ROWS_DEFAULT)
+check("a zero row count falls back", _peek.clamp_rows(0) == _peek.PEEK_ROWS_DEFAULT)
+check("a huge row count is capped", _peek.clamp_rows(10_000) == _peek.PEEK_ROWS_MAX)
+
+print()
+print("peek: row shaping")
+check("a plain string row reads through", _peek.flatten_content("hello") == "hello")
+check(
+    "typed blocks are flattened",
+    _peek.flatten_content([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}])
+    == "a\nb",
+)
+check("an unreadable shape yields nothing, not a repr", _peek.flatten_content(42) == "")
+check("a None row yields nothing", _peek.flatten_content(None) == "")
+_long_row = _peek.clip_text("x " * 4000)
+check(
+    "a long row is capped and marked",
+    len(_long_row) <= _peek.PEEK_TEXT_CHARS and _long_row.endswith("…"),
+    f"{len(_long_row)} chars",
+)
+
+
+class _PeekLog:
+    """Stands in for ConversationLog, one row per behaviour under test."""
+
+    def __init__(self) -> None:
+        self.read_keys: list[str] = []
+
+    def list_sessions(self):
+        return [
+            {"key": "public", "title": "Ack contention", "workspace": "default"},
+            {
+                "key": "private",
+                "title": "Secret spike",
+                "workspace": "default",
+                "memory_mode": "incognito",
+            },
+            {"key": "other-ws", "title": "Someone else's work", "workspace": "elsewhere"},
+        ]
+
+    def has_log(self, key):
+        return key in {"public", "private", "other-ws", "chatty"}
+
+    def get_metadata(self, key):
+        if key == "private":
+            return {"title": "Secret spike", "workspace": "default", "memory_mode": "incognito"}
+        if key == "other-ws":
+            return {"title": "Someone else's work", "workspace": "elsewhere"}
+        if key == "chatty":
+            return {"title": "Long one", "workspace": "default"}
+        return {"title": "Ack contention", "workspace": "default", "modified": 100}
+
+    def recent(self, key, max_messages=0, roles=None):
+        self.read_keys.append(key)
+        if key == "chatty":
+            rows = [{"role": "assistant", "content": f"line {n}"} for n in range(200)]
+            return rows[-max_messages:]
+        return [
+            {"role": "user", "content": "the secret token is hunter2"},
+            {"role": "assistant", "content": [{"type": "text", "text": "acked   the  spike"}]},
+            {"role": "assistant", "content": "   "},
+        ][-max_messages:]
+
+
+class _PeekCore:
+    @staticmethod
+    def _history_is_incognito(meta):
+        return str((meta or {}).get("memory_mode") or "") in {"incognito", "temporary"}
+
+    @staticmethod
+    def _redact_history_output(text):
+        return text.replace("hunter2", "[redacted]")
+
+    @staticmethod
+    def _ws_bucket(name):
+        return name or "default"
+
+
+def _peek_now(name, rows=_peek.PEEK_ROWS_DEFAULT, workspace="default"):
+    return _aio.run(_peek.peek_session(name, rows=rows, workspace=workspace))
+
+
+_peek_log = _PeekLog()
+_peek._load_backend = lambda: (lambda: _peek_log, _PeekCore)  # type: ignore[assignment]
+
+print()
+print("peek: the happy path, so the refusals below mean something")
+_ok = _peek_now("public")
+check("a public session in this workspace is peekable", _ok.get("available") is True, repr(_ok))
+check("the key comes back", _ok.get("session_key") == "public")
+check(
+    "blank rows are dropped rather than shown empty",
+    _ok.get("returned") == 2,
+    repr(_ok.get("rows")),
+)
+check(
+    "a typed-block row is rendered as text",
+    _ok["rows"][1]["text"] == "acked the spike",
+    repr(_ok["rows"][1]),
+)
+check(
+    "the cap is stated so a reader knows there may be more",
+    _ok.get("cap") == _peek.PEEK_ROWS_MAX,
+)
+check(
+    "a session can be found by its exact title",
+    _peek_now("Ack contention").get("session_key") == "public",
+)
+check(
+    "a title match is case- and space-insensitive",
+    _peek_now("  ack   CONTENTION ").get("session_key") == "public",
+)
+
+print()
+print("peek: redaction")
+check(
+    "a credential in the transcript is redacted",
+    _ok["rows"][0]["text"] == "the secret token is [redacted]",
+    repr(_ok["rows"][0]),
+)
+check("the raw credential appears nowhere in the payload", "hunter2" not in repr(_ok))
+
+_peek._load_backend = lambda: (lambda: _PeekLog(), object())  # type: ignore[assignment]
+_no_redact = _peek_now("public")
+check(
+    "no redaction helper refuses rather than returning raw text",
+    _no_redact.get("available") is False,
+    repr(_no_redact),
+)
+check(
+    "the refusal carries no transcript at all",
+    "rows" not in _no_redact and "hunter2" not in repr(_no_redact),
+    repr(_no_redact),
+)
+
+print()
+print("peek: privacy refusals")
+_peek_log2 = _PeekLog()
+_peek._load_backend = lambda: (lambda: _peek_log2, _PeekCore)  # type: ignore[assignment]
+
+_priv = _peek_now("private")
+check("a private session is refused by key", _priv.get("available") is False, repr(_priv))
+check("the refusal names privacy as the reason", "private" in str(_priv.get("reason")))
+check(
+    "a private session's transcript is never even read",
+    "private" not in _peek_log2.read_keys,
+    repr(_peek_log2.read_keys),
+)
+check(
+    "a private session cannot be reached by its title either",
+    _peek_now("Secret spike").get("available") is False,
+)
+check(
+    "a title lookup does not confirm a private session exists",
+    _peek_now("Secret spike").get("reason") == "no session by that name",
+    repr(_peek_now("Secret spike")),
+)
+
+_cross = _peek_now("other-ws")
+check("another workspace's session is refused", _cross.get("available") is False, repr(_cross))
+check("the refusal names the workspace as the reason", "workspace" in str(_cross.get("reason")))
+check(
+    "another workspace's transcript is never read",
+    "other-ws" not in _peek_log2.read_keys,
+    repr(_peek_log2.read_keys),
+)
+check(
+    "a cross-workspace session is not reachable by title",
+    _peek_now("Someone else's work").get("available") is False,
+)
+
+for _unknowable in (None, ""):
+    _blind = _peek_now("public", workspace=_unknowable)
+    check(
+        f"an unknowable caller workspace ({_unknowable!r}) refuses rather than widens",
+        _blind.get("available") is False and "workspace" in str(_blind.get("reason")),
+        repr(_blind),
+    )
+check(
+    "nothing was read while the workspace was unknowable",
+    _peek_log2.read_keys == [],
+    repr(_peek_log2.read_keys),
+)
+
+
+class _PeekCoreNoClassifier:
+    """A gateway whose incognito classifier has moved. Peek must fail closed."""
+
+    @staticmethod
+    def _redact_history_output(text):
+        return text
+
+    @staticmethod
+    def _ws_bucket(name):
+        return name or "default"
+
+
+_peek._load_backend = lambda: (lambda: _PeekLog(), _PeekCoreNoClassifier)  # type: ignore[assignment]
+_noclass = _peek_now("public")
+check(
+    "no privacy classifier treats every session as private",
+    _noclass.get("available") is False,
+    repr(_noclass),
+)
+
+print()
+print("peek: caps and degradation")
+_peek._load_backend = lambda: (lambda: _PeekLog(), _PeekCore)  # type: ignore[assignment]
+_capped = _peek_now("chatty", rows=10_000)
+check(
+    "a caller cannot ask past the row cap",
+    _capped.get("returned") == _peek.PEEK_ROWS_MAX,
+    repr(_capped.get("returned")),
+)
+check("the clamped request is reported back", _capped.get("requested") == _peek.PEEK_ROWS_MAX)
+check("a modest request is honoured exactly", _peek_now("chatty", rows=3).get("returned") == 3)
+check(
+    "an unknown name refuses without naming anything",
+    _peek_now("no-such-session") == {"available": False, "reason": "no session by that name"},
+    repr(_peek_now("no-such-session")),
+)
+check(
+    "a path-bearing name never reaches the log",
+    _peek_now("../../etc/passwd").get("available") is False,
+)
+
+_peek._load_backend = lambda: None  # type: ignore[assignment]
+_gone = _peek_now("public")
+check(
+    "no history backend reports unavailable rather than erroring",
+    _gone.get("available") is False and "unavailable" in str(_gone.get("reason")),
+    repr(_gone),
+)
+
+
+class _PeekLogNoRecent(_PeekLog):
+    """A gateway without ``recent``; peek tails ``read_messages`` instead."""
+
+    recent = None  # type: ignore[assignment]
+
+    def read_messages(self, key):
+        self.read_keys.append(key)
+        return [
+            {"role": "system", "content": "you are a helpful assistant"},
+            {"role": "user", "content": "what broke"},
+            {"role": "assistant", "content": "the ack queue"},
+        ]
+
+
+_peek._load_backend = lambda: (lambda: _PeekLogNoRecent(), _PeekCore)  # type: ignore[assignment]
+_fallback = _peek_now("public")
+check("a gateway without recent() still answers", _fallback.get("available") is True, repr(_fallback))
+check(
+    "the fallback surfaces only user and assistant rows",
+    [row["role"] for row in _fallback["rows"]] == ["user", "assistant"],
+    repr(_fallback["rows"]),
+)
+
+
+class _PeekLogAngry(_PeekLog):
+    """Every read raises. Peek must refuse, not propagate."""
+
+    def recent(self, key, max_messages=0, roles=None):
+        raise RuntimeError("transcript is corrupt")
+
+
+_peek._load_backend = lambda: (lambda: _PeekLogAngry(), _PeekCore)  # type: ignore[assignment]
+_angry = _peek_now("public")
+check(
+    "an unreadable transcript refuses rather than raising",
+    _angry.get("available") is False and "rows" not in _angry,
+    repr(_angry),
+)
+
+print()
+print("peek: the route is registered")
+# routes.py imports aiohttp at module scope and register_routes imports the
+# gateway's AppRoute, neither of which the rest of this offline selftest needs.
+# A host missing them is not a peek failure, so each is reported as skipped
+# rather than crashing the run.
+try:
+    import routes as _routes  # noqa: E402
+except Exception as _routes_error:  # pragma: no cover - host without aiohttp
+    print(f"  skip routes wiring -- {_routes_error}")
+else:
+    check("routes.py exposes a peek handler", callable(getattr(_routes, "handle_peek", None)))
+    try:
+        _declared = _routes.register_routes(None)
+    except Exception as _register_error:  # pragma: no cover - host without the registry
+        print(f"  skip route declaration -- {_register_error}")
+    else:
+        check(
+            "the peek route is declared as GET /peek",
+            any(
+                getattr(route, "path", "") == "/peek"
+                and getattr(route, "method", "") == "GET"
+                and getattr(route, "handler", None) is _routes.handle_peek
+                for route in _declared
+            ),
+            repr([(getattr(r, "method", "?"), getattr(r, "path", r)) for r in _declared]),
+        )
+
+print()
+
 if FAILURES:
     print(f"{len(FAILURES)} failing check(s): {', '.join(FAILURES)}")
     sys.exit(1)
