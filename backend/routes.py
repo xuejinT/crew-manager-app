@@ -42,6 +42,7 @@ from peek import peek_session, name_is_safe, normalize_name  # noqa: E402
 from conductor_agent import conductor_agent  # noqa: E402
 from recall import search_past_work  # noqa: E402
 from prchecks import pr_check_counts  # noqa: E402
+from assigned import assigned_work  # noqa: E402
 from initiatives import add_initiative, load_initiatives, remove_initiative  # noqa: E402
 from watcher import WATCHER  # noqa: E402
 
@@ -255,6 +256,23 @@ async def handle_pr_checks(request: web.Request, ctx: Any) -> web.Response:
     return web.json_response(payload)
 
 
+async def handle_assigned(request: web.Request, ctx: Any) -> web.Response:
+    """GET /assigned — the developer's own open PRs and issues assigned to them.
+
+    Degrades to ``available: False`` (never an error) when gh is missing or fails,
+    because this enriches the board rather than constituting it: a developer
+    without gh must still get their sessions.
+
+    ``?force=1`` skips the TTL cache, for the refresh control.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+    force = str(request.query.get("force") or "") in {"1", "true", "yes"}
+    payload = await assigned_work(force=force)
+    return web.json_response(payload)
+
+
 async def handle_initiatives(request: web.Request, ctx: Any) -> web.Response:
     """GET /initiatives — the user's big goals, from this app's own goals.json.
 
@@ -432,6 +450,7 @@ def register_routes(ctx: Any) -> list:
         AppRoute(method="GET", path="/peek", handler=handle_peek),
         AppRoute(method="GET", path="/conductor-agent", handler=handle_conductor_agent),
         AppRoute(method="GET", path="/pr-checks", handler=handle_pr_checks),
+        AppRoute(method="GET", path="/assigned", handler=handle_assigned),
         AppRoute(method="GET", path="/initiatives", handler=handle_initiatives),
         AppRoute(method="POST", path="/initiatives", handler=handle_add_initiative),
         AppRoute(method="POST", path="/initiatives/remove", handler=handle_remove_initiative),

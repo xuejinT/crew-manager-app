@@ -1,5 +1,6 @@
 import type {
   Artifact,
+  AssignedWork,
   ChatSlot,
   CronJob,
   MonitorLoop,
@@ -73,10 +74,21 @@ export type WorkCopyKey =
   | 'rank_input_requested'
   | 'rank_unverified_completion'
   | 'rank_error_loop'
+  | 'rank_changes_requested'
   | 'rank_run_failed'
   | 'rank_stalled'
+  | 'rank_assigned_to_you'
   | 'rank_change_blocked'
+  | 'rank_merge_ready'
   | 'rank_nobody_on_it'
+  | 'owned_pull_conflict'
+  | 'owned_pull_failing'
+  | 'owned_pull_changes_requested'
+  | 'owned_pull_merge_ready'
+  | 'owned_pull_awaiting_review'
+  | 'owned_pull_checks_running'
+  | 'owned_issue_assigned'
+  | 'owned_provenance'
   | 'no_next_step'
   | 'rank_queued_behind'
   | 'rank_waiting_a_while'
@@ -420,6 +432,19 @@ export interface WorkItem {
   changeBlocked?: boolean
   /** Completed but never verified — the platform's own needs-you signal. */
   unverified?: boolean
+  /**
+   * This item is work the developer personally owns in the forge — their own pull
+   * request, or an issue assigned to them — rather than something a session did.
+   * Set on a session's item when one of its links turns out to be owned work, so
+   * ownership enriches the row that already exists instead of adding a second one.
+   */
+  owned?: 'pull' | 'issue'
+  /** A reviewer asked the developer for changes on their own pull request. */
+  changesRequested?: boolean
+  /** Approved with nothing red: the only thing left is the developer's merge. */
+  mergeReady?: boolean
+  /** An issue assigned to the developer that no session has picked up. */
+  assignedToYou?: boolean
 }
 
 export interface ApprovalRow {
@@ -517,7 +542,23 @@ export interface WorkSources {
    * rather than an error.
    */
   loops?: MonitorLoop[]
+  /**
+   * Work the developer owns in the forge — their own pull requests and issues
+   * assigned to them. Optional for the same reason `loops` is: the route is
+   * served by this app's own backend, which a gateway may not have loaded, and a
+   * developer without `gh` gets nothing. Neither may cost them the board.
+   */
+  assigned?: AssignedWork[]
 }
+
+/**
+ * How many pieces of owned work may open a row of their own.
+ *
+ * Enrichment of rows the board already has is unlimited; this bounds only NEW
+ * rows, because the attention queue is meant to be a short answer to "what needs
+ * me now" and a forge backlog is a different question with a different surface.
+ */
+export const OWNED_STANDALONE_LIMIT = 5
 
 /** Another live session on the same job. See `markRelatedSessions`. */
 export interface RelatedSession {
@@ -1049,9 +1090,12 @@ export type RankSignal =
   | 'input_requested'
   | 'unverified_completion'
   | 'error_loop'
+  | 'changes_requested'
   | 'run_failed'
   | 'stalled'
   | 'change_blocked'
+  | 'merge_ready'
+  | 'assigned_to_you'
   | 'nobody_on_it'
   | 'queued_behind'
   | 'waiting_a_while'
@@ -1064,9 +1108,21 @@ const SIGNAL_WEIGHT: Record<RankSignal, number> = {
   // Shipped but never confirmed — the work everyone forgets.
   unverified_completion: 70,
   error_loop: 60,
+  // A reviewer is waiting on the developer personally. Above a failed run because
+  // a person has stopped to ask, and their time is spent while it sits.
+  changes_requested: 58,
   run_failed: 55,
   stalled: 50,
   change_blocked: 40,
+  // Approved and green: one action, and nobody but the developer can take it.
+  // Below a blocked change because a blocked change has someone waiting on it,
+  // and above unstarted work because finishing beats starting.
+  merge_ready: 34,
+  // Assigned in the forge and nobody has begun it -- real work that is invisible
+  // to every other source on this board, but not yet in flight, so it sits below
+  // everything that IS. An earlier draft put this at 45, above a blocked change,
+  // which made an unstarted issue outrank a conflicting pull request.
+  assigned_to_you: 32,
   // A stopped session nobody is on: real, but never above an owed decision.
   nobody_on_it: 30,
   // Same-session queue. NOT other sessions blocked behind it: the platform does
@@ -1523,9 +1579,12 @@ export function rankWorkItem(item: WorkItem, now: number = Date.now()): Ranking 
   if (item.action === 'reply') add('input_requested')
   if (item.unverified) add('unverified_completion')
   if (item.loopRepeats) add('error_loop', { repeats: String(item.loopRepeats) })
+  if (item.changesRequested) add('changes_requested')
   if (item.runFailed) add('run_failed')
   if (item.stalledFor) add('stalled', { duration: describeSilence(item.stalledFor) })
+  if (item.assignedToYou) add('assigned_to_you')
   if (item.changeBlocked) add('change_blocked')
+  if (item.mergeReady) add('merge_ready')
   if (item.unattendedGoals) add('nobody_on_it', { count: String(item.unattendedGoals) })
   if (item.queuedBehind) {
     add('queued_behind', { count: String(item.queuedBehind) }, Math.min(item.queuedBehind, 3))
@@ -1585,7 +1644,13 @@ const VERB_FOR_SIGNAL: Partial<Record<RankSignal, ResponseVerb>> = {
   error_loop: 'unblock',
   run_failed: 'unblock',
   stalled: 'unblock',
+  changes_requested: 'unblock',
   change_blocked: 'unblock',
+  // Approved and green: nobody but the developer can clear it, so it is an
+  // unblock even though nothing has gone wrong.
+  merge_ready: 'unblock',
+  // Assigned but unstarted is the calm case the followup lane exists for.
+  assigned_to_you: 'followup',
   nobody_on_it: 'followup',
 }
 
@@ -1747,6 +1812,159 @@ export function normalizeWorkItems(
     const item = sessionItem(slot, copy)
     items.set(item.id, item)
     bySession.set(slot.key, item)
+  }
+
+  /*
+   * Work the developer owns in the forge, folded in.
+   *
+   * The rule that matters: if a pull request or issue is ALREADY on the board via
+   * some session's source links, its ownership facts are written onto that
+   * existing row rather than becoming a second row. Anything else re-lists the
+   * same work under a different heading, which is the failure the spec names --
+   * adding to the view makes it worse, so a new signal joins an existing group
+   * instead of opening a section.
+   *
+   * A standalone row is created only for work NO session touches, which is
+   * precisely the gap: a PR waiting on the developer that no session has ever
+   * opened is invisible to every other source here.
+   */
+  if (sources.assigned?.length) {
+    const byUrl = new Map<string, WorkItem>()
+    for (const existing of items.values()) {
+      for (const ref of existing.references) {
+        if ((ref.kind === 'change' || ref.kind === 'issue') && ref.url && !byUrl.has(ref.url)) {
+          byUrl.set(ref.url, existing)
+        }
+      }
+    }
+    /*
+     * Standalone rows are CAPPED, and enrichment is not.
+     *
+     * Enriching a row the board already shows costs nothing -- it is the same
+     * card, better described. Adding rows does cost something, and a developer
+     * with fifty open pull requests would get a queue that is mostly forge
+     * backlog, which is a list to work through rather than a thing that needs
+     * them now. The full set stays one click away in the PRs card; what belongs
+     * in the attention queue is a few of the most blocking.
+     *
+     * Ordered by how much the block costs, which is the same principle
+     * SIGNAL_WEIGHT encodes: a conflict or a red check outranks a review that has
+     * asked for changes, which outranks an approved PR waiting only on a merge,
+     * which outranks an unstarted assigned issue.
+     */
+    /*
+     * Cost order, mirroring SIGNAL_WEIGHT so the cap and the queue cannot
+     * disagree about what matters most. A reviewer who has stopped to ask for
+     * changes is a person waiting on the developer, which outranks a conflict or
+     * a red check -- those are mechanical and nobody is idle while they sit.
+     */
+    const OWNED_RANK: Record<string, number> = {
+      changes_requested: 0,
+      conflict: 1,
+      checks_failing: 2,
+      ready_to_merge: 3,
+      assigned: 4,
+    }
+    /*
+     * Filled by taking ONE of each kind in cost order, then going round again --
+     * not simply the N most blocking.
+     *
+     * Straight cost order looks right and behaves badly: measured against a real
+     * account with six conflicting pull requests, a cap of five filled entirely
+     * with conflicts and the developer's single assigned issue never appeared at
+     * all. A queue that can only ever show its loudest category is not a summary
+     * of what needs you. Round-robin guarantees every kind of block is
+     * represented before any kind is represented twice.
+     */
+    const byStatus = new Map<string, AssignedWork[]>()
+    for (const row of sources.assigned) {
+      if (!row?.url || byUrl.has(row.url) || !(row.status in OWNED_RANK)) continue
+      const bucket = byStatus.get(row.status)
+      if (bucket) bucket.push(row)
+      else byStatus.set(row.status, [row])
+    }
+    const queues = [...byStatus.entries()]
+      .sort((a, b) => (OWNED_RANK[a[0]] ?? 9) - (OWNED_RANK[b[0]] ?? 9))
+      .map(entry => entry[1])
+    const standalone: AssignedWork[] = []
+    for (let round = 0; standalone.length < OWNED_STANDALONE_LIMIT; round += 1) {
+      let tookOne = false
+      for (const queue of queues) {
+        if (standalone.length >= OWNED_STANDALONE_LIMIT) break
+        const row = queue[round]
+        if (!row) continue
+        standalone.push(row)
+        tookOne = true
+      }
+      if (!tookOne) break
+    }
+    const standaloneUrls = new Set(standalone.map(row => row.url))
+    for (const row of sources.assigned) {
+      if (!row?.url) continue
+      // Enrichment applies to everything; a standalone row only to the few that
+      // survived the cap.
+      if (!byUrl.has(row.url) && !standaloneUrls.has(row.url)) continue
+      const owned: 'pull' | 'issue' = row.kind === 'issue' ? 'issue' : 'pull'
+      // Only these three states are the developer's move. `awaiting_review` and
+      // `checks_running` are waiting on someone or something else, so they are
+      // recorded as owned but raise no signal and stay out of the queue.
+      const blocked = row.status === 'conflict' || row.status === 'checks_failing'
+      const changesRequested = row.status === 'changes_requested'
+      const mergeReady = row.status === 'ready_to_merge'
+      const assignedToYou = owned === 'issue'
+
+      const existing = byUrl.get(row.url)
+      if (existing) {
+        existing.owned = owned
+        if (blocked) { existing.changeBlocked = true; existing.issue = true }
+        if (changesRequested) existing.changesRequested = true
+        if (mergeReady) existing.mergeReady = true
+        // Ownership can only ever RAISE an item into the queue, never demote one
+        // out of it: a session already needing a reply does not stop needing it
+        // because its PR happens to be green.
+        if ((blocked || changesRequested || mergeReady) && existing.state === 'done') {
+          existing.state = 'needs-you'
+        }
+        continue
+      }
+
+      const actionable = blocked || changesRequested || mergeReady || assignedToYou
+      const summaryKey: WorkCopyKey = owned === 'issue'
+        ? 'owned_issue_assigned'
+        : row.status === 'conflict' ? 'owned_pull_conflict'
+          : row.status === 'checks_failing' ? 'owned_pull_failing'
+            : row.status === 'changes_requested' ? 'owned_pull_changes_requested'
+              : row.status === 'ready_to_merge' ? 'owned_pull_merge_ready'
+                : row.status === 'checks_running' ? 'owned_pull_checks_running'
+                  : 'owned_pull_awaiting_review'
+      const label = owned === 'issue' ? `issue #${row.number}` : `#${row.number}`
+      items.set(`owned:${row.url}`, {
+        id: `owned:${row.url}`,
+        title: row.title || label,
+        summary: copy(summaryKey, {
+          count: String(row.status === 'checks_failing' ? row.failing : row.pending),
+        }),
+        state: actionable ? 'needs-you' : 'running',
+        issue: blocked,
+        updatedAt: epoch(row.updated_at),
+        provenance: copy('owned_provenance', { repo: row.repo }),
+        references: [{
+          kind: owned === 'issue' ? 'issue' : 'change',
+          id: row.url,
+          label: `${row.repo} ${label}`,
+          url: row.url,
+          status: row.status === 'awaiting_review' ? undefined : row.status.replace(/_/g, ' '),
+        }],
+        // No session, so no action can be offered on the row itself: opening it
+        // means opening the forge, which the reference link already does.
+        action: undefined,
+        owned,
+        changeBlocked: blocked || undefined,
+        changesRequested: changesRequested || undefined,
+        mergeReady: mergeReady || undefined,
+        assignedToYou: assignedToYou || undefined,
+      })
+    }
   }
 
   // A stalled session is running on paper and wedged in practice. That is a

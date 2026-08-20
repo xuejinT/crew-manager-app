@@ -1543,6 +1543,186 @@ check(
 
 print()
 
+print("assigned work: classifying the developer's own pull requests")
+
+import assigned as _asg  # noqa: E402
+
+
+def _pull(**over):
+    row = {
+        "number": 1,
+        "title": "t",
+        "url": "https://github.com/o/r/pull/1",
+        "updatedAt": "2026-08-19T00:00:00Z",
+        "isDraft": False,
+        "mergeStateStatus": "CLEAN",
+        "reviewDecision": "",
+        "statusCheckRollup": [],
+    }
+    row.update(over)
+    return row
+
+
+_run = {"status": "IN_PROGRESS"}
+_ok = {"status": "COMPLETED", "conclusion": "SUCCESS"}
+_bad = {"status": "COMPLETED", "conclusion": "FAILURE"}
+_cancelled = {"status": "COMPLETED", "conclusion": "CANCELLED"}
+_ctx_bad = {"state": "FAILURE"}
+_ctx_pending = {"state": "PENDING"}
+
+check(
+    "a conflict outranks a failing check",
+    _asg._classify_pull(_pull(mergeStateStatus="DIRTY", statusCheckRollup=[_bad])) == "conflict",
+)
+check(
+    "a failing check outranks a requested change",
+    _asg._classify_pull(
+        _pull(reviewDecision="CHANGES_REQUESTED", statusCheckRollup=[_bad])
+    ) == "checks_failing",
+)
+check(
+    "a requested change is reported when checks are clean",
+    _asg._classify_pull(_pull(reviewDecision="CHANGES_REQUESTED", statusCheckRollup=[_ok]))
+    == "changes_requested",
+)
+check(
+    "running checks are reported when nothing is red",
+    _asg._classify_pull(_pull(statusCheckRollup=[_ok, _run])) == "checks_running",
+)
+check(
+    "a red check beats a running one, so a fix is not deferred",
+    _asg._classify_pull(_pull(statusCheckRollup=[_bad, _run])) == "checks_failing",
+)
+check(
+    "an approved clean PR is ready to merge",
+    _asg._classify_pull(_pull(reviewDecision="APPROVED", statusCheckRollup=[_ok]))
+    == "ready_to_merge",
+)
+check(
+    "an unapproved clean PR is awaiting review, not ready",
+    _asg._classify_pull(_pull(statusCheckRollup=[_ok])) == "awaiting_review",
+)
+# A cancelled run is usually supersession -- a newer push, or an edit that
+# cancelled the concurrency group. Counting it as failure invents a blocker.
+check(
+    "a cancelled check is not a failure",
+    _asg._classify_pull(_pull(statusCheckRollup=[_ok, _cancelled])) == "awaiting_review",
+    _asg._classify_pull(_pull(statusCheckRollup=[_ok, _cancelled])),
+)
+# The rollup mixes CheckRun nodes (status/conclusion) with StatusContext nodes
+# (state only). A reader that knows one shape scores the other as neutral.
+check(
+    "a legacy status context failure is still a failure",
+    _asg._classify_pull(_pull(statusCheckRollup=[_ctx_bad])) == "checks_failing",
+)
+check(
+    "a legacy status context pending is still pending",
+    _asg._classify_pull(_pull(statusCheckRollup=[_ctx_pending])) == "checks_running",
+)
+check(
+    "check counts are reported for both node shapes",
+    _asg._check_counts([_bad, _ctx_bad, _run, _ctx_pending, _ok, _cancelled]) == (2, 2),
+    repr(_asg._check_counts([_bad, _ctx_bad, _run, _ctx_pending, _ok, _cancelled])),
+)
+check(
+    "a malformed rollup counts nothing rather than raising",
+    _asg._check_counts("not a list") == (0, 0) and _asg._check_counts([None, 7]) == (0, 0),
+)
+
+print()
+print("assigned work: row shaping and safety")
+
+_row = _asg._row_from_pull(_pull(number=42, statusCheckRollup=[_bad, _run]), "o/r")
+check("a row carries the forge identity", _row is not None and _row["number"] == 42 and _row["repo"] == "o/r")
+check("a row carries its counts so the UI need not recompute", _row["failing"] == 1 and _row["pending"] == 1)
+check("a row with no url is dropped", _asg._row_from_pull(_pull(url=""), "o/r") is None)
+check(
+    "a row with a non-integer number is dropped",
+    _asg._row_from_pull(_pull(number="42"), "o/r") is None,
+)
+# Repo names reach argv. Everything here comes from gh's own output, but that is
+# not a reason to hand an arbitrary string to a subprocess.
+for _bad_repo in ["", "no-slash", "a/b;rm -rf x", "--upload-pack=evil", "a/b c", "o/r/extra"]:
+    check(
+        f"repo name {_bad_repo!r} is refused before it reaches argv",
+        _asg._REPO_RE.match(_bad_repo) is None,
+    )
+check("a real repo name is accepted", _asg._REPO_RE.match("kirodotdev/KiroCrew") is not None)
+
+print()
+print("assigned work: degrading without gh")
+
+_prior_which = _asg.shutil.which
+_asg.shutil.which = lambda name: None  # type: ignore[assignment]
+_asg._cache = None
+_no_gh = _asg.asyncio.run(_asg.assigned_work())
+check(
+    "a missing gh reports unavailable rather than an empty board",
+    _no_gh == {"available": False, "reason": "gh not installed"},
+    repr(_no_gh),
+)
+check("a missing gh returns no rows at all", "rows" not in _no_gh)
+_asg.shutil.which = _prior_which  # type: ignore[assignment]
+
+# An empty answer from a working gh must not read as a broken probe, and a broken
+# gh must not read as an empty board. The two are distinguished by a probe call.
+_asg._cache = None
+_prior_gh_json = _asg._gh_json
+_asg._gh_json = lambda args: []  # type: ignore[assignment]
+_empty = _asg.asyncio.run(_asg.assigned_work(force=True))
+check(
+    "a genuinely empty board is available with zero rows",
+    _empty.get("available") is True and _empty.get("rows") == [],
+    repr(_empty),
+)
+_asg._gh_json = lambda args: None  # type: ignore[assignment]
+_asg._cache = None
+_broken = _asg.asyncio.run(_asg.assigned_work(force=True))
+check(
+    "a failing gh is reported as unavailable, not as an empty board",
+    _broken == {"available": False, "reason": "gh call failed"},
+    repr(_broken),
+)
+_asg._gh_json = _prior_gh_json  # type: ignore[assignment]
+_asg._cache = None
+
+print()
+print("assigned work: caching")
+
+_calls: list[list[str]] = []
+
+
+def _counting_gh(args):
+    _calls.append(args)
+    if args[0] == "search" and args[1] == "prs":
+        return [{"repository": {"nameWithOwner": "o/r"}}]
+    if args[0] == "pr":
+        return [_pull(number=7, statusCheckRollup=[_bad])]
+    return []
+
+
+_asg._gh_json = _counting_gh  # type: ignore[assignment]
+_asg._cache = None
+_first = _asg.asyncio.run(_asg.assigned_work())
+_calls_after_first = len(_calls)
+_second = _asg.asyncio.run(_asg.assigned_work())
+check(
+    "a second read inside the TTL spends no gh calls",
+    len(_calls) == _calls_after_first,
+    f"{_calls_after_first} then {len(_calls)}",
+)
+check("the cached answer is the same answer", _second == _first)
+_third = _asg.asyncio.run(_asg.assigned_work(force=True))
+check("force bypasses the cache", len(_calls) > _calls_after_first)
+check(
+    "drafts never reach the board",
+    all(not r["draft"] for r in (_third.get("rows") or [])),
+)
+_asg._gh_json = _prior_gh_json  # type: ignore[assignment]
+_asg._cache = None
+
+print()
+
 if FAILURES:
     print(f"{len(FAILURES)} failing check(s): {', '.join(FAILURES)}")
     sys.exit(1)

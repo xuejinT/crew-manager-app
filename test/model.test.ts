@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Artifact, ChatSlot, CronJob, MonitorLoop, SessionSummary } from '../src/types'
+import type { Artifact, AssignedWork, ChatSlot, CronJob, MonitorLoop, SessionSummary } from '../src/types'
 import {
   describeSilence,
   explainRank,
@@ -50,6 +50,9 @@ import {
   searchWorkItems,
   sortWorkItems,
   workCounts,
+  OWNED_STANDALONE_LIMIT,
+  type RankSignal,
+  type ResponseVerb,
   type WorkItem,
   type WorkSources,
 } from '../src/model'
@@ -2612,5 +2615,233 @@ describe('repoFromUrl', () => {
   it('answers nothing rather than guessing when there is no url', () => {
     expect(repoFromUrl(undefined)).toBeUndefined()
     expect(repoFromUrl('not a url')).toBeUndefined()
+  })
+})
+
+describe('owned work folded in', () => {
+  const NOW = Date.parse('2026-08-20T12:00:00Z')
+  // One shared timestamp across every row and slot, so age credit is identical
+  // everywhere and any ordering difference can only come from the signals.
+  const RECENT = '2026-08-20T11:00:00Z'
+  const PR_URL = 'https://github.com/o/r/pull/7'
+
+  function assigned(overrides: Partial<AssignedWork> = {}): AssignedWork {
+    return {
+      kind: 'pull',
+      repo: 'o/r',
+      number: 7,
+      url: PR_URL,
+      title: 'Tighten the poller',
+      updated_at: RECENT,
+      status: 'conflict',
+      draft: false,
+      failing: 0,
+      pending: 0,
+      ...overrides,
+    }
+  }
+
+  function link(url = PR_URL, kind: 'change' | 'issue' = 'change') {
+    return { provider: 'github', number: 7, url, kind }
+  }
+
+  /** The one standalone item a single owned row produces. */
+  function ownedItem(overrides: Partial<AssignedWork> = {}): WorkItem {
+    const items = normalizeWorkItems(sources({ assigned: [assigned(overrides)] }), {}, NOW)
+    expect(items).toHaveLength(1)
+    return items[0]
+  }
+
+  it('writes ownership onto the item that already references the pull request', () => {
+    const board = sources({ slots: [slot({ last_ts: RECENT, source_links: [link()] })] })
+    const before = normalizeWorkItems(board, {}, NOW)
+    const after = normalizeWorkItems(
+      { ...board, assigned: [assigned({ status: 'changes_requested' })] },
+      {},
+      NOW,
+    )
+
+    // Both halves of the dedupe rule: the facts land, and no second row opens.
+    expect(after[0].owned).toBe('pull')
+    expect(after[0].changesRequested).toBe(true)
+    expect(after).toHaveLength(before.length)
+    expect(after.map(item => item.id)).not.toContain(`owned:${PR_URL}`)
+  })
+
+  it('opens a row of its own for owned work no session references', () => {
+    const item = ownedItem()
+    expect(item.id).toBe(`owned:${PR_URL}`)
+    expect(item.owned).toBe('pull')
+    expect(item.summary).toBe('owned_pull_conflict:0')
+    expect(item.provenance).toBe('owned_provenance:o/r')
+  })
+
+  it('raises a finished item into needs-you when its own pull request is blocked', () => {
+    const [item] = normalizeWorkItems(sources({
+      slots: [slot({ last_ts: RECENT, source_links: [link()] })],
+      assigned: [assigned({ status: 'conflict' })],
+    }), {}, NOW)
+
+    expect(item.state).toBe('needs-you')
+    expect(item.changeBlocked).toBe(true)
+  })
+
+  it('never demotes an item that needs the user for a reason of its own', () => {
+    const [item] = normalizeWorkItems(sources({
+      slots: [slot({ last_ts: RECENT, pending_approval: true, source_links: [link()] })],
+      assigned: [assigned({ status: 'awaiting_review' })],
+    }), {}, NOW)
+
+    // The PR being green says nothing about the approval still waiting.
+    expect(item.state).toBe('needs-you')
+    expect(item.owned).toBe('pull')
+  })
+
+  it('records a pull request awaiting review as owned without making it the developer\'s move', () => {
+    const [item] = normalizeWorkItems(sources({
+      slots: [slot({ last_ts: RECENT, running: true, source_links: [link()] })],
+      assigned: [assigned({ status: 'awaiting_review' })],
+    }), {}, NOW)
+
+    expect(item.state).toBe('running')
+    expect(item.owned).toBe('pull')
+    expect(item.changeBlocked).toBeUndefined()
+    expect(item.changesRequested).toBeUndefined()
+    expect(item.mergeReady).toBeUndefined()
+    expect(responseVerb(item, NOW)).toBeNull()
+  })
+
+  it('leaves a finished item finished when its pull request is only waiting on checks', () => {
+    const [item] = normalizeWorkItems(sources({
+      slots: [slot({ last_ts: RECENT, source_links: [link()] })],
+      assigned: [assigned({ status: 'checks_running', pending: 3 })],
+    }), {}, NOW)
+
+    expect(item.state).toBe('done')
+    expect(responseVerb(item, NOW)).toBeNull()
+  })
+
+  it('maps each actionable status to its own signal and response verb', () => {
+    const cases: Array<[Partial<AssignedWork>, RankSignal, ResponseVerb]> = [
+      [{ status: 'conflict' }, 'change_blocked', 'unblock'],
+      [{ status: 'checks_failing', failing: 2 }, 'change_blocked', 'unblock'],
+      [{ status: 'changes_requested' }, 'changes_requested', 'unblock'],
+      [{ status: 'ready_to_merge' }, 'merge_ready', 'unblock'],
+      [{ kind: 'issue', status: 'assigned', url: 'https://github.com/o/r/issues/7' }, 'assigned_to_you', 'followup'],
+    ]
+
+    for (const [row, signal, verb] of cases) {
+      const item = ownedItem(row)
+      expect(item.state).toBe('needs-you')
+      // Strongest first, and every ownership weight clears the age credit ceiling,
+      // so the leading signal is the one the status chose.
+      expect(rankWorkItem(item, NOW).signals[0].signal).toBe(signal)
+      expect(responseVerb(item, NOW)).toBe(verb)
+    }
+  })
+
+  it('orders owned work by what the block costs, and never above an owed approval', () => {
+    const rows: AssignedWork[] = [
+      { ...assigned({ status: 'ready_to_merge' }), number: 1, url: 'https://github.com/o/r/pull/1' },
+      { ...assigned({ kind: 'issue', status: 'assigned' }), number: 2, url: 'https://github.com/o/r/issues/2' },
+      { ...assigned({ status: 'conflict' }), number: 3, url: 'https://github.com/o/r/pull/3' },
+      { ...assigned({ status: 'changes_requested' }), number: 4, url: 'https://github.com/o/r/pull/4' },
+    ]
+    const items = normalizeWorkItems(sources({
+      slots: [slot({ key: 'approval', last_ts: RECENT, pending_approval: true })],
+      approvals: [{ id: 'approval-1', slot: 'approval', tool: 'write' }],
+      assigned: rows,
+    }), {}, NOW)
+
+    // One principle in both places: the cap's OWNED_RANK now mirrors
+    // SIGNAL_WEIGHT. A reviewer who stopped to ask for changes (58) is a person
+    // waiting, so it outranks a conflict (40); an approved PR needing only a merge
+    // (34) outranks work nobody has started (32); and none of them ever reaches an
+    // owed approval (100).
+    expect(sortWorkItems(items, NOW).map(item => item.id)).toEqual([
+      'session:approval',
+      'owned:https://github.com/o/r/pull/4',
+      'owned:https://github.com/o/r/pull/3',
+      'owned:https://github.com/o/r/pull/1',
+      'owned:https://github.com/o/r/issues/2',
+    ])
+  })
+
+  it('caps standalone rows and keeps the most blocking of them', () => {
+    const backlog = Array.from({ length: OWNED_STANDALONE_LIMIT }, (_, index) => assigned({
+      kind: 'issue',
+      status: 'assigned',
+      number: 100 + index,
+      url: `https://github.com/o/r/issues/${100 + index}`,
+    }))
+    // The conflict is LAST, so a cap that simply took the first N would drop it.
+    const items = normalizeWorkItems(sources({
+      assigned: [...backlog, assigned({ status: 'conflict', number: 9, url: 'https://github.com/o/r/pull/9' })],
+    }), {}, NOW)
+
+    expect(items).toHaveLength(OWNED_STANDALONE_LIMIT)
+    expect(items.map(item => item.id)).toContain('owned:https://github.com/o/r/pull/9')
+    expect(items.filter(item => item.assignedToYou)).toHaveLength(OWNED_STANDALONE_LIMIT - 1)
+  })
+
+  it('gives every kind of block a place before giving any kind two', () => {
+    // Measured against a real account this was a genuine defect: with six
+    // conflicting pull requests, a cap filled purely by cost order was six-for-six
+    // conflicts and the developer's single assigned issue never appeared. A queue
+    // that can only show its loudest category is not a summary of what needs you.
+    const conflicts = Array.from({ length: 6 }, (_, index) => assigned({
+      status: 'conflict',
+      number: 200 + index,
+      url: `https://github.com/o/r/pull/${200 + index}`,
+    }))
+    const items = normalizeWorkItems(sources({
+      assigned: [
+        ...conflicts,
+        assigned({ status: 'checks_failing', number: 300, url: 'https://github.com/o/r/pull/300' }),
+        assigned({ kind: 'issue', status: 'assigned', number: 400, url: 'https://github.com/o/r/issues/400' }),
+      ],
+    }), {}, NOW)
+
+    expect(items).toHaveLength(OWNED_STANDALONE_LIMIT)
+    // All three kinds present despite conflicts alone being able to fill the cap.
+    expect(items.some(item => item.id === 'owned:https://github.com/o/r/pull/300')).toBe(true)
+    expect(items.some(item => item.id === 'owned:https://github.com/o/r/issues/400')).toBe(true)
+    // And the most blocking kind still leads, so cost order is not lost.
+    expect(items[0].changeBlocked).toBe(true)
+  })
+
+  it('adds nothing for owned work that is neither actionable nor already on the board', () => {
+    // Backlog, not attention: nobody is waiting on the developer for either.
+    const items = normalizeWorkItems(sources({
+      assigned: [
+        assigned({ status: 'awaiting_review' }),
+        assigned({ status: 'checks_running', number: 8, url: 'https://github.com/o/r/pull/8' }),
+      ],
+    }), {}, NOW)
+
+    expect(items).toEqual([])
+  })
+
+  it('takes updatedAt from the row\'s own timestamp', () => {
+    expect(ownedItem({ updated_at: '2026-08-20T09:30:00Z' }).updatedAt)
+      .toBe(Date.parse('2026-08-20T09:30:00Z'))
+  })
+
+  it('degrades rather than throwing on a row with no url or an unreadable timestamp', () => {
+    const items = normalizeWorkItems(sources({
+      assigned: [
+        assigned({ url: '' }),
+        assigned({ updated_at: 'last Tuesday', number: 8, url: 'https://github.com/o/r/pull/8' }),
+      ],
+    }), {}, NOW)
+
+    expect(items.map(item => item.id)).toEqual(['owned:https://github.com/o/r/pull/8'])
+    expect(items[0].updatedAt).toBe(0)
+  })
+
+  it('changes nothing when the assigned source is absent or empty', () => {
+    const board = sources({ slots: [slot({ last_ts: RECENT, source_links: [link()] })] })
+    expect(normalizeWorkItems({ ...board, assigned: [] }, {}, NOW))
+      .toEqual(normalizeWorkItems(board, {}, NOW))
   })
 })
