@@ -2564,8 +2564,12 @@ export default function CrewOverviewApp() {
   // that has no summary endpoint.
   useEffect(() => {
     if (!sources || summarySupportRef.current === 'unsupported' || summarySupportRef.current === 'disabled') return
-    const targets = summaryTargets(sources.slots, CONDUCTOR_SLOT)
-      .filter(slot => summaryStampsRef.current.get(slot.key) !== summaryStamp(slot))
+    const targets = summaryTargets(
+      sources.slots,
+      CONDUCTOR_SLOT,
+      Date.now(),
+      slot => summaryStampsRef.current.get(slot.key) === summaryStamp(slot),
+    )
     if (targets.length === 0) return
 
     let cancelled = false
