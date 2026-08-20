@@ -83,6 +83,73 @@ describe('Crew Manager app manifest', () => {
     expect(manifest.defaultEnabled).toBe(false)
   })
 
+  describe('Conductor agent', () => {
+    const specPath = resolve(process.cwd(), 'agents/crew-manager-conductor.json')
+    const promptPath = resolve(process.cwd(), 'agents/crew-manager-conductor.prompt.md')
+    const spec = JSON.parse(readFileSync(specPath, 'utf8'))
+
+    it('is declared by the manifest at a path that exists', () => {
+      // An agent the manifest does not declare is never materialized; a declared
+      // path that does not resolve is skipped with a log line and nothing else.
+      expect(manifest.agents).toEqual(['agents/crew-manager-conductor.json'])
+      expect(existsSync(specPath)).toBe(true)
+      expect(existsSync(promptPath)).toBe(true)
+    })
+
+    it('uses only keys kiro-cli accepts, since it rejects unknown ones', () => {
+      // An unknown key does not degrade — the whole agent config is refused, so
+      // the Conductor slot would bind a name that resolves to nothing. That is
+      // also why the prompt cannot be referenced through a custom field.
+      expect(Object.keys(spec).sort()).toEqual([
+        'allowedTools',
+        'description',
+        'includeMcpJson',
+        'mcpServers',
+        'model',
+        'name',
+        'prompt',
+        'tools',
+      ])
+      // The slot binds this name, not the namespaced filename stem.
+      expect(spec.name).toBe('crew-manager-conductor')
+    })
+
+    it('carries the markdown prompt verbatim', () => {
+      // The markdown is the source of truth and the build inlines it, because a
+      // shipped spec cannot name an absolute `file://` path and kiro-cli reads
+      // anything else in this field as literal prompt text. Asserting equality
+      // is what stops one of the two being edited alone.
+      expect(spec.prompt).toBe(readFileSync(promptPath, 'utf8').trimEnd())
+      expect(spec.prompt.length).toBeGreaterThan(500)
+    })
+
+    it('grants no tool that could implement anything', () => {
+      // The prompt says it never writes code; the tool list is what makes that
+      // true rather than a request. A coordinator with fs_write or execute_bash
+      // will eventually use them.
+      expect(spec.tools).not.toContain('fs_write')
+      expect(spec.tools).not.toContain('execute_bash')
+      expect(spec.tools).toEqual([
+        'fs_read', 'grep', 'glob', 'thinking', '@kirocrew-core', '@kirocrew-cron',
+      ])
+      // Auto-approval covers the read-only tools only; the MCP grants are not
+      // pre-approved from here.
+      expect(spec.allowedTools).toEqual(['fs_read', 'grep', 'glob', 'thinking'])
+      // Opting out of the global mcp.json keeps the Conductor off whatever
+      // servers the user has configured for their own sessions. The `@` grants
+      // above still resolve: the host copies its managed cron/core specs into
+      // this agent's own mcpServers at registration.
+      expect(spec.includeMcpJson).toBe(false)
+    })
+
+    it('does not claim it can message an existing session', () => {
+      // There is no tool for it yet. A prompt that tells the agent to "tell the
+      // session" produces an answer describing an action that never happened,
+      // which is worse than declining.
+      expect(spec.prompt).toMatch(/CANNOT send a message into an existing session/)
+    })
+  })
+
   it('requests only the existing Kiro Crew work APIs', () => {
     expect(manifest.permissions.api).toEqual([
       // A plain prefix already grants everything beneath it, so this one entry

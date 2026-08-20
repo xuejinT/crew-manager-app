@@ -18,6 +18,9 @@
     "Explicit delivery sends only to the selected session"
   ],
   "defaultEnabled": false,
+  "agents": [
+    "agents/crew-manager-conductor.json"
+  ],
   "backend": {
     "hooks": {
       "routes": "backend.routes:register_routes"
