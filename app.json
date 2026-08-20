@@ -23,7 +23,9 @@
   ],
   "backend": {
     "hooks": {
-      "routes": "backend.routes:register_routes"
+      "routes": "backend.routes:register_routes",
+      "on_startup": "backend.hooks:on_startup",
+      "on_shutdown": "backend.hooks:on_shutdown"
     }
   },
   "notifications": {
@@ -38,6 +40,18 @@
         "id": "error-loop",
         "name": "Repeating failures",
         "icon": "alert-triangle",
+        "defaultPriority": "default"
+      },
+      {
+        "id": "conductor-escalation",
+        "name": "Conductor needs you",
+        "icon": "hand",
+        "defaultPriority": "critical"
+      },
+      {
+        "id": "conductor",
+        "name": "Conductor digest",
+        "icon": "activity",
         "defaultPriority": "default"
       }
     ]
