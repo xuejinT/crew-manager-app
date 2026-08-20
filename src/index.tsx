@@ -1064,11 +1064,13 @@ function prSignals(reference: { status?: string }, checks?: PrChecks): PrSignals
   }
 }
 
-function PrBlockHeader({ reference, checks, folded, onToggle }: {
+function PrBlockHeader({ reference, checks, folded, onToggle, selected, onSelect }: {
   reference: WorkReference
   checks?: PrChecks
   folded?: boolean
   onToggle?: () => void
+  selected?: boolean
+  onSelect?: () => void
 }) {
   // The real PR title when the backend could fetch it; the bare id otherwise.
   const title = checks?.title || reference.label
@@ -1078,53 +1080,64 @@ function PrBlockHeader({ reference, checks, folded, onToggle }: {
   const verdict = prVerdict(signals)
   const blockers = prBlockers(signals)
   const updated = updatedMs ? sinceLabel(updatedMs) : null
-  /* Three rows on every PR, in the order they are read: who and where, then the
-     title with the whole width to itself, then the one blocker line. The title
-     used to share row one with the pill and was the thing that got truncated. */
-  const headerBody = (
+  const number = reference.label.replace(/^github\s*/, '')
+  // The Goal card's meta line, filled with PR facts: repo · #num · author · when
+  // · any blockers. The verdict moves up to the flag slot, so it no longer
+  // shares (and truncates) the title row.
+  const meta = [repo, number, checks?.author, updated ?? undefined, ...blockers]
+    .filter(Boolean).join(' · ')
+  const titleNode = (
     <>
-      <div className="ow-pr-idline">
-        {onToggle && (
-          <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
-        )}
-        {repo && <span className="ow-pr-repo ow-truncate">{repo}</span>}
-        <span className="ow-pr-number">{reference.label.replace(/^github\s*/, '')}</span>
-        {checks?.author && <span>{checks.author}</span>}
-        {updated && <span className="ow-pr-when">{updated}</span>}
-      </div>
-      <div className="ow-pr-title-line">
-        <span className="ow-block-name">{title}</span>
-      </div>
+      <GitPullRequest className="ow-icon" aria-hidden="true" />
+      <span className="ow-truncate ow-block-name ow-goalcard-title">{title}</span>
     </>
   )
   return (
-    <div className="ow-pr-head">
-      <div className="ow-pr-head-row">
-        {onToggle
+    <>
+      <div className="ow-goalcard-summary">
+        {onToggle && (
+          <button
+            type="button"
+            className="ow-goalcard-chevron"
+            aria-expanded={!folded}
+            aria-label={`${folded ? 'Expand' : 'Collapse'} ${title}`}
+            onClick={onToggle}
+          >
+            <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
+          </button>
+        )}
+        {/* Selecting the header quotes the PR into the Conductor — the same
+            gesture a goal header carries. Without onSelect it is a static label. */}
+        {onSelect
           ? (
-            <Clickable onActivate={onToggle} className="ow-pr-head-click" aria-expanded={!folded}>
-              {headerBody}
+            <Clickable
+              onActivate={onSelect}
+              className="ow-goalcard-header ow-pr-header"
+              aria-pressed={selected}
+              data-selected={selected ? 'true' : undefined}
+            >
+              {titleNode}
             </Clickable>
           )
-          : <div className="ow-pr-head-click">{headerBody}</div>}
+          : <span className="ow-goalcard-header ow-goalcard-static">{titleNode}</span>}
+        {reference.url && (
+          <Btn
+            className="ow-block-open"
+            aria-label={`Open ${reference.label} on the forge`}
+            onClick={event => {
+              event.stopPropagation()
+              window.open(reference.url, '_blank', 'noopener,noreferrer')
+            }}
+          >
+            Open
+          </Btn>
+        )}
         <span className="ow-pr-verdict" data-tone={PR_VERDICT_TONES[verdict]}>
           {PR_VERDICT_LABELS[verdict]}
         </span>
-        {reference.url && (
-          <a
-            className="ow-block-open ow-icon-link"
-            href={reference.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`Open ${reference.label}`}
-            onClick={event => event.stopPropagation()}
-          >
-            <GitPullRequest className="ow-icon" aria-hidden="true" />
-          </a>
-        )}
       </div>
-      {blockers.length > 0 && <div className="ow-pr-status-line">{blockers.join(' · ')}</div>}
-    </div>
+      {meta && <div className="ow-goal-meta">{meta}</div>}
+    </>
   )
 }
 
@@ -1649,6 +1662,8 @@ function WorkSection({
   onToggleInitiative,
   selectedGoalKey,
   onSelectGoal,
+  selectedPrKey,
+  onSelectPr,
   subtitle,
   hideHeader,
   emptyLabel,
@@ -1696,6 +1711,8 @@ function WorkSection({
   onToggleInitiative?: (key: string, next: boolean) => void
   selectedGoalKey?: string | null
   onSelectGoal?: (key: string) => void
+  selectedPrKey?: string | null
+  onSelectPr?: (key: string) => void
   subtitle?: string
   /**
    * Drop the visible title/count/subtitle band. The Goal list already sits under
@@ -1733,11 +1750,11 @@ function WorkSection({
     return (
             <div
               key={block.key}
-              className={`ow-block${block.header === 'session' ? ' ow-goalcard' : ''}`}
+              className={`ow-block${block.header === 'session' || block.header === 'pr' ? ' ow-goalcard' : ''}`}
               // Every card that belongs to a group gets the header, whether it
               // holds one row or five. One row is not a different KIND of thing.
               data-grouped={block.header ? 'true' : undefined}
-              data-open={block.header === 'session' && !sessionFolded ? 'true' : undefined}
+              data-open={(block.header === 'session' && !sessionFolded) || (block.header === 'pr' && !prFolded) ? 'true' : undefined}
             >
               {block.header === 'session' && block.sessionKey && (
                 <SessionBlockHeader
@@ -1754,6 +1771,8 @@ function WorkSection({
                   checks={blockChecks}
                   folded={prFolded}
                   onToggle={onToggleInitiative ? () => onToggleInitiative(block.key, !prFolded) : undefined}
+                  selected={selectedPrKey === block.key}
+                  onSelect={onSelectPr ? () => onSelectPr(block.key) : undefined}
                 />
               )}
               {block.header === 'goal' && (
@@ -2283,6 +2302,7 @@ export default function CrewOverviewApp() {
   const [initiatives, setInitiatives] = useState<Initiative[]>([])
   const [collapsedInitiatives, setCollapsedInitiatives] = useState<Record<string, boolean>>(() => readStore(INITIATIVE_COLLAPSED_KEY))
   const [selectedGoalKey, setSelectedGoalKey] = useState<string | null>(null)
+  const [selectedPrKey, setSelectedPrKey] = useState<string | null>(null)
   const [doneCollapsed, setDoneCollapsed] = useState<boolean>(() => readStore<boolean | null>(DONE_COLLAPSED_KEY, null) ?? true)
   const [loops, setLoops] = useState<Record<string, ErrorLoopFinding>>({})
   // Today's cron runs. The Loops card reads `sources.loops` (the MonitorLoop
@@ -2872,6 +2892,16 @@ export default function CrewOverviewApp() {
   }, [selectedGoalKey, initiativeBlocks])
   const goalTarget = selectedGoal ? goalRouteTarget(selectedGoal.items) : null
 
+  // The quoted PR block, re-resolved each render like selectedGoal so it tracks
+  // the live board. A PR is a reference, not a session, so it routes to the
+  // Conductor as context rather than to a member session.
+  const selectedPr = useMemo(() => {
+    if (!selectedPrKey) return null
+    const block = clusterBy(items, 'pr', goalVerdicts)
+      .find(candidate => candidate.key === selectedPrKey && candidate.header === 'pr')
+    return block && block.changeRef ? block : null
+  }, [selectedPrKey, items, goalVerdicts])
+
   /*
    * Kiro Crew's Loops, attributed to the goal that owns them. A loop is keyed by
    * SLOT, and a goal holds work items that each carry a sessionKey, so the join
@@ -3149,6 +3179,32 @@ export default function CrewOverviewApp() {
    * shows. ChatEmbed owns the optimistic echo and polling, so we only deliver.
    */
   const handleConductorSend = useCallback(async (message: string) => {
+    // A quoted PR is a reference, not a session: it has no single slot to route
+    // to, and its work may be done. So the instruction talks to the Conductor,
+    // with the PR (and the sessions that produced it) injected as context.
+    if (selectedPr && selectedPr.changeRef) {
+      const ref = selectedPr.changeRef
+      const sessions = rollUpSessions(selectedPr.items)
+      const context = [
+        `Crew Manager: this concerns the pull request ${ref.label}${ref.url ? ` (${ref.url})` : ''}.`,
+        sessions.length
+          ? `Sessions that produced it:\n${sessions.map(session => `- ${session.label}`).join('\n')}`
+          : undefined,
+        'Advise on it — you cannot merge or push, so recommend the session that should act rather than acting.',
+      ].filter(Boolean).join('\n')
+      await apiRef.current.post(`/api/chat/slots/${encodeURIComponent(CONDUCTOR_SLOT)}/context`, {
+        content: context,
+        source: 'crew-manager',
+        ephemeral: true,
+      }).catch(() => { /* context is best-effort */ })
+      await apiRef.current.post('/api/chat', { message, slot: CONDUCTOR_SLOT }).catch(error => {
+        if (!(error instanceof SyntaxError)) throw error
+      })
+      if (!mountedRef.current) return
+      setDeliveryReceipt(`Asked the Conductor about ${ref.label}`)
+      setSelectedPrKey(null)
+      return
+    }
     // A quoted GOAL routes to the session actively on it — it already holds the
     // context. Never broadcast: duplicated instructions are the duplicated work
     // this view exists to prevent. The quote bar shows the target before send.
@@ -3203,7 +3259,7 @@ export default function CrewOverviewApp() {
     await apiRef.current.post('/api/chat', { message, slot: CONDUCTOR_SLOT }).catch(error => {
       if (!(error instanceof SyntaxError)) throw error
     })
-  }, [selected, selectedGoal, goalTarget, items, loadSources, scope])
+  }, [selected, selectedPr, selectedGoal, goalTarget, items, loadSources, scope])
 
   const grouped: Record<WorkState, WorkItem[]> = {
     'needs-you': sessionItems.filter(item => item.state === 'needs-you'),
@@ -3222,6 +3278,14 @@ export default function CrewOverviewApp() {
   const selectGoal = useCallback((key: string) => {
     setSelectedGoalKey(current => (current === key ? null : key))
     setSelectedId(null)
+    setSelectedPrKey(null)
+    setDeliveryReceipt(null)
+  }, [])
+  const selectPr = useCallback((key: string) => {
+    // Selection is a mode you can leave from the same place you entered it.
+    setSelectedPrKey(current => (current === key ? null : key))
+    setSelectedId(null)
+    setSelectedGoalKey(null)
     setDeliveryReceipt(null)
   }, [])
   const openSession = (slot: string) => navigate(`/chat?sid=${encodeURIComponent(slot)}`)
@@ -3230,9 +3294,83 @@ export default function CrewOverviewApp() {
     // mode you can enter but not leave from the same place is a trap.
     setSelectedId(current => (current === item.id ? null : item.id))
     setSelectedGoalKey(null)
+    setSelectedPrKey(null)
     setDeliveryReceipt(null)
     setScope('session')
   }
+
+  // The Conductor's docked quote/reference bar, rendered THROUGH ChatEmbed's
+  // aboveComposer slot so it sits in normal flow directly on top of the composer,
+  // whatever the composer's height — no brittle absolute offset to keep in sync.
+  const conductorQuote = selectedPr ? (
+    <div className="ow-quote ow-quote-docked">
+      <div className="ow-quote-body ow-quote-goal">
+        <div className="ow-quote-line">
+          <span className="ow-eyebrow">Asking about PR</span>
+          <span className="ow-quote-title" title={selectedPr.changeRef?.label}>{selectedPr.changeRef?.label?.replace(/^github\s*/, '')}</span>
+        </div>
+        <span className="ow-quote-route ow-truncate">→ Conductor</span>
+      </div>
+      <Btn
+        className="ow-quote-clear"
+        aria-label="Remove the quoted PR"
+        onClick={() => { setSelectedPrKey(null); setDeliveryReceipt(null) }}
+      >
+        Clear
+      </Btn>
+    </div>
+  ) : selectedGoal && goalTarget ? (
+    <div className="ow-quote ow-quote-docked">
+      <div className="ow-quote-body ow-quote-goal">
+        <div className="ow-quote-line">
+          <span className="ow-eyebrow">Instructing goal</span>
+          <span className="ow-quote-title" title={selectedGoal.items[0].title}>{selectedGoal.items[0].title}</span>
+        </div>
+        {/* Name the routing target BEFORE send — visibility is the confirmation. */}
+        <span className="ow-quote-route ow-truncate">
+          → {goalTarget.references.find(ref => ref.kind === 'session')?.label ?? goalTarget.title}
+          {goalTarget.moving || goalTarget.state === 'running' ? ' (active)' : ' (will resume)'}
+        </span>
+      </div>
+      <Btn
+        className="ow-quote-clear"
+        aria-label="Remove the quoted goal"
+        onClick={() => { setSelectedGoalKey(null); setDeliveryReceipt(null) }}
+      >
+        Clear
+      </Btn>
+    </div>
+  ) : quoted ? (
+    <div className="ow-quote ow-quote-docked">
+      <div className="ow-quote-body">
+        {quoted.sessionKey ? (
+          // The destination is a toggle, not an inference: text names the active
+          // target, click switches it. No session means Conductor only.
+          <button
+            type="button"
+            className="ow-scope-toggle"
+            aria-pressed={scope === 'conductor'}
+            aria-label={scope === 'session'
+              ? 'Sending to this session. Activate to send to the Conductor instead.'
+              : 'Sending to the Conductor. Activate to send to this session instead.'}
+            onClick={() => setScope(current => (current === 'session' ? 'conductor' : 'session'))}
+          >
+            {scope === 'session' ? 'Instructing' : 'To Conductor'}
+          </button>
+        ) : (
+          <span className="ow-eyebrow">Quoted</span>
+        )}
+        <span className="ow-quote-title" title={quoted.title}>{quoted.title}</span>
+      </div>
+      <Btn
+        className="ow-quote-clear"
+        aria-label="Remove the quoted work item"
+        onClick={() => { setSelectedId(null); setDeliveryReceipt(null) }}
+      >
+        Clear
+      </Btn>
+    </div>
+  ) : null
 
   return (
     <div className="ow-root" data-crew-manager-shell="quiet-split">
@@ -3557,6 +3695,8 @@ export default function CrewOverviewApp() {
                           onStop={path => { void stopLoop(path) }}
                           stopBusy={stopping !== null}
                           onPickStep={what => { void handleConductorSend(what) }}
+                          selectedPrKey={selectedPrKey}
+                          onSelectPr={selectPr}
                           groupBy="pr"
                           emptyLabel="No PR matches that status."
                         />
@@ -3739,68 +3879,15 @@ export default function CrewOverviewApp() {
                       frameless
                       startAtBottom
                       slotControls
-                      placeholder={selectedGoal
-                        ? 'Instruction for this goal…'
-                        : quoted?.sessionKey && scope === 'session' ? 'New instructions for this session…' : 'Ask across your work…'}
+                      placeholder={selectedPr
+                        ? 'Ask the Conductor about this PR…'
+                        : selectedGoal
+                          ? 'Instruction for this goal…'
+                          : quoted?.sessionKey && scope === 'session' ? 'New instructions for this session…' : 'Ask across your work…'}
                       onSend={handleConductorSend}
+                      aboveComposer={conductorQuote}
                     />
                     </div>
-                    {/* Docked just above the composer, where the target belongs —
-                        ChatEmbed exposes no slot inside itself, so it floats over the
-                        transcript's foot via absolute positioning. */}
-                    {selectedGoal && goalTarget ? (
-                      <div className="ow-quote ow-quote-docked">
-                        <div className="ow-quote-body ow-quote-goal">
-                          <div className="ow-quote-line">
-                            <span className="ow-eyebrow">Instructing goal</span>
-                            <span className="ow-quote-title" title={selectedGoal.items[0].title}>{selectedGoal.items[0].title}</span>
-                          </div>
-                          {/* Name the routing target BEFORE send — visibility is the
-                              confirmation. Its own line: it must never squeeze the title. */}
-                          <span className="ow-quote-route ow-truncate">
-                            → {goalTarget.references.find(ref => ref.kind === 'session')?.label ?? goalTarget.title}
-                            {goalTarget.moving || goalTarget.state === 'running' ? ' (active)' : ' (will resume)'}
-                          </span>
-                        </div>
-                        <Btn
-                          className="ow-quote-clear"
-                          aria-label="Remove the quoted goal"
-                          onClick={() => { setSelectedGoalKey(null); setDeliveryReceipt(null) }}
-                        >
-                          Clear
-                        </Btn>
-                      </div>
-                    ) : quoted && (
-                      <div className="ow-quote ow-quote-docked">
-                        <div className="ow-quote-body">
-                          {quoted.sessionKey ? (
-                            // The destination is a toggle, not an inference: text names the
-                            // active target, click switches it. No session means Conductor only.
-                            <button
-                              type="button"
-                              className="ow-scope-toggle"
-                              aria-pressed={scope === 'conductor'}
-                              aria-label={scope === 'session'
-                                ? 'Sending to this session. Activate to send to the Conductor instead.'
-                                : 'Sending to the Conductor. Activate to send to this session instead.'}
-                              onClick={() => setScope(current => (current === 'session' ? 'conductor' : 'session'))}
-                            >
-                              {scope === 'session' ? 'Instructing' : 'To Conductor'}
-                            </button>
-                          ) : (
-                            <span className="ow-eyebrow">Quoted</span>
-                          )}
-                          <span className="ow-quote-title" title={quoted.title}>{quoted.title}</span>
-                        </div>
-                        <Btn
-                          className="ow-quote-clear"
-                          aria-label="Remove the quoted work item"
-                          onClick={() => { setSelectedId(null); setDeliveryReceipt(null) }}
-                        >
-                          Clear
-                        </Btn>
-                      </div>
-                    )}
                   </div>
                 )
                 : <div className="ow-chat-loading"><ContentSkeleton rows={4} /></div>}

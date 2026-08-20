@@ -619,7 +619,10 @@ export const OVERWATCH_STYLES = String.raw`
     padding: 6px 16px 12px;
   }
   .ow-pr-sublabel-inline { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
-  .ow-pr-session-chip { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; }
+  /* A jump-link, not a title: quieter and smaller than the PR name above it,
+     matching the goal card's secondary text rather than inheriting the 14px base. */
+  .ow-pr-session-chip { border: 0; background: none; padding: 0; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .ow-pr-session-chip .ow-icon { width: 13px; height: 13px; }
   .ow-goal-digest { padding: 10px 16px 12px; border-top: 1px solid var(--border); }
   .ow-digest-line {
     display: -webkit-box;
@@ -948,18 +951,9 @@ export const OVERWATCH_STYLES = String.raw`
   }
   /* One line: eyebrow, gap, title. The spans previously abutted ("InstructingCrew…"). */
   .ow-quote-body { display: flex; min-width: 0; flex: 1; align-items: baseline; gap: 8px; }
-  /* The instructing target floats just above the composer. ChatEmbed exposes no
-     slot inside itself, so this is pinned to the panel with an offset roughly the
-     composer's height; opaque background so the transcript foot does not bleed. */
-  .ow-quote-docked {
-    position: absolute;
-    left: 16px;
-    right: 16px;
-    bottom: 64px;
-    z-index: 3;
-    background: var(--card);
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
-  }
+  /* Rendered in ChatEmbed's aboveComposer slot: normal flow directly above the
+     composer, so there is no absolute offset to keep in sync with its height. */
+  .ow-quote-docked { margin: 0 0 6px; }
   .ow-quote-title { overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
   /* Full text, wrapped. These are sentences the user is deciding whether to
      SEND — a suggestion cut to "Implement the receipt + scope chip in the Cond…"

@@ -35,6 +35,7 @@ declare module '@kirocrew/app-sdk' {
     startAtBottom?: boolean
     slotControls?: boolean
     onSend?: (message: string) => Promise<unknown> | void
+    aboveComposer?: import('react').ReactNode
   }>
 }
 

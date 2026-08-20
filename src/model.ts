@@ -2133,6 +2133,11 @@ function clusterByPr(items: WorkItem[]): WorkBlock[] {
       prBlocks.push(block)
     }
   }
+  // Most-recently-active first: a PR's recency is its liveliest member's, so a
+  // PR any session just touched rises to the top. Insertion order alone tracked
+  // the item scan, which read as random.
+  prBlocks.sort((a, b) =>
+    Math.max(...b.items.map(item => item.updatedAt)) - Math.max(...a.items.map(item => item.updatedAt)))
   return prBlocks
 }
 
