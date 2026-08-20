@@ -110,9 +110,14 @@ class StallWatcher:
         self._findings: list[StallFinding] = []
         self._loops: list[ErrorLoopFinding] = []
         self._notified_at: dict[str, float] = {}
+        # When each finding was FIRST seen, for "what changed since the Conductor
+        # last spoke". Separate from _notified_at, which records only notices that
+        # were DUE: a finding can be live and un-notified and still be news.
+        self._first_seen: dict[str, float] = {}
         # Loops dedup separately from stalls: one session can legitimately raise
         # both, and suppressing one because the other rang would hide a signal.
         self._loop_notified_at: dict[str, float] = {}
+        self._loop_first_seen: dict[str, float] = {}
         # Model-written stall reasons, keyed by session. Write-once while a stall
         # persists: its story does not change, so re-asking would spend a model
         # call to get the same sentence.
@@ -174,6 +179,16 @@ class StallWatcher:
         for key in list(self._notified_at):
             if key not in live:
                 del self._notified_at[key]
+        # First-sighting times follow the same lifecycle, and for the same reason:
+        # a session that recovered and stalled again is NEW work for the reader,
+        # not a continuation. Distinct from _notified_at because a notice is only
+        # written when one is DUE -- a finding can be live, and legitimately
+        # un-notified, and still be something the Conductor has never been told.
+        for key in list(self._first_seen):
+            if key not in live:
+                del self._first_seen[key]
+        for finding in findings:
+            self._first_seen.setdefault(finding.key, now)
         # The reason goes with it: a new stall on the same session is a new story.
         for key in list(self._reasons):
             if key not in live:
@@ -209,6 +224,13 @@ class StallWatcher:
         for key in list(self._loop_notified_at):
             if key not in live:
                 del self._loop_notified_at[key]
+        # Same lifecycle as the stall map: a loop that cleared and came back is
+        # news again, not a continuation.
+        for key in list(self._loop_first_seen):
+            if key not in live:
+                del self._loop_first_seen[key]
+        for loop in loops:
+            self._loop_first_seen.setdefault(loop.key, now)
 
         for loop in loops:
             if not due_for_notice(
@@ -432,6 +454,14 @@ class StallWatcher:
             "last_sweep": self._last_sweep or None,
             "stalls": [f.to_dict() for f in self._findings],
             "error_loops": [loop.to_dict() for loop in self._loops],
+            # When each live finding was first seen, keyed as the findings are.
+            # Sent alongside rather than inside to_dict() so the finding shape
+            # stays the detector's business and this stays the watcher's: the
+            # detector is stateless and has no idea when it last ran.
+            "first_seen": {
+                key: seen
+                for key, seen in {**self._first_seen, **self._loop_first_seen}.items()
+            },
         }
 
 
