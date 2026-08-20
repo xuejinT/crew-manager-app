@@ -845,6 +845,156 @@ for _junk in (None, "not json", [], 42, {"assignments": "nope", "names": 7}):
     )
 
 print()
+print("a stall reason is discarded when the session recovered mid-call")
+
+import asyncio  # noqa: E402
+import watcher as _w  # noqa: E402
+
+
+class _FakeSlot:
+    """A gateway slot as the watcher reads it: only ``to_dict`` is required.
+
+    It hands back the LIVE payload dict, so a test that mutates the payload is
+    changing what the next sweep sees -- which is how "the user acted" is staged.
+    """
+
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def to_dict(self) -> dict:
+        return self.payload
+
+
+class _FakeState:
+    """Only the three attributes the watcher touches on gateway state."""
+
+    def __init__(self, payload: dict) -> None:
+        self._slots = {payload["key"]: _FakeSlot(payload)}
+        # ``_explain`` only checks that a session manager EXISTS; the fake
+        # one-liner below never uses it.
+        self.sessions = object()
+        # No bell in an offline test: ``_push`` would fail its platform import
+        # anyway, so notice bodies are captured by replacing ``_push`` instead.
+        self.notification_bus = None
+
+
+_TAIL = [
+    {"role": "assistant", "content": "Applying the staging migration"},
+    {"role": "tool", "meta": {"tool": "shell", "output": "running 004_add_index"}},
+]
+
+# --- the race: the user acts while the model is still writing the sentence ---
+
+_wedged = slot(key="wedged", messages=_TAIL)
+_state = _FakeState(_wedged)
+_watch = _w.StallWatcher()
+_calls: list[str] = []
+
+
+def _oneliner_user_acts(sessions, prompt, **kwargs):
+    async def _call():
+        _calls.append("asked")
+        # The model call IS the window. Inside it the user stops the session and
+        # the UI's POST /sweep refresh lands, so the live finding set no longer
+        # holds this key -- all before the await below returns.
+        _wedged["running"] = False
+        _watch.sweep(_state, NOW)
+        return "It was applying migration 004_add_index to staging."
+
+    return _call()
+
+
+_w._load_oneliner = lambda: _oneliner_user_acts  # type: ignore[assignment]
+
+_findings = _watch.sweep(_state, NOW)
+check(
+    "the staged slot does read as stalled to begin with",
+    [f.key for f in _findings] == ["wedged"],
+    repr([f.key for f in _findings]),
+)
+
+asyncio.run(_watch._explain(_state, _findings))
+
+check("the model was in fact asked", _calls == ["asked"], repr(_calls))
+check(
+    "a reason for a session that recovered mid-call is not memoised",
+    "wedged" not in _watch._reasons,
+    repr(_watch._reasons),
+)
+check(
+    "and it is not attached to the finding either",
+    _findings[0].reason is None,
+    repr(_findings[0].reason),
+)
+
+# The delivery consequence: the session stalls again, and its notice must be the
+# rule-based sentence rather than a story about a migration that already finished.
+_bodies: list[str] = []
+_watch._push = (  # type: ignore[assignment]
+    lambda state, channel_id, *, title, body, group_key: (_bodies.append(body) or True)
+)
+_wedged["running"] = True
+_watch.sweep(_state, NOW + 1)
+
+check(
+    "the next notice for that session is not phrased from the discarded reason",
+    _bodies and "migration" not in _bodies[0],
+    repr(_bodies),
+)
+check(
+    "the next notice falls back to the rule-based body",
+    _bodies and _bodies[0].startswith("Still marked running"),
+    repr(_bodies),
+)
+
+# --- the other direction: a stall that is STILL standing keeps its reason ---
+#
+# ``sweep`` builds fresh StallFinding objects every pass, and the UI's manual
+# refresh runs one mid-call. Validating by object identity would throw away a
+# perfectly good reason here, so this pins the test as key-membership.
+
+_alive = slot(key="still-wedged", messages=_TAIL)
+_state2 = _FakeState(_alive)
+_watch2 = _w.StallWatcher()
+_calls2: list[str] = []
+
+
+def _oneliner_refresh_lands(sessions, prompt, **kwargs):
+    async def _call():
+        _calls2.append("asked")
+        # A refresh sweep replaces the finding objects; the session is still
+        # silent, so this stall is still current.
+        _watch2.sweep(_state2, NOW + 5)
+        return "It was waiting on the staging deploy to finish."
+
+    return _call()
+
+
+_w._load_oneliner = lambda: _oneliner_refresh_lands  # type: ignore[assignment]
+
+_findings2 = _watch2.sweep(_state2, NOW)
+asyncio.run(_watch2._explain(_state2, _findings2))
+
+check(
+    "a still-standing stall keeps its reason across a refresh sweep",
+    _watch2._reasons.get("still-wedged") == "It was waiting on the staging deploy to finish.",
+    repr(_watch2._reasons),
+)
+check(
+    "the finding carries the reason for the notice to use",
+    _findings2[0].reason == "It was waiting on the staging deploy to finish.",
+    repr(_findings2[0].reason),
+)
+
+# The memo is still write-once: a second pass must not spend another model call.
+asyncio.run(_watch2._explain(_state2, _watch2.sweep(_state2, NOW + 6)))
+check(
+    "the reason is written once while the stall persists",
+    _calls2 == ["asked"],
+    repr(_calls2),
+)
+
+print()
 
 if FAILURES:
     print(f"{len(FAILURES)} failing check(s): {', '.join(FAILURES)}")
