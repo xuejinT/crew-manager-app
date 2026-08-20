@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import CrewOverviewApp from '../src/index'
+import CrewOverviewApp, { noticedSinceLastTurn } from '../src/index'
 import { appSdkMocks } from './mocks/app-sdk'
 
 function renderApp() {
@@ -1158,5 +1158,85 @@ describe('binding the Conductor to its own agent', () => {
     withoutConductor({ available: true })
     renderApp()
     expect(await slotCreateBody()).not.toHaveProperty('agent')
+  })
+})
+
+describe('what the watcher noticed since the Conductor last spoke', () => {
+  const LAST_TURN = '2026-08-20T12:00:00Z'
+  const before = Date.parse(LAST_TURN) / 1000 - 60
+  const after = Date.parse(LAST_TURN) / 1000 + 60
+
+  function report(over: Record<string, unknown> = {}) {
+    return {
+      stalls: [{ key: 's1', label: 'Docs cleanup', silent_secs: 900, private: false, reason: 'It was running the test suite.' }],
+      error_loops: [],
+      first_seen: { s1: after },
+      ...over,
+    }
+  }
+
+  it('names a stall first seen after the last turn', () => {
+    expect(noticedSinceLastTurn(report(), LAST_TURN)).toEqual([
+      'Docs cleanup went quiet — It was running the test suite.',
+    ])
+  })
+
+  it('says nothing about a stall the Conductor has already seen', () => {
+    // Already discussed. Repeating it every turn is how a board teaches its
+    // reader to stop reading.
+    expect(noticedSinceLastTurn(report({ first_seen: { s1: before } }), LAST_TURN)).toEqual([])
+  })
+
+  it('falls back to the silence duration when no reason was written', () => {
+    // A private session never gets a model-written reason, and one may not have
+    // been generated yet — neither is a reason to drop the finding.
+    const r = report({ stalls: [{ key: 's1', label: 'Secret work', silent_secs: 900, private: true }] })
+    expect(noticedSinceLastTurn(r, LAST_TURN)[0]).toContain('Secret work went quiet after')
+  })
+
+  it('reports nothing at all on a backend that does not send first_seen', () => {
+    // An older app backend must not make the ENTIRE board read as fresh news on
+    // every turn — that is worse than staying quiet.
+    expect(noticedSinceLastTurn(report({ first_seen: undefined }), LAST_TURN)).toEqual([])
+  })
+
+  it('reports nothing before the Conductor has any turn to be newer than', () => {
+    expect(noticedSinceLastTurn(report(), undefined)).toEqual([])
+    expect(noticedSinceLastTurn(report(), null)).toEqual([])
+    expect(noticedSinceLastTurn(report(), 'not a date')).toEqual([])
+  })
+
+  it('accepts a numeric last_ts in seconds or milliseconds', () => {
+    // The platform sends either, and a bare number is ambiguous; a seconds value
+    // read as ms lands in 1970 and would mark everything new.
+    const secs = Date.parse(LAST_TURN) / 1000
+    expect(noticedSinceLastTurn(report(), secs)).toEqual(noticedSinceLastTurn(report(), LAST_TURN))
+    expect(noticedSinceLastTurn(report(), secs * 1000)).toEqual(noticedSinceLastTurn(report(), LAST_TURN))
+  })
+
+  it('includes an error loop that started after the last turn', () => {
+    const r = report({
+      stalls: [],
+      error_loops: [{ key: 'l1', label: 'Build fix', tool: 'execute_bash', repeats: 3 }],
+      first_seen: { l1: after },
+    })
+    expect(noticedSinceLastTurn(r, LAST_TURN)).toEqual([
+      'Build fix repeated the same execute_bash failure 3 times',
+    ])
+  })
+
+  it('caps the list so it cannot crowd out the briefing it sits beside', () => {
+    const stalls = Array.from({ length: 9 }, (_, i) => ({
+      key: `s${i}`, label: `Session ${i}`, silent_secs: 900, private: false,
+    }))
+    const first_seen = Object.fromEntries(stalls.map(s => [s.key, after]))
+    const lines = noticedSinceLastTurn(report({ stalls, first_seen }), LAST_TURN)
+    expect(lines).toHaveLength(6)
+    expect(lines[5]).toBe('and 4 more')
+  })
+
+  it('ignores a finding with no first-seen entry rather than guessing', () => {
+    const r = report({ first_seen: { other: after } })
+    expect(noticedSinceLastTurn(r, LAST_TURN)).toEqual([])
   })
 })

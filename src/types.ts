@@ -132,6 +132,12 @@ export interface StallReport {
   last_sweep?: number | null
   stalls?: StallFinding[]
   error_loops?: ErrorLoopFinding[]
+  /**
+   * Epoch SECONDS (the backend's clock) at which each live finding was first
+   * seen, keyed as findings are. Absent on a gateway whose app backend predates
+   * it, so every reader must cope with undefined.
+   */
+  first_seen?: Record<string, number>
 }
 
 export interface CronJob {

@@ -1456,6 +1456,93 @@ else:
 
 print()
 
+print("first-seen: what is new since the Conductor last spoke")
+
+import watcher as _fw  # noqa: E402
+
+
+class _FSState:
+    """Stands in for DashboardState: the watcher only reads slots off it."""
+
+    def __init__(self, slots):
+        self._slots = {s["key"]: _FSSlot(s) for s in slots}
+
+
+class _FSSlot:
+    def __init__(self, data):
+        self._data = data
+
+    def to_dict(self):
+        return dict(self._data)
+
+
+def _fs_state(last_ts, key="wedged"):
+    return _FSState([
+        {"key": key, "title": "Wedged work", "running": True, "last_ts": last_ts, "messages": 3}
+    ])
+
+
+_fwatch = _fw.StallWatcher()
+_fwatch.enabled = True
+_fwatch.stall_secs = 600
+# Never let a test reach the notifier or the model: _notify is what would ring a
+# real bell, and _explain is a separate awaited path this section does not drive.
+_fwatch._notify = lambda state, finding: True  # type: ignore[assignment]
+
+_fs_now = NOW
+_stalled = _fs_state(_fs_now - 1800)
+
+# Drive the REAL sweep. An earlier version of this section reimplemented the
+# bookkeeping in the test, which would have passed with the feature deleted.
+_found = _fwatch.sweep(_stalled, _fs_now)
+check("the fixture produces one stall to track", len(_found) == 1, repr([f.key for f in _found]))
+check(
+    "the sweep records a first sighting for a live finding",
+    _fwatch._first_seen == {"wedged": _fs_now},
+    repr(_fwatch._first_seen),
+)
+
+# A later sweep must NOT move the timestamp: it is the same news, and refreshing
+# it would make a week-old stall read as new on every pass forever.
+_fwatch.sweep(_stalled, _fs_now + 300)
+check(
+    "a later sweep does not refresh an existing first sighting",
+    _fwatch._first_seen == {"wedged": _fs_now},
+    repr(_fwatch._first_seen),
+)
+
+# Recovery forgets it, so a NEW stall on the same session is news again -- the
+# same lifecycle _notified_at and _reasons already follow.
+_fwatch.sweep(_fs_state(_fs_now + 300), _fs_now + 360)
+check(
+    "recovery forgets the sighting",
+    _fwatch._first_seen == {},
+    repr(_fwatch._first_seen),
+)
+_fwatch.sweep(_fs_state(_fs_now - 1800), _fs_now + 900)
+check(
+    "and a fresh stall on the same session is recorded anew",
+    _fwatch._first_seen == {"wedged": _fs_now + 900},
+    repr(_fwatch._first_seen),
+)
+
+# The report carries it, merging stall and loop sightings so a reader needs one
+# lookup rather than two.
+_fwatch._loop_first_seen = {"looping": _fs_now + 60}
+_snap = _fwatch.snapshot()
+check(
+    "the report exposes first_seen for stalls and loops together",
+    _snap.get("first_seen") == {"wedged": _fs_now + 900, "looping": _fs_now + 60},
+    repr(_snap.get("first_seen")),
+)
+check(
+    "and the report still carries everything it carried before",
+    {"enabled", "stall_secs", "sweep_secs", "last_sweep", "stalls", "error_loops"} <= set(_snap),
+    repr(sorted(_snap)),
+)
+
+print()
+
 if FAILURES:
     print(f"{len(FAILURES)} failing check(s): {', '.join(FAILURES)}")
     sys.exit(1)
