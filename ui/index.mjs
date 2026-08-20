@@ -1552,64 +1552,66 @@ Pn(c.changeRef,_[c.changeRef.url??""]));p!=="other"&&o[p]++}return o},[A,_]);J((
 references)h.kind==="change"&&h.url&&/\/pull\/\d|\/merge_requests\/\d/.test(h.url)&&o.add(h.url);let c=!1;for(let p of o)
 _[p]||t.current.post("/api/source/pull-request",{url:p}).then(h=>{!c&&$.current&&h?.title&&B(v=>({...v,[p]:oa(h)}))}).catch(
 ()=>{});return()=>{c=!0}},[A,_]),J(()=>r(Kt["needs-you"]),[Kt,r]),J(()=>{L&&!A.some(o=>o.id===L)&&W(null)},[A,L]),J(()=>{
-Y(Xo,l)},[l]);let on=P?.slots.find(o=>o.key===Pe),Cr=!!(on||Sr);J(()=>{!P||on||nn.current||(nn.current=!0,e.post("/api/c\
-hat/slots",{name:Pe,title:"Conductor"}).then(()=>{$.current&&(Nr(!0),M())}).catch(o=>{$.current&&(nn.current=!1,_e(o instanceof
-Error?`Conductor session could not be created: ${o.message}`:"Conductor session could not be created"))}))},[e,on,M,P]);
-let qn=V(()=>go(P?.approvals??[],gt,o=>A.find(c=>c.sessionKey===o)?.title??P?.slots?.find(c=>c.key===o)?.title??o),[A,P,
-gt]),Qe=Ae&&!Ae.permissionId?Ae:null,ge=V(()=>To(A,pe,C,se.current,U.pairs),[A,pe,C,U]);J(()=>{let o=Ao(ge.filter(c=>c.name===
-null).flatMap(c=>c.blocks));se.current=o,Y(Yo,o)},[ge]),J(()=>{if(Le.current.length===0)return;let o=ge.filter(h=>h.name===
-null).flatMap(h=>h.blocks),c={},p=[];for(let h of Le.current){let v=o.find(x=>x.items.length>1&&h.ids.filter(me=>x.items.
-some(be=>be.id===me)).length>=2);v?c[v.key]=h.name:p.push(h)}Le.current=p,Object.keys(c).length>0&&wt(h=>{let v={...h,...c};
-return Y(xn,v),v})},[ge]),J(()=>{let o=ge.filter(v=>v.name===null).flatMap(v=>v.blocks),c=o.filter(v=>v.items.length>1).
-map(v=>({key:v.key,name:ue[v.key]??null,items:v.items.map(x=>({id:x.id,title:x.title}))})),p=o.filter(v=>v.items.length===
-1).map(v=>({id:v.items[0].id,title:v.items[0].title,detail:v.items[0].summary??""}));if(p.length===0&&c.every(v=>v.name))
-return;let h=JSON.stringify([c.map(v=>[v.key,v.name]),p.map(v=>v.id).sort()]);h===U.stamp||H.current||(H.current=!0,(async()=>{
-try{let v=await t.current.post("/api/apps/crew-manager/goal-pass",{clusters:c,ungrouped:p});if(!$.current)return;if(!v?.
-available){we(R=>Jo({pairs:R.pairs,why:R.why,stamp:h}));return}let x=new Map;for(let R of o)for(let K of R.items)x.set(K.
-id,K);let me=new Map(o.map(R=>[R.key,R])),be=new Set(U.pairs),E=new Map(U.why),ae=new Map,ne=new Map;for(let R of v.assignments??
-[]){if((R.confidence??0)<js)continue;let K=R.item_id?x.get(R.item_id):void 0;if(!(!K?.sessionKey||!R.cluster)){if(R.cluster.
-startsWith("existing:")){let ve=me.get(R.cluster.slice(9))?.items.find(Dt=>Dt.id!==K.id);if(!ve)continue;let Oe=fe(K,ve);
-be.add(Oe),R.why&&E.set(Oe,R.why)}else if(R.cluster.startsWith("new:")){let rt=ae.get(R.cluster)??[];rt.push(K),ae.set(R.
-cluster,rt),R.why&&ne.set(K.id,R.why)}}}let xt=new Map;for(let R of v.names??[])R.cluster&&R.name&&xt.set(R.cluster,R.name);
-let jn=[];for(let[R,K]of ae){if(K.length<2)continue;for(let ve=0;ve<K.length;ve+=1)for(let Oe=ve+1;Oe<K.length;Oe+=1){let Dt=fe(
-K[ve],K[Oe]);be.add(Dt);let Un=ne.get(K[ve].id)??ne.get(K[Oe].id);Un&&E.set(Dt,Un)}let rt=xt.get(R);rt&&jn.push({ids:K.map(
-ve=>ve.id),name:rt})}Le.current=jn;let Tt={};for(let[R,K]of xt)R.startsWith("new:")||(R.startsWith("item:")?!ue[R]&&x.has(
-R.slice(5))&&(Tt[R]=K):me.has(R)&&(Tt[R]=K));Object.keys(Tt).length>0&&wt(R=>{let K={...R,...Tt};return Y(xn,K),K}),we(Jo(
-{pairs:be,why:E,stamp:h}))}catch{}finally{H.current=!1}})())},[ge,ue,U]);let he=V(()=>{if(!Wt)return null;for(let o of ge){
-let c=o.blocks.find(p=>p.key===Wt);if(c&&c.items.length>0)return c}return null},[Wt,ge]),te=he?Lo(he.items):null,Se=V(()=>{
-if(!Pt)return null;let o=jt(A,"pr",C).find(c=>c.key===Pt&&c.header==="pr");return o&&o.changeRef?o:null},[Pt,A,C]),rn=V(
-()=>{let o=(P?.loops??[]).filter(h=>h&&h.active!==!1&&h.slot_key);if(o.length===0)return[];let c=new Map,p=new Map;for(let h of A)
-for(let v of h.references)v.kind!=="session"||!v.id||v.label&&!c.has(v.id)&&c.set(v.id,v.label);for(let h of ge)if(h.name)
-for(let v of h.blocks)for(let x of v.items)x.sessionKey&&!p.has(x.sessionKey)&&p.set(x.sessionKey,h.name);return o.map(h=>{
-let v=Number(h.cycle_count)||0,x=Number(h.max_cycles)||0;return{key:h.slot_key,title:c.get(h.slot_key)??h.slot_key,goalName:p.
-get(h.slot_key)??null,progress:x>0?`${v}/${x}`:`${v} ${v===1?"cycle":"cycles"}`,remaining:x>0?Math.max(0,x-v):null,instruction:(h.
-message??"").replace(/\s+/g," ").trim(),lastFire:F(h.last_fire_ts)}})},[P,A,ge]),Xe=V(()=>{let o=new Date;o.setHours(0,0,
-0,0);let c=o.getTime(),p=c+864e5,h=P?.crons??[],v=new Map;for(let E of Zt){let ae=F(E.started_at);if(!E.job_id||ae<c||ae>=
-p)continue;let ne=v.get(E.job_id)??{count:0,failed:0,last:0};ne.count+=1,E.status&&E.status!=="success"&&(ne.failed+=1),
-ne.last=Math.max(ne.last,ae),v.set(E.job_id,ne)}let x=h.map(E=>{let ae=v.get(E.id),ne=F(E.next_run_ts),xt=ne>=c&&ne<p;return{
-job:E,ran:ae,next:ne,dueToday:xt}}).filter(E=>E.ran||E.dueToday||E.job.is_running),me=x.filter(E=>E.ran&&E.ran.failed===
-0).length,be=x.filter(E=>E.ran&&E.ran.failed>0).length;return{rows:x,done:me,failed:be,total:x.length,historyKnown:Zt.length>
-0}},[P,Zt]),[Ir,Fn]=S(!1),Ar=V(()=>{if(l!=="goal")return[];let o=Mo(P?.slots??[],pe),c=$o(A,pe),p=new Set,h=[];for(let v of[
-...c,...o])p.has(v.name.toLowerCase())||(p.add(v.name.toLowerCase()),h.push(v));return h.sort((v,x)=>x.sessions-v.sessions)},
-[l,P,A,pe]),Wr=D(async(o,c)=>{try{await t.current.patch(`/api/chat/slots/${encodeURIComponent(o)}/title`,{title:c}),M()}catch{}},
-[M]),Pr=D(async(o,c=[])=>{if(o.trim()){Fn(!0);try{let p=await t.current.post("/api/apps/crew-manager/initiatives",{name:o.
-trim(),aliases:c});$.current&&p?.initiatives&&En(p.initiatives.filter(h=>h?.name))}catch{}finally{$.current&&Fn(!1)}}},[]),
-Te=D(async(o,c)=>{if(!Z){Me(o),_e(null);try{await t.current.post(`/api/approvals/${encodeURIComponent(o)}/${c?"approve":
-"reject"}`,{}),M()}catch(p){_e(p instanceof Error?`Could not answer that request: ${p.message}`:"Could not answer that r\
-equest"),M()}finally{$.current&&Me(null)}}},[M,Z]),Ze=D(async(o,c)=>{if(!(Z||!o.permissionId||!o.sessionKey)){Me(o.permissionId),
-_e(null);try{await t.current.post(`/api/chat/slots/${encodeURIComponent(o.sessionKey)}/approve`,{action:c,request_id:o.permissionId}),
-M()}catch(p){_e(p instanceof Error?`Could not answer that request: ${p.message}`:"Could not answer that request"),M()}finally{
-$.current&&Me(null)}}},[M,Z]),Er=D(o=>{$e(c=>{let p=Object.fromEntries(Object.entries(c).filter(([,h])=>h>Date.now()));return p[o]=
-Date.now()+_o,Y(yn,p),p}),W(null)},[]),Br=D((o,c)=>{y(p=>{let h={...p,[o]:c};return Y(Ho,h),h}),W(null)},[]),Mr=D(()=>{$e(
-{}),Y(yn,{})},[]),$r=D(o=>{j(c=>{let p={merged:c.merged.filter(h=>!o.includes(h)),split:[...new Set([...c.split,...o])]};
-return Y(kn,p),p})},[]),Kr=D(o=>{j(c=>{let p={merged:[...new Set([...c.merged,o])],split:c.split.filter(h=>h!==o)};return Y(
-kn,p),p})},[]),Lr=D(()=>{wr(o=>(Y(Vo,!o),!o))},[]),et=D(async o=>{if(!de){He(o),_e(null);try{await t.current.post(o,{}),
-M()}catch(c){_e(c instanceof Error?`Could not re-run it: ${c.message}`:"Could not re-run it"),M()}finally{$.current&&He(
-null)}}},[M,de]),kt=D(async o=>{if(!ce){ft(o),_e(null);try{await t.current.del(o),q("Stopped the monitor loop. Re-arming\
- it is done from the session itself."),M()}catch(c){let p=c instanceof Error?c.message:"";/404|not found/i.test(p)?q("Th\
-at loop had already stopped."):_e(p?`Could not stop it: ${p}`:"Could not stop it"),M()}finally{$.current&&ft(null)}}},[M,
-ce]),De=D(async o=>{if(Se&&Se.changeRef){let p=Se.changeRef,h=bn(Se.items),v=[`Crew Manager: this concerns the pull requ\
-est ${p.label}${p.url?` (${p.url})`:""}.`,h.length?`Sessions that produced it:
+Y(Xo,l)},[l]);let on=P?.slots.find(o=>o.key===Pe),Cr=!!(on||Sr);J(()=>{!P||on||nn.current||(nn.current=!0,e.get("/api/ap\
+ps/crew-manager/conductor-agent").then(o=>o?.available&&o.agent?o.agent:null).catch(()=>null).then(o=>e.post("/api/chat/\
+slots",{name:Pe,title:"Conductor",...o?{agent:o}:{}})).then(()=>{$.current&&(Nr(!0),M())}).catch(o=>{$.current&&(nn.current=
+!1,_e(o instanceof Error?`Conductor session could not be created: ${o.message}`:"Conductor session could not be created"))}))},
+[e,on,M,P]);let qn=V(()=>go(P?.approvals??[],gt,o=>A.find(c=>c.sessionKey===o)?.title??P?.slots?.find(c=>c.key===o)?.title??
+o),[A,P,gt]),Qe=Ae&&!Ae.permissionId?Ae:null,ge=V(()=>To(A,pe,C,se.current,U.pairs),[A,pe,C,U]);J(()=>{let o=Ao(ge.filter(
+c=>c.name===null).flatMap(c=>c.blocks));se.current=o,Y(Yo,o)},[ge]),J(()=>{if(Le.current.length===0)return;let o=ge.filter(
+h=>h.name===null).flatMap(h=>h.blocks),c={},p=[];for(let h of Le.current){let v=o.find(x=>x.items.length>1&&h.ids.filter(
+me=>x.items.some(be=>be.id===me)).length>=2);v?c[v.key]=h.name:p.push(h)}Le.current=p,Object.keys(c).length>0&&wt(h=>{let v={
+...h,...c};return Y(xn,v),v})},[ge]),J(()=>{let o=ge.filter(v=>v.name===null).flatMap(v=>v.blocks),c=o.filter(v=>v.items.
+length>1).map(v=>({key:v.key,name:ue[v.key]??null,items:v.items.map(x=>({id:x.id,title:x.title}))})),p=o.filter(v=>v.items.
+length===1).map(v=>({id:v.items[0].id,title:v.items[0].title,detail:v.items[0].summary??""}));if(p.length===0&&c.every(v=>v.
+name))return;let h=JSON.stringify([c.map(v=>[v.key,v.name]),p.map(v=>v.id).sort()]);h===U.stamp||H.current||(H.current=!0,
+(async()=>{try{let v=await t.current.post("/api/apps/crew-manager/goal-pass",{clusters:c,ungrouped:p});if(!$.current)return;
+if(!v?.available){we(R=>Jo({pairs:R.pairs,why:R.why,stamp:h}));return}let x=new Map;for(let R of o)for(let K of R.items)
+x.set(K.id,K);let me=new Map(o.map(R=>[R.key,R])),be=new Set(U.pairs),E=new Map(U.why),ae=new Map,ne=new Map;for(let R of v.
+assignments??[]){if((R.confidence??0)<js)continue;let K=R.item_id?x.get(R.item_id):void 0;if(!(!K?.sessionKey||!R.cluster)){
+if(R.cluster.startsWith("existing:")){let ve=me.get(R.cluster.slice(9))?.items.find(Dt=>Dt.id!==K.id);if(!ve)continue;let Oe=fe(
+K,ve);be.add(Oe),R.why&&E.set(Oe,R.why)}else if(R.cluster.startsWith("new:")){let rt=ae.get(R.cluster)??[];rt.push(K),ae.
+set(R.cluster,rt),R.why&&ne.set(K.id,R.why)}}}let xt=new Map;for(let R of v.names??[])R.cluster&&R.name&&xt.set(R.cluster,
+R.name);let jn=[];for(let[R,K]of ae){if(K.length<2)continue;for(let ve=0;ve<K.length;ve+=1)for(let Oe=ve+1;Oe<K.length;Oe+=
+1){let Dt=fe(K[ve],K[Oe]);be.add(Dt);let Un=ne.get(K[ve].id)??ne.get(K[Oe].id);Un&&E.set(Dt,Un)}let rt=xt.get(R);rt&&jn.
+push({ids:K.map(ve=>ve.id),name:rt})}Le.current=jn;let Tt={};for(let[R,K]of xt)R.startsWith("new:")||(R.startsWith("item\
+:")?!ue[R]&&x.has(R.slice(5))&&(Tt[R]=K):me.has(R)&&(Tt[R]=K));Object.keys(Tt).length>0&&wt(R=>{let K={...R,...Tt};return Y(
+xn,K),K}),we(Jo({pairs:be,why:E,stamp:h}))}catch{}finally{H.current=!1}})())},[ge,ue,U]);let he=V(()=>{if(!Wt)return null;
+for(let o of ge){let c=o.blocks.find(p=>p.key===Wt);if(c&&c.items.length>0)return c}return null},[Wt,ge]),te=he?Lo(he.items):
+null,Se=V(()=>{if(!Pt)return null;let o=jt(A,"pr",C).find(c=>c.key===Pt&&c.header==="pr");return o&&o.changeRef?o:null},
+[Pt,A,C]),rn=V(()=>{let o=(P?.loops??[]).filter(h=>h&&h.active!==!1&&h.slot_key);if(o.length===0)return[];let c=new Map,
+p=new Map;for(let h of A)for(let v of h.references)v.kind!=="session"||!v.id||v.label&&!c.has(v.id)&&c.set(v.id,v.label);
+for(let h of ge)if(h.name)for(let v of h.blocks)for(let x of v.items)x.sessionKey&&!p.has(x.sessionKey)&&p.set(x.sessionKey,
+h.name);return o.map(h=>{let v=Number(h.cycle_count)||0,x=Number(h.max_cycles)||0;return{key:h.slot_key,title:c.get(h.slot_key)??
+h.slot_key,goalName:p.get(h.slot_key)??null,progress:x>0?`${v}/${x}`:`${v} ${v===1?"cycle":"cycles"}`,remaining:x>0?Math.
+max(0,x-v):null,instruction:(h.message??"").replace(/\s+/g," ").trim(),lastFire:F(h.last_fire_ts)}})},[P,A,ge]),Xe=V(()=>{
+let o=new Date;o.setHours(0,0,0,0);let c=o.getTime(),p=c+864e5,h=P?.crons??[],v=new Map;for(let E of Zt){let ae=F(E.started_at);
+if(!E.job_id||ae<c||ae>=p)continue;let ne=v.get(E.job_id)??{count:0,failed:0,last:0};ne.count+=1,E.status&&E.status!=="s\
+uccess"&&(ne.failed+=1),ne.last=Math.max(ne.last,ae),v.set(E.job_id,ne)}let x=h.map(E=>{let ae=v.get(E.id),ne=F(E.next_run_ts),
+xt=ne>=c&&ne<p;return{job:E,ran:ae,next:ne,dueToday:xt}}).filter(E=>E.ran||E.dueToday||E.job.is_running),me=x.filter(E=>E.
+ran&&E.ran.failed===0).length,be=x.filter(E=>E.ran&&E.ran.failed>0).length;return{rows:x,done:me,failed:be,total:x.length,
+historyKnown:Zt.length>0}},[P,Zt]),[Ir,Fn]=S(!1),Ar=V(()=>{if(l!=="goal")return[];let o=Mo(P?.slots??[],pe),c=$o(A,pe),p=new Set,
+h=[];for(let v of[...c,...o])p.has(v.name.toLowerCase())||(p.add(v.name.toLowerCase()),h.push(v));return h.sort((v,x)=>x.
+sessions-v.sessions)},[l,P,A,pe]),Wr=D(async(o,c)=>{try{await t.current.patch(`/api/chat/slots/${encodeURIComponent(o)}/\
+title`,{title:c}),M()}catch{}},[M]),Pr=D(async(o,c=[])=>{if(o.trim()){Fn(!0);try{let p=await t.current.post("/api/apps/c\
+rew-manager/initiatives",{name:o.trim(),aliases:c});$.current&&p?.initiatives&&En(p.initiatives.filter(h=>h?.name))}catch{}finally{
+$.current&&Fn(!1)}}},[]),Te=D(async(o,c)=>{if(!Z){Me(o),_e(null);try{await t.current.post(`/api/approvals/${encodeURIComponent(
+o)}/${c?"approve":"reject"}`,{}),M()}catch(p){_e(p instanceof Error?`Could not answer that request: ${p.message}`:"Could\
+ not answer that request"),M()}finally{$.current&&Me(null)}}},[M,Z]),Ze=D(async(o,c)=>{if(!(Z||!o.permissionId||!o.sessionKey)){
+Me(o.permissionId),_e(null);try{await t.current.post(`/api/chat/slots/${encodeURIComponent(o.sessionKey)}/approve`,{action:c,
+request_id:o.permissionId}),M()}catch(p){_e(p instanceof Error?`Could not answer that request: ${p.message}`:"Could not \
+answer that request"),M()}finally{$.current&&Me(null)}}},[M,Z]),Er=D(o=>{$e(c=>{let p=Object.fromEntries(Object.entries(
+c).filter(([,h])=>h>Date.now()));return p[o]=Date.now()+_o,Y(yn,p),p}),W(null)},[]),Br=D((o,c)=>{y(p=>{let h={...p,[o]:c};
+return Y(Ho,h),h}),W(null)},[]),Mr=D(()=>{$e({}),Y(yn,{})},[]),$r=D(o=>{j(c=>{let p={merged:c.merged.filter(h=>!o.includes(
+h)),split:[...new Set([...c.split,...o])]};return Y(kn,p),p})},[]),Kr=D(o=>{j(c=>{let p={merged:[...new Set([...c.merged,
+o])],split:c.split.filter(h=>h!==o)};return Y(kn,p),p})},[]),Lr=D(()=>{wr(o=>(Y(Vo,!o),!o))},[]),et=D(async o=>{if(!de){
+He(o),_e(null);try{await t.current.post(o,{}),M()}catch(c){_e(c instanceof Error?`Could not re-run it: ${c.message}`:"Co\
+uld not re-run it"),M()}finally{$.current&&He(null)}}},[M,de]),kt=D(async o=>{if(!ce){ft(o),_e(null);try{await t.current.
+del(o),q("Stopped the monitor loop. Re-arming it is done from the session itself."),M()}catch(c){let p=c instanceof Error?
+c.message:"";/404|not found/i.test(p)?q("That loop had already stopped."):_e(p?`Could not stop it: ${p}`:"Could not stop\
+ it"),M()}finally{$.current&&ft(null)}}},[M,ce]),De=D(async o=>{if(Se&&Se.changeRef){let p=Se.changeRef,h=bn(Se.items),v=[
+`Crew Manager: this concerns the pull request ${p.label}${p.url?` (${p.url})`:""}.`,h.length?`Sessions that produced it:\
+
 ${h.map(x=>`- ${x.label}`).join(`
 `)}`:void 0,"Advise on it \u2014 you cannot merge or push, so recommend the session that should act rather than acting."].
 filter(Boolean).join(`
