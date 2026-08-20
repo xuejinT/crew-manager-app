@@ -37,6 +37,8 @@ import type {
   ErrorLoopFinding,
   StallFinding,
   StallReport,
+  AssignedWork,
+  AssignedReport,
 } from './types'
 import {
   applyInstructed,
@@ -376,12 +378,26 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   rank_run_failed: 'the run failed and has not been retried',
   rank_stalled: 'silent for {{duration}}',
   rank_change_blocked: 'a linked change is failing or conflicting',
+  rank_changes_requested: 'a reviewer asked you for changes',
+  rank_assigned_to_you: 'assigned to you and nobody has started it',
+  rank_merge_ready: 'approved and green — only you can merge it',
   rank_nobody_on_it: 'nobody is on {{count}} unfinished goal(s) in this session',
   no_next_step: 'No next step recorded — nobody is on this',
   // Same-session queue only — the platform does not model one session
   // blocking another, so this must not claim it does.
   rank_queued_behind: '{{count}} more prompt(s) queued in this session',
   rank_waiting_a_while: 'waiting {{hours}}h',
+  // Owned work: a pull request you authored, or an issue assigned to you. The
+  // summary states what is holding it up, because that is the only part that
+  // tells you whether to open it now.
+  owned_pull_conflict: 'Your pull request has a conflict to resolve.',
+  owned_pull_failing: 'Your pull request has {{count}} failing check(s).',
+  owned_pull_changes_requested: 'A reviewer has requested changes on your pull request.',
+  owned_pull_merge_ready: 'Approved with nothing red. Only you can merge it.',
+  owned_pull_awaiting_review: 'Waiting on reviewers, not on you.',
+  owned_pull_checks_running: '{{count}} check(s) still running.',
+  owned_issue_assigned: 'Assigned to you.',
+  owned_provenance: '{{repo}}',
   rank_nothing_pressing: 'nothing pressing — ordered by recency',
   rank_join: ', and ',
   error_loop: '{{tool}} has failed the same way {{repeats}} times in a row',
@@ -2385,6 +2401,10 @@ export default function CrewOverviewApp() {
   const [selectedPrKey, setSelectedPrKey] = useState<string | null>(null)
   const [doneCollapsed, setDoneCollapsed] = useState<boolean>(() => readStore<boolean | null>(DONE_COLLAPSED_KEY, null) ?? true)
   const [loops, setLoops] = useState<Record<string, ErrorLoopFinding>>({})
+  // Work the developer owns in the forge. Kept separate from `sources` because it
+  // comes from this app's own backend rather than the platform, and must degrade
+  // on its own: no gh, or a gateway without the route, costs this and nothing else.
+  const [assigned, setAssigned] = useState<AssignedWork[]>([])
   // Today's cron runs. The Loops card reads `sources.loops` (the MonitorLoop
   // payload the board already fetches) rather than requesting /api/autonudge a
   // second time — note `loops` above is detect.py's REPEAT-FAILURE finding, a
@@ -2588,9 +2608,26 @@ export default function CrewOverviewApp() {
         }
         setLoops(loopsByKey)
         setStallReport(report ?? null)
+        /*
+         * Owned work rides the same probe rather than getting its own poll.
+         *
+         * It is a paid, rate-limited `gh` call behind a 120s server-side cache, so
+         * a second timer would spend quota to learn nothing. Failure is swallowed
+         * separately from the stalls report above: an older backend that serves
+         * /stalls but not /assigned must lose only the owned rows, not the
+         * detection the rest of the board depends on.
+         */
+        try {
+          const owned = await apiRef.current.get<AssignedReport>('/api/apps/crew-manager/assigned')
+          if (!cancelled && mountedRef.current) {
+            setAssigned(owned?.available && Array.isArray(owned.rows) ? owned.rows : [])
+          }
+        } catch {
+          if (mountedRef.current) setAssigned([])
+        }
       } catch {
         stallProbeRef.current = false
-        if (mountedRef.current) { setStalls({}); setLoops({}); setStallReport(null) }
+        if (mountedRef.current) { setStalls({}); setLoops({}); setStallReport(null); setAssigned([]) }
       }
     })()
     return () => { cancelled = true }
@@ -2615,10 +2652,13 @@ export default function CrewOverviewApp() {
   const derived = useMemo(
     // Optimistic acknowledgements are applied on top of derived state, never baked
     // into it: real state wins on the next poll, and the ack expires on its own.
-    () => applyInstructed(normalizeWorkItems(sources ?? {
-      slots: [], approvals: [], agents: [], workflows: [], crons: [], artifacts: [], loops: [],
+    () => applyInstructed(normalizeWorkItems({
+      ...(sources ?? {
+        slots: [], approvals: [], agents: [], workflows: [], crons: [], artifacts: [], loops: [],
+      }),
+      assigned,
     }, workCopy, summaries, stalls, loops, goalVerdicts), instructed),
-    [sources, summaries, stalls, loops, instructed, goalVerdicts],
+    [sources, summaries, stalls, loops, instructed, goalVerdicts, assigned],
   )
   const setAside = useMemo(
     () => applySetAside(derived, snoozed, handled),

@@ -124,6 +124,40 @@ export interface RecallReport {
   results?: RecallHit[]
 }
 
+/**
+ * One item of work the developer personally owns in the forge: a pull request
+ * they authored, or an issue assigned to them. Produced by `backend/assigned.py`.
+ *
+ * Deliberately NOT review requests. On a repository with CODEOWNERS the
+ * developer is review-requested on essentially every open PR, so that set is the
+ * repository's changelog rather than a list of things waiting on them.
+ */
+export interface AssignedWork {
+  kind: 'pull' | 'issue'
+  repo: string
+  number: number
+  url: string
+  title: string
+  /** ISO 8601, as the forge reports it. */
+  updated_at: string
+  /**
+   * What is holding it up, classified server-side in one pass, most blocking
+   * first: conflict, checks_failing, changes_requested, checks_running,
+   * ready_to_merge, awaiting_review — or `assigned` for an issue.
+   */
+  status: string
+  draft: boolean
+  failing: number
+  pending: number
+}
+
+export interface AssignedReport {
+  available?: boolean
+  reason?: string
+  rows?: AssignedWork[]
+  truncated?: boolean
+}
+
 export interface StallReport {
   enabled?: boolean
   stall_secs?: number
