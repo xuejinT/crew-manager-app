@@ -458,12 +458,35 @@ function sessionState(slot: ChatSlot): WorkState {
   // A recovering failure stays Running: the agent is still on it, so the next
   // move is not yet the user's.
   if (slot.running || slot.subagents_running || slot.orchestrating) return 'running'
-  // A failing check or a conflict on this session's own change IS actionable —
-  // open it, re-run it, fix it. It used to sit in Done wearing an Issue badge,
-  // which contradicted both the completion model (the committed outcome was not
-  // reached) and the rule that an issue is one reason something needs you.
-  // A dead agent run stays in Done, because nothing can be done about it.
-  if (sessionIssue(slot)) return 'needs-you'
+  /*
+   * A failing check or a conflict does NOT promote a session into the queue.
+   *
+   * It used to. The argument was that a red change is actionable -- open it,
+   * re-run it, fix it -- and that letting it sit in Done wearing an Issue badge
+   * contradicted the completion model. Both halves were reasonable when the only
+   * way a red change could reach the board was through the session that touched
+   * it.
+   *
+   * That is no longer true, and the cost of the old rule was measured on a real
+   * fleet: 24 items in Needs you, of which 5 were genuinely owed something. The
+   * other 19 were sessions up to 23 days old, promoted solely because a linked
+   * pull request was still red, every one of them carrying the identical reason
+   * "a linked change is failing or conflicting". A queue that never empties is
+   * one nobody reads, and the oldest entries had been there for weeks.
+   *
+   * A red change now has a surface built for it: owned work reads the developer's
+   * own pull requests directly, classifies what is actually blocking each one,
+   * ranks them by cost and caps how many open a row. That surface is bounded and
+   * current. Promoting the session as well double-counts the same fact and adds
+   * the one thing the dedicated surface refuses to add -- unboundedness.
+   *
+   * The fact is not discarded: `issue` is still set, `change_blocked` still ranks
+   * the item wherever it appears, and the card still shows the failing link. What
+   * changes is that a quiet session no longer claims the developer's attention on
+   * the strength of a check it is not waiting on. Risk still promotes -- that is
+   * what the stall and error-loop detectors are for, and they force `needs-you`
+   * in `normalizeWorkItems` regardless of this function.
+   */
   return 'done'
 }
 
