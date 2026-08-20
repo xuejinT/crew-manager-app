@@ -196,7 +196,7 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(document.querySelectorAll('.ow-permission')).toHaveLength(0)
   })
 
-  it('shows the verb, not an Issue badge, on a blocked change in Needs you', async () => {
+  it('shows the verb, not an Issue badge, when a blocked change is in Needs you', async () => {
     appSdkMocks.get.mockImplementation(async (path: string) => {
       if (path === '/api/chat/slots') {
         return [{
@@ -205,8 +205,10 @@ describe('Crew Manager Conductor boundaries', () => {
           messages: 5,
           running: false,
           last_ts: '2026-08-10T18:00:00Z',
-          // issue and changeBlocked both come from this, so this is exactly the
-          // item the Issue badge used to shadow.
+          // The red change supplies `issue` and `changeBlocked` -- the state that
+          // the Issue badge used to shadow -- but no longer promotes on its own, so
+          // the session reaches Needs you by owing an approval.
+          pending_approval: true,
           source_links: [{ kind: 'change', id: '42', label: 'PR #42', ci: 'failed' }],
         }]
       }

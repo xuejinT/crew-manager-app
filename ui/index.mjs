@@ -2,45 +2,45 @@ import{useCallback as D,useEffect as Y,useId as Xo,useMemo as F,useRef as V,useS
 Bot as Zo,Check as Dt,ChevronRight as ae,Check as Ot,Clock as Lt,Package as er,ExternalLink as nr,MessageSquare as zt,RefreshCw as tr,
 Shield as or,Waves as qt,Search as rr,Tag as sr,Users as In,Zap as ar}from"lucide-react";import{useAppApi as ir,useNavigate as lr,
 useNavBadge as dr,ChatEmbed as cr}from"@kirocrew/app-sdk";import{Badge as L,Btn as q,ContentSkeleton as Nt,EmptyState as Ct,
-PageHeader as ur}from"@kirocrew/app-sdk/ui";function ue(e){let n=Math.max(1,Math.floor(e/60));if(n<60)return`${n} minute${n===1?"":"s"}`;let o=Math.floor(n/60),r=n%
+PageHeader as ur}from"@kirocrew/app-sdk/ui";function ce(e){let n=Math.max(1,Math.floor(e/60));if(n<60)return`${n} minute${n===1?"":"s"}`;let o=Math.floor(n/60),r=n%
 60;return r===0?`${o} hour${o===1?"":"s"}`:`${o}h ${r}m`}function fo(e){if(e.state==="merged")return"merged";if(e.state===
 "closed")return"closed";if(e.mergeable==="conflicting")return"conflict";if(e.ci==="failed")return"checks failing";if(e.ci===
 "pending")return"checks running"}function it(e,n,o){let r=new Set(n.filter(Boolean));if(r.size===0)return[];let i=new Set,
 c=[];for(let d of e){let g=d.slot;!g||!r.has(g)||!d.id||i.has(d.id)||(i.add(d.id),c.push({id:d.id,sessionKey:g,sessionLabel:o(
 g),tool:d.tool||"a tool",purpose:d.tool_purpose}))}return c}var Yn=5,Vn={"needs-you":0,running:1,done:2};function M(e){if(typeof e==
 "number")return e>1e10?e:e*1e3;if(!e)return 0;let n=Date.parse(e);return Number.isFinite(n)?n:0}function mo(e,n){if(e.paused)
-return"";let o=M(e.next_run_ts);if(!o)return"";let r=Math.round((o-n)/1e3);return r<=0?"":ue(r)}var Jn=72;function de(e,n){
+return"";let o=M(e.next_run_ts);if(!o)return"";let r=Math.round((o-n)/1e3);return r<=0?"":ce(r)}var Jn=72;function de(e,n){
 let o=e?.replace(/\s+/g," ").trim();if(!o)return n;let i=(o.split(/(?<=[.!?])\s+|;\s+|\s+[–—-]\s+/)[0]?.trim()||o).replace(
 /[.;,]$/,"");if(i.length<=Jn)return i;let c=i.slice(0,Jn),d=c.lastIndexOf(" ");return`${(d>24?c.slice(0,d):c).trim()}\u2026`}
-function ce(e){return!!e.source_links?.some(n=>n.kind!=="issue"&&(n.ci==="failed"||n.mergeable==="conflicting"))}var wo=/<\/?(?:invoke|parameter|function_calls|antml)|<[a-z_-]+\s+name="/i,
+function he(e){return!!e.source_links?.some(n=>n.kind!=="issue"&&(n.ci==="failed"||n.mergeable==="conflicting"))}var wo=/<\/?(?:invoke|parameter|function_calls|antml)|<[a-z_-]+\s+name="/i,
 ho=/^\((?:code|diff|widget|image)\)$/,bo=/(?:^|\s)(?:🎉|✅|✔|🚀)|^(?:goal completed|done\b|completed\b|finished\b|success\b|merged\b)|完成|已合并|已完成|完了/i,
 vo=/\bwhat next\??$|\bwould you like\b|\blet me know if\b|\bfeel free to\b|\banything else\b/i,yo=/\b(?:please|need your|need you to|needs? your|requires? your|waiting for you|waiting on you|blocked until|before i can|to proceed|to continue)\b/i,
 xo=/[?？]["'”’)\]]*$/;function lt(e){let n=e.last_message?.replace(/\s+/g," ").trim();return!n||ho.test(n)||wo.test(
 n)?null:n}function pn(e){if(!e.waiting_for_input)return null;let n=lt(e);return!n||bo.test(n)||vo.test(n)?null:yo.test(n)||
 xo.test(n)?n:null}function Qn(e){return e.pending_approval||pn(e)?"needs-you":e.running||e.subagents_running||e.orchestrating?
-"running":ce(e)?"needs-you":"done"}function ko(e,n){if(e.pending_approval)return n("approval_waiting");let o=pn(e);return o||
-(e.running||e.subagents_running||e.orchestrating?n("work_in_progress"):ce(e)?n("linked_change_issue"):lt(e)??n("recent_w\
-ork_ready"))}function ln(e,n){let o=e.project||e.workspace||e.agent;return o&&o.replace(/\\/g,"/").replace(/\/+$/,"").split(
-"/").pop()||n("session")}function _o(e){return e.pending_approval?"review-approval":pn(e)?"reply":"open"}function dt(e){
-return(e.source_links??[]).map(n=>({number:String(n.number??""),ref:{kind:n.kind==="issue"?"issue":"change",id:n.url,label:n.
-kind==="issue"?`issue #${n.number}`:`${n.provider} #${n.number}`,url:n.url,sessionKey:e.key,status:fo(n)}}))}function So(e,n){
-let o=dt(e).map(r=>r.ref);return{id:`session:${e.key}`,title:e.title||n("untitled_work"),summary:ko(e,n),state:Qn(e),moving:Qn(
-e)==="running"||void 0,issue:ce(e),updatedAt:M(e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:ln(
-e,n),queuedBehind:e.queue_depth||void 0,changeBlocked:ce(e)||void 0,action:_o(e),references:[{kind:"session",id:e.key,label:e.
-title||n("untitled_work"),sessionKey:e.key},...o]}}function gn(e,n){e.references.some(o=>o.kind===n.kind&&o.id===n.id)||
-e.references.push(n)}function ct(e){return(e.source||"").toLowerCase()==="subagent"}function Ro(e,n,o){let r=ct(n);e.state=
-"needs-you",e.updatedAt=Math.max(e.updatedAt,M(n.ts)),e.summary=o(r?"subagent_gate_waiting":"approval_waiting"),e.approvalKind=
-r?"subagent":"tool",e.action="review-approval",e.permissionId=n.id,e.permissionTool=n.tool||n.source,e.permissionPurpose=
-n.tool_purpose,e.permissionInput=n.tool_input,gn(e,{kind:"approval",id:n.id,label:n.tool||n.source||o("approval"),sessionKey:n.
-slot||e.sessionKey})}function No(e,n,o){e.updatedAt=Math.max(e.updatedAt,M(n.started)),e.issue||=!!(n.done&&(n.error||n.
-outcome==="failed")),n.done?(n.error||n.outcome==="failed")&&e.state!=="needs-you"&&(e.summary=o("agent_failed",{task:n.
-task})):e.state!=="needs-you"&&(e.state="running",e.summary=o("work_in_progress")),gn(e,{kind:"agent",id:n.id,label:n.agent||
-o("agent"),sessionKey:n.parent||e.sessionKey})}function Co(e,n,o){e.issue||=n.status==="failed",n.status==="running"&&e.
-state!=="needs-you"&&(e.state="running"),n.status==="failed"&&e.state!=="needs-you"&&(e.summary=o("workflow_failed",{name:n.
-name})),gn(e,{kind:"workflow",id:n.run_id,label:n.name||n.run_id,sessionKey:n.session_key||e.sessionKey})}function Io(e,n){
-if(n.pending_approval)return"needs-you";switch(e.state){case"needs-you":return"needs-you";case"done":case"dropped":return"\
-done";case"in-progress":return"running";default:return null}}function Ao(e,n,o){return!(n.running||n.subagents_running||
-n.orchestrating)?!1:e===o}function Wo(e){let n=null,o=-1;for(let r of e){let i=r.last_touched_turn??0;i>o&&(o=i,n=r)}return n}function Eo(e,n){let o=e.next_steps?.find(i=>i.what?.trim())?.what?.trim();if(o)return o;let r=[...e.progress??[]].reverse().
+"running":"done"}function ko(e,n){if(e.pending_approval)return n("approval_waiting");let o=pn(e);return o||(e.running||e.
+subagents_running||e.orchestrating?n("work_in_progress"):he(e)?n("linked_change_issue"):lt(e)??n("recent_work_ready"))}function ln(e,n){
+let o=e.project||e.workspace||e.agent;return o&&o.replace(/\\/g,"/").replace(/\/+$/,"").split("/").pop()||n("session")}function _o(e){
+return e.pending_approval?"review-approval":pn(e)?"reply":"open"}function dt(e){return(e.source_links??[]).map(n=>({number:String(
+n.number??""),ref:{kind:n.kind==="issue"?"issue":"change",id:n.url,label:n.kind==="issue"?`issue #${n.number}`:`${n.provider}\
+ #${n.number}`,url:n.url,sessionKey:e.key,status:fo(n)}}))}function So(e,n){let o=dt(e).map(r=>r.ref);return{id:`session\
+:${e.key}`,title:e.title||n("untitled_work"),summary:ko(e,n),state:Qn(e),moving:Qn(e)==="running"||void 0,issue:he(e),updatedAt:M(
+e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:ln(e,n),queuedBehind:e.queue_depth||void 0,changeBlocked:he(
+e)||void 0,action:_o(e),references:[{kind:"session",id:e.key,label:e.title||n("untitled_work"),sessionKey:e.key},...o]}}
+function gn(e,n){e.references.some(o=>o.kind===n.kind&&o.id===n.id)||e.references.push(n)}function ct(e){return(e.source||
+"").toLowerCase()==="subagent"}function Ro(e,n,o){let r=ct(n);e.state="needs-you",e.updatedAt=Math.max(e.updatedAt,M(n.ts)),
+e.summary=o(r?"subagent_gate_waiting":"approval_waiting"),e.approvalKind=r?"subagent":"tool",e.action="review-approval",
+e.permissionId=n.id,e.permissionTool=n.tool||n.source,e.permissionPurpose=n.tool_purpose,e.permissionInput=n.tool_input,
+gn(e,{kind:"approval",id:n.id,label:n.tool||n.source||o("approval"),sessionKey:n.slot||e.sessionKey})}function No(e,n,o){
+e.updatedAt=Math.max(e.updatedAt,M(n.started)),e.issue||=!!(n.done&&(n.error||n.outcome==="failed")),n.done?(n.error||n.
+outcome==="failed")&&e.state!=="needs-you"&&(e.summary=o("agent_failed",{task:n.task})):e.state!=="needs-you"&&(e.state=
+"running",e.summary=o("work_in_progress")),gn(e,{kind:"agent",id:n.id,label:n.agent||o("agent"),sessionKey:n.parent||e.sessionKey})}
+function Co(e,n,o){e.issue||=n.status==="failed",n.status==="running"&&e.state!=="needs-you"&&(e.state="running"),n.status===
+"failed"&&e.state!=="needs-you"&&(e.summary=o("workflow_failed",{name:n.name})),gn(e,{kind:"workflow",id:n.run_id,label:n.
+name||n.run_id,sessionKey:n.session_key||e.sessionKey})}function Io(e,n){if(n.pending_approval)return"needs-you";switch(e.
+state){case"needs-you":return"needs-you";case"done":case"dropped":return"done";case"in-progress":return"running";default:
+return null}}function Ao(e,n,o){return!(n.running||n.subagents_running||n.orchestrating)?!1:e===o}function Wo(e){let n=null,
+o=-1;for(let r of e){let i=r.last_touched_turn??0;i>o&&(o=i,n=r)}return n}function Eo(e,n){let o=e.next_steps?.find(i=>i.what?.trim())?.what?.trim();if(o)return o;let r=[...e.progress??[]].reverse().
 find(i=>i.trim());return r?r.trim():e.initial_intent?.trim()||n("work_in_progress")}var To=3;function Po(e){return[e.title??
 "",e.initial_intent??"",...e.progress??[],...(e.next_steps??[]).map(n=>n.what??"")].join(" ")}function Bo(e,n){if(!n)return!1;
 let o=n.replace(/[.*+?^${}()|[\]\\]/gu,"\\$&");return new RegExp(`#\\s?${o}\\b`,"u").test(e)}function Xn(e,n){if(e.length===
@@ -48,13 +48,13 @@ let o=n.replace(/[.*+?^${}()|[\]\\]/gu,"\\$&");return new RegExp(`#\\s?${o}\\b`,
 intents??[];if(r.length===0)return[];let i=dt(e),c=[],d=Wo(r),b=!!(e.running||e.subagents_running||e.orchestrating)?[]:r.
 filter(s=>s.state==="in-progress");b.forEach(s=>{let p=r.indexOf(s),w=(s.next_steps??[]).filter(S=>S.what?.trim());c.push(
 {id:`unattended:${e.key}:${p}`,title:de(s.title,e.title||o("untitled_work")),summary:w[0]?.what?.trim()||o("no_next_step"),
-state:"needs-you",issue:ce(e),updatedAt:M(e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:ln(e,o),
-queuedBehind:e.queue_depth||void 0,changeBlocked:ce(e)||void 0,unattendedGoals:1,action:"resume",references:[{kind:"sess\
+state:"needs-you",issue:he(e),updatedAt:M(e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:ln(e,o),
+queuedBehind:e.queue_depth||void 0,changeBlocked:he(e)||void 0,unattendedGoals:1,action:"resume",references:[{kind:"sess\
 ion",id:e.key,label:e.title||o("untitled_work"),sessionKey:e.key},...Xn(i,s)],nextSteps:w,initialIntent:s.initial_intent?.
 trim()||void 0,progress:(s.progress??[]).filter(S=>S.trim()),stale:!!n.stale,lastTouchedTurn:s.last_touched_turn??0})}),
 r.forEach((s,p)=>{if(b.includes(s))return;let w=Io(s,e);if(!w)return;let S=(s.next_steps??[]).filter(v=>v.what?.trim());
 c.push({id:`intent:${e.key}:${p}`,title:de(s.title,e.title||o("untitled_work")),summary:Eo(s,o),state:w,issue:!1,updatedAt:M(
-e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:ln(e,o),queuedBehind:e.queue_depth||void 0,changeBlocked:ce(
+e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:ln(e,o),queuedBehind:e.queue_depth||void 0,changeBlocked:he(
 e)||void 0,unverified:s.verified===!1||void 0,action:"open",references:[{kind:"session",id:e.key,label:e.title||o("untit\
 led_work"),sessionKey:e.key},...Xn(i,s)],nextSteps:S,initialIntent:s.initial_intent?.trim()||void 0,progress:(s.progress??
 []).filter(v=>v.trim()),stale:!!n.stale,lastTouchedTurn:s.last_touched_turn??0,moving:Ao(s,e,d)||void 0})});let R=c.filter(
@@ -65,7 +65,7 @@ change_blocked:40,merge_ready:34,assigned_to_you:32,nobody_on_it:30,queued_behin
 return e.updatedAt?Math.max(0,Math.floor((n-e.updatedAt)/36e5)):0}var Fe=5;function ut(e,n,o=Date.now()){let r=wn(e),i=yt(
 e.filter(d=>d.state==="needs-you"),o),c=[`Fleet: ${r["needs-you"]} waiting on the user, ${r.running} in progress, ${r.done}\
  finished recently.`];return i.length===0?(c.push("Nothing is waiting on the user."),c):(c.push(`Waiting on the user, in\
- the order the list shows them (top ${Math.min(Fe,i.length)}):`),i.slice(0,Fe).forEach((d,g)=>{let b=Re(pe(d,o),n),R=d.sessionKey?
+ the order the list shows them (top ${Math.min(Fe,i.length)}):`),i.slice(0,Fe).forEach((d,g)=>{let b=Re(ue(d,o),n),R=d.sessionKey?
 ` [session ${d.sessionKey}]`:"";c.push(`${g+1}. ${d.title} \u2014 ${d.summary} (${b})${R}`)}),i.length>Fe&&c.push(`\u2026and ${i.
 length-Fe} more waiting.`),c)}var dn=new Set(["the","a","an","and","or","to","for","of","in","on","at","is","it","this",
 "that","with","from","into","be","do","so","as","by","fix","add","make","update","work","session","app","new","use","run",
@@ -93,24 +93,24 @@ iverable","same_topic","same_step"];function Uo(e,n,o=pt){for(let r of e){let i=
 if(g===r.sessionKey||c.has(g)||n.split.includes(mt(r,d)))continue;let b=gt(r,d,o);b&&(c.add(g),i.push({sessionKey:g,title:d.
 title,because:b}))}i.length!==0&&(i.sort((d,g)=>at.indexOf(d.because)-at.indexOf(g.because)),r.relatedSessions=i.slice(0,
 an),i.length>an&&(r.relatedMore=i.length-an))}}var jo=3e4;function wt(e,n,o=Date.now()){return Object.keys(n).length===0?
-e:e.map(r=>{let i=n[r.id];return!i||o-i>jo||r.state==="running"?r:{...r,state:"running",moving:!0,instructed:!0}})}function pe(e,n=Date.
+e:e.map(r=>{let i=n[r.id];return!i||o-i>jo||r.state==="running"?r:{...r,state:"running",moving:!0,instructed:!0}})}function ue(e,n=Date.
 now()){let o=[],r=(c,d,g=1)=>{o.push({signal:c,weight:Ko[c]*g,values:d})};e.approvalKind==="subagent"?r("subagent_gate"):
 e.approvalKind==="tool"&&r("approval_owed"),e.action==="reply"&&r("input_requested"),e.unverified&&r("unverified_complet\
 ion"),e.loopRepeats&&r("error_loop",{repeats:String(e.loopRepeats)}),e.changesRequested&&r("changes_requested"),e.runFailed&&
-r("run_failed"),e.stalledFor&&r("stalled",{duration:ue(e.stalledFor)}),e.assignedToYou&&r("assigned_to_you"),e.changeBlocked&&
+r("run_failed"),e.stalledFor&&r("stalled",{duration:ce(e.stalledFor)}),e.assignedToYou&&r("assigned_to_you"),e.changeBlocked&&
 r("change_blocked"),e.mergeReady&&r("merge_ready"),e.unattendedGoals&&r("nobody_on_it",{count:String(e.unattendedGoals)}),
 e.queuedBehind&&r("queued_behind",{count:String(e.queuedBehind)},Math.min(e.queuedBehind,3));let i=Oo(e,n);return i>0&&r(
 "waiting_a_while",{hours:String(i)},Math.min(i,Do)),o.sort((c,d)=>d.weight-c.weight),{score:o.reduce((c,d)=>c+d.weight,0),
 signals:o}}var Go={approval_owed:"unblock",subagent_gate:"unblock",input_requested:"unblock",unverified_completion:"unbl\
 ock",error_loop:"unblock",run_failed:"unblock",stalled:"unblock",changes_requested:"unblock",change_blocked:"unblock",merge_ready:"\
 unblock",assigned_to_you:"followup",nobody_on_it:"followup"};function fn(e,n=Date.now()){if(e.state!=="needs-you")return null;
-for(let o of pe(e,n).signals){let r=Go[o.signal];if(r)return r}return null}var ht=14400*1e3;function bt(e,n,o,r=Date.now()){
+for(let o of ue(e,n).signals){let r=Go[o.signal];if(r)return r}return null}var ht=14400*1e3;function bt(e,n,o,r=Date.now()){
 let i=0,c=[];for(let d of e){if(d.state!=="needs-you"){c.push(d);continue}let g=n[d.id];if(g&&g>r){i+=1;continue}let b=o[d.
 id];if(b!==void 0&&d.updatedAt<=b){c.push({...d,state:"done",issue:!1});continue}c.push(d)}return{items:c,snoozedCount:i}}
 var mn=4320*60*1e3;function vt(e,n=Date.now()){return e.state!=="done"||e.updatedAt===0?!0:n-e.updatedAt<=mn}var Yo={"ne\
 eds-you":1,running:-1,done:-1};function Vo(e,n,o){let r=e.updatedAt>0,i=n.updatedAt>0;return!r&&!i?0:r?i?(e.updatedAt-n.
 updatedAt)*o:-1:1}function Re(e,n){let o=e.signals.slice(0,2);return o.length===0?n("rank_nothing_pressing"):o.map(i=>n(
-`rank_${i.signal}`,i.values)).join(n("rank_join"))}function yt(e,n=Date.now()){let o=new Map(e.map(r=>[r.id,pe(r,n)]));return[
+`rank_${i.signal}`,i.values)).join(n("rank_join"))}function yt(e,n=Date.now()){let o=new Map(e.map(r=>[r.id,ue(r,n)]));return[
 ...e].sort((r,i)=>{let c=Vn[r.state]-Vn[i.state];if(c!==0)return c;if(r.state==="needs-you"){let d=(o.get(i.id)?.score??
 0)-(o.get(r.id)?.score??0);if(d!==0)return d}else if(r.issue!==i.issue)return r.issue?-1:1;return Vo(r,i,Yo[r.state])})}
 function xt(e,n,o={},r={},i={},c=ft,d=Date.now()){let g=new Map,b=new Map;for(let s of e.slots){if(!s.key||Mo.has(s.key)||
@@ -133,7 +133,7 @@ provenance:n("owned_provenance",{repo:m.repo}),references:[{kind:x==="issue"?"is
 url:m.url,status:m.status==="awaiting_review"?void 0:m.status.replace(/_/g," ")}],action:void 0,owned:x,changeBlocked:T||
 void 0,changesRequested:$||void 0,mergeReady:C||void 0,assignedToYou:H||void 0})}}for(let[s,p]of Object.entries(r)){let w=b.
 get(s);w&&(w.state="needs-you",w.issue=!0,w.stalledFor=p.silent_secs,w.summary=p.reason?n("stalled_because",{reason:p.reason,
-duration:ue(p.silent_secs)}):n("stalled_for",{duration:ue(p.silent_secs)}),w.action="open")}for(let[s,p]of Object.entries(
+duration:ce(p.silent_secs)}):n("stalled_for",{duration:ce(p.silent_secs)}),w.action="open")}for(let[s,p]of Object.entries(
 i)){let w=b.get(s);w&&(w.state="needs-you",w.issue=!0,w.loopRepeats=p.repeats,w.summary=n("error_loop",{tool:p.tool,repeats:String(
 p.repeats)}),w.action="open")}for(let s of e.approvals){let p=s.slot?b.get(s.slot):void 0;if(p){Ro(p,s,n);continue}g.set(
 `approval:${s.id}`,{id:`approval:${s.id}`,title:de(s.tool||s.source,n("approval_needed")),summary:s.tool_purpose||n("too\
@@ -1057,7 +1057,7 @@ round((n-e)/1e3));if(o<60)return"just now";let r=Math.round(o/60);if(r<60)return
 2-digit"}):""}function be(e,n,o){return e<=0?null:`${e} ${e===1?n:o}`}function pr(e,n=Date.now(),o=!1){let r=hn(e),i=[o?
 null:be(r.sessions,"session","sessions"),be(r.prs,"PR","PRs"),be(r.issues,"issue","issues"),be(r.loops,"loop","loops"),be(
 r.crons,"cron","crons"),be(r.agents,"agent","agents")].filter(d=>!!d),c=An(r.lastActivityAt,n);return c&&i.push(`last ac\
-tive ${c}`),i.join(" \xB7 ")}var ge="crew-manager-conductor",gr=5e3,fr={session:"Session",approval:"Approval",agent:"Age\
+tive ${c}`),i.join(" \xB7 ")}var pe="crew-manager-conductor",gr=5e3,fr={session:"Session",approval:"Approval",agent:"Age\
 nt",workflow:"Workflow",monitor:"Monitor",artifact:"Artifact",approval_waiting:"Review the pending approval request",subagent_gate_waiting:"\
 Allow or refuse a sub-agent held at the spawn gate",information_needed:"Answer the request in the work thread",decision_ready:"\
 Make the decision this work is waiting on",work_in_progress:"Work is in progress",linked_change_issue:"Open the linked c\
@@ -1175,11 +1175,11 @@ label:"Unblock",cls:"ow-lane-unblock"},followup:{label:"Follow up",cls:"ow-lane-
 "done"?"done":e.state==="running"?"running":fn(e)??"unblock"}function Rr({items:e,selectedId:n,onSelect:o,onOpenSession:r,
 onAnswerPermission:i,onDecideApproval:c,permissionBusy:d,onRetry:g,retryBusy:b,onPickStep:R,onSnooze:A,onHandled:s,doneTitles:p}){
 let[w,S]=_(!1),v=new Map;for(let N of e){let m=Sr(N),x=v.get(m);x?x.push(N):v.set(m,[N])}return f(Ae,{children:[kr.filter(
-N=>v.has(N)).map(N=>{let m=v.get(N),x=N==="unblock"||N==="followup"?_r[N]:null,T=x?m.map(C=>C.action!=="resume"?Re(pe(C),
+N=>v.has(N)).map(N=>{let m=v.get(N),x=N==="unblock"||N==="followup"?_r[N]:null,T=x?m.map(C=>C.action!=="resume"?Re(ue(C),
 z):""):[],$=x&&T.length>0&&T.every(C=>C&&C===T[0])?T[0]:void 0;return f("div",{className:"ow-lane",children:[x&&f("div",
 {className:"ow-lane-head",children:[a("span",{className:`ow-lane-badge ${x.cls}`,children:x.label}),$&&a("span",{className:"\
 ow-lane-reason",children:$})]}),m.map(C=>a(Ht,{item:C,hideBadge:!0,compact:!0,selected:n===C.id,continuation:!0,whyRanked:$?
-void 0:C.state==="needs-you"&&C.action!=="resume"?Re(pe(C),z):void 0,onSelect:()=>o(C),onOpenSession:r,onAnswerPermission:i,
+void 0:C.state==="needs-you"&&C.action!=="resume"?Re(ue(C),z):void 0,onSelect:()=>o(C),onOpenSession:r,onAnswerPermission:i,
 onDecideApproval:c,permissionBusy:d,onRetry:g,retryBusy:b,onPickStep:R,onSnooze:A,onHandled:s},C.id))]},N)}),!v.has("don\
 e")&&p&&p.length>0&&f("div",{className:"ow-lane ow-lane-done",children:[f("button",{type:"button",className:"ow-goals-to\
 ggle","aria-expanded":w,onClick:()=>S(N=>!N),children:[a(ae,{className:"ow-icon","data-open":w?"true":void 0,"aria-hidde\
@@ -1193,7 +1193,7 @@ key]:!1;return f("div",{className:`ow-block${I.header==="session"?" ow-goalcard"
 items,folded:j,onToggle:$?()=>$(I.key,!j):void 0,onOpen:()=>i(I.sessionKey)}),I.header==="session"?!j&&a(Rr,{items:I.items,
 doneTitles:I.sessionKey?x?.[I.sessionKey]:void 0,selectedId:o,onSelect:r,onOpenSession:i,onAnswerPermission:c,onDecideApproval:d,
 permissionBusy:g,onRetry:b,retryBusy:R,onPickStep:p,onSnooze:w,onHandled:S}):I.items.map(O=>a(Ht,{item:O,selected:o===O.
-id,whyRanked:O.state==="needs-you"&&O.action!=="resume"?Re(pe(O),z):void 0,onSelect:()=>r(O),onOpenSession:i,onAnswerPermission:c,
+id,whyRanked:O.state==="needs-you"&&O.action!=="resume"?Re(ue(O),z):void 0,onSelect:()=>r(O),onOpenSession:i,onAnswerPermission:c,
 onDecideApproval:d,permissionBusy:g,onRetry:b,retryBusy:R,onStop:A,stopBusy:s,onPickStep:p,onSnooze:w,onHandled:S},O.id))]},
 I.key)};return f("section",{className:"ow-section","aria-label":e,children:[H?null:m?f(Ie,{onActivate:m,className:"ow-se\
 ction-toggle",children:[a(Pt,{label:e,count:n.length,subtitle:C}),a(ae,{className:"ow-icon ow-section-chevron","data-ope\
@@ -1203,7 +1203,7 @@ let r=ut(n,z),i=o.length?[`Noticed since you last spoke (${o.length}):`,...o.map
 y matter to what the user asked."]:[];if(!e)return["Crew Manager context: workspace overview.",...r,...i,"Answer the use\
 r about the state of their work. This is a conversation, not an action channel."].join(`
 `);let c=e.references.map(g=>`${g.kind}: ${g.label} (${g.id})`).join(`
-`),d=[e.stalledFor?`Silent for ${ue(e.stalledFor)} while still marked running.`:void 0,e.loopRepeats?`The same failure h\
+`),d=[e.stalledFor?`Silent for ${ce(e.stalledFor)} while still marked running.`:void 0,e.loopRepeats?`The same failure h\
 as repeated ${e.loopRepeats} times.`:void 0,e.unverified?"Reported finished but never verified.":void 0,e.changeBlocked?
 "A linked change is failing or conflicting.":void 0,e.queuedBehind?`${e.queuedBehind} further prompt(s) are queued in th\
 is same session.`:void 0,e.approvalKind?`An approval is owed (${e.approvalKind}). Only the user can answer it; recommend\
@@ -1220,7 +1220,7 @@ ${c}`,...i,"This context was selected silently. Answer the user about it; the us
 emselves."].filter(g=>!!g).join(`
 `)}var $t="crew-manager.panel-widths";function Cr(e,n){let o=e?.first_seen;if(!o)return[];let r=typeof n=="number"?n<=1e10?
 n*1e3:n:n?Date.parse(n):NaN;if(!Number.isFinite(r))return[];let i=[];for(let d of e?.stalls??[]){let g=o[d.key];typeof g==
-"number"&&(g*1e3<=r||i.push(d.reason?`${d.label} went quiet \u2014 ${d.reason}`:`${d.label} went quiet after ${ue(d.silent_secs)}`))}
+"number"&&(g*1e3<=r||i.push(d.reason?`${d.label} went quiet \u2014 ${d.reason}`:`${d.label} went quiet after ${ce(d.silent_secs)}`))}
 for(let d of e?.error_loops??[]){let g=o[d.key];typeof g=="number"&&(g*1e3<=r||i.push(`${d.label} repeated the same ${d.
 tool} failure ${d.repeats} times`))}let c=5;return i.length>c?[...i.slice(0,c),`and ${i.length-c} more`]:i}var J={workMin:300,
 railReserve:370,conductorMin:300,conductorMax:620,mainReserve:676};function je(e,n,o,r,i){let c=Math.min(i,Math.max(o,n-
@@ -1236,7 +1236,7 @@ S+(e==="start"?w:-w),p.clientWidth,o,r,i))}})}function Ir(){let e=ir(),n=V(e);n.
 [d,g]=_(()=>{let t=se(Sn,null);return t&&Ne.includes(t)?t:"work"}),[b,R]=_(()=>{let t=se(_n,null)??"loops",l=Ne.includes(
 t)?t:"loops",u=se(Sn,null),h=u&&Ne.includes(u)?u:"work";return l===h?It.find(k=>k!==h)??null:l}),A=D(t=>{R(l=>{let u=l===
 t?null:t;return ne(_n,u),u})},[]),[s,p]=_(null),[w,S]=_("session"),[v,N]=_(null),[m,x]=_(null),[T,$]=_({}),[C,H]=_("unkn\
-own"),P=V("unknown"),U=V(new Map),[Q,I]=_({}),[j,O]=_(null),[y,ie]=_({}),[We,Ut]=_([]),[X,Ee]=_(null),[fe,Wn]=_(null),[me,
+own"),P=V("unknown"),U=V(new Map),[Q,I]=_({}),[j,O]=_(null),[y,ie]=_({}),[We,Ut]=_([]),[X,Ee]=_(null),[ge,Wn]=_(null),[fe,
 En]=_(null),[Tn,Pn]=_(()=>se(kn)),[Bn,jt]=_(()=>se(At)),Ge=V(null),Ye=V(null),[te,Ve]=_(()=>se($t,{work:null,conductor:null}));
 Y(()=>{ne($t,te)},[te]),Y(()=>{let t=()=>Ve(l=>{let u=Ye.current?.clientWidth??0,h=Ge.current?.clientWidth??0;return{work:l.
 work==null||u===0?l.work:je(l.work,u,J.workMin,J.railReserve,1/0),conductor:l.conductor==null||h===0?l.conductor:je(l.conductor,
@@ -1260,7 +1260,7 @@ isArray(qe.artifacts)?qe.artifacts:[],loops:Array.isArray(E?.loops)?E.loops:[]})
 en(null),to(Date.now())}catch(u){B.current&&t===xe.current&&en(u instanceof Error?u:new Error("Unable to load Crew Manag\
 er sources"))}finally{B.current&&t===xe.current&&Ln(!1)}},[]);Y(()=>{W();let t=window.setInterval(()=>{W()},gr);return()=>window.
 clearInterval(t)},[W]);let so=()=>{Ln(!0),en(null),W()},on=D(()=>{ye||(qn(!0),W().finally(()=>{B.current&&qn(!1)}))},[W,
-ye]);Y(()=>{if(!m||P.current==="unsupported"||P.current==="disabled")return;let t=_t(m.slots,ge,Date.now(),u=>U.current.
+ye]);Y(()=>{if(!m||P.current==="unsupported"||P.current==="disabled")return;let t=_t(m.slots,pe,Date.now(),u=>U.current.
 get(u.key)===vn(u));if(t.length===0)return;let l=!1;return(async()=>{let{summaries:u,support:h}=await St(t,k=>n.current.
 get(k));if(!(l||!B.current)&&(P.current=h,H(h),h==="available")){for(let k of t)u[k.key]&&U.current.set(k.key,vn(k));$(k=>({
 ...k,...u}))}})(),()=>{l=!0}},[m]),Y(()=>{if(!m||!On.current)return;let t=!1;return(async()=>{try{let l=await n.current.
@@ -1272,19 +1272,19 @@ agents:[],workflows:[],crons:[],artifacts:[],loops:[]},assigned:Kn},z,T,Q,$n),y)
 [Hn,Tn,Bn]),K=F(()=>Pe.items.filter(t=>vt(t)),[Pe]),Be=F(()=>wn(K),[K]),Un=F(()=>{let t={};for(let l of K){if(l.state!==
 "done"||!l.sessionKey)continue;let u=t[l.sessionKey];u?u.push(l.title):t[l.sessionKey]=[l.title]}return t},[K]),oe=F(()=>K.
 find(t=>t.id===s)??null,[K,s]),ke=F(()=>i==="all"?K:K.filter(t=>t.state===i),[i,K]);Y(()=>r(Be["needs-you"]),[Be,r]),Y(()=>{
-s&&!K.some(t=>t.id===s)&&p(null)},[K,s]);let le=m?.slots.find(t=>t.key===ge),ao=!!(le||oo),jn=V(!1);Y(()=>{let t=le;if(!t||
+s&&!K.some(t=>t.id===s)&&p(null)},[K,s]);let le=m?.slots.find(t=>t.key===pe),ao=!!(le||oo),jn=V(!1);Y(()=>{let t=le;if(!t||
 jn.current||t.agent)return;jn.current=!0;let l=n.current;l.get("/api/apps/crew-manager/conductor-agent").then(u=>u?.available&&
 u.agent?u.agent:null).catch(()=>null).then(u=>{if(!(!u||!B.current))return l.post(`/api/chat/slots/${encodeURIComponent(
-ge)}/agent`,{agent:u}).then(()=>{W()})}).catch(()=>{})},[le,W]),Y(()=>{!m||le||tn.current||(tn.current=!0,e.get("/api/ap\
+pe)}/agent`,{agent:u}).then(()=>{W()})}).catch(()=>{})},[le,W]),Y(()=>{!m||le||tn.current||(tn.current=!0,e.get("/api/ap\
 ps/crew-manager/conductor-agent").then(t=>t?.available&&t.agent?t.agent:null).catch(()=>null).then(t=>e.post("/api/chat/\
-slots",{name:ge,title:"Conductor",...t?{agent:t}:{}})).then(()=>{B.current&&(ro(!0),W())}).catch(t=>{B.current&&(tn.current=
+slots",{name:pe,title:"Conductor",...t?{agent:t}:{}})).then(()=>{B.current&&(ro(!0),W())}).catch(t=>{B.current&&(tn.current=
 !1,Z(t instanceof Error?`Conductor session could not be created: ${t.message}`:"Conductor session could not be created"))}))},
 [e,le,W,m]);let Gn=F(()=>it(m?.approvals??[],We,t=>K.find(l=>l.sessionKey===t)?.title??m?.slots?.find(l=>l.key===t)?.title??
-t),[K,m,We]),we=oe&&!oe.permissionId?oe:null,rn=F(()=>{let t=(m?.loops??[]).filter(u=>u&&u.active!==!1&&u.slot_key);if(t.
+t),[K,m,We]),me=oe&&!oe.permissionId?oe:null,rn=F(()=>{let t=(m?.loops??[]).filter(u=>u&&u.active!==!1&&u.slot_key);if(t.
 length===0)return[];let l=new Map;for(let u of K)for(let h of u.references)h.kind!=="session"||!h.id||h.label&&!l.has(h.
 id)&&l.set(h.id,h.label);return t.map(u=>{let h=Number(u.cycle_count)||0,k=Number(u.max_cycles)||0;return{key:u.slot_key,
 title:l.get(u.slot_key)??u.slot_key,progress:k>0?`${h}/${k}`:`${h} ${h===1?"cycle":"cycles"}`,remaining:k>0?Math.max(0,k-
-h):null,instruction:(u.message??"").replace(/\s+/g," ").trim(),lastFire:M(u.last_fire_ts)}})},[m,K]),he=F(()=>{let t=new Date;
+h):null,instruction:(u.message??"").replace(/\s+/g," ").trim(),lastFire:M(u.last_fire_ts)}})},[m,K]),we=F(()=>{let t=new Date;
 t.setHours(0,0,0,0);let l=t.getTime(),u=l+864e5,h=m?.crons??[],k=new Map;for(let E of Qe){let re=M(E.started_at);if(!E.job_id||
 re<l||re>=u)continue;let ee=k.get(E.job_id)??{count:0,failed:0,last:0};ee.count+=1,E.status&&E.status!=="success"&&(ee.failed+=
 1),ee.last=Math.max(ee.last,re),k.set(E.job_id,ee)}let G=h.map(E=>{let re=k.get(E.id),ee=M(E.next_run_ts),go=ee>=l&&ee<u;
@@ -1297,24 +1297,24 @@ t.permissionId),Z(null);try{await n.current.post(`/api/chat/slots/${encodeURICom
 request_id:t.permissionId}),W()}catch(u){Z(u instanceof Error?`Could not answer that request: ${u.message}`:"Could not a\
 nswer that request"),W()}finally{B.current&&Ee(null)}}},[W,X]),io=D(t=>{Pn(l=>{let u=Object.fromEntries(Object.entries(l).
 filter(([,h])=>h>Date.now()));return u[t]=Date.now()+ht,ne(kn,u),u}),p(null)},[]),lo=D((t,l)=>{jt(u=>{let h={...u,[t]:l};
-return ne(At,h),h}),p(null)},[]),co=D(()=>{Pn({}),ne(kn,{})},[]),uo=D(()=>{Vt(t=>(ne(Wt,!t),!t))},[]),Me=D(async t=>{if(!fe){
+return ne(At,h),h}),p(null)},[]),co=D(()=>{Pn({}),ne(kn,{})},[]),uo=D(()=>{Vt(t=>(ne(Wt,!t),!t))},[]),Me=D(async t=>{if(!ge){
 Wn(t),Z(null);try{await n.current.post(t,{}),W()}catch(l){Z(l instanceof Error?`Could not re-run it: ${l.message}`:"Coul\
-d not re-run it"),W()}finally{B.current&&Wn(null)}}},[W,fe]),Ke=D(async t=>{if(!me){En(t),Z(null);try{await n.current.del(
+d not re-run it"),W()}finally{B.current&&Wn(null)}}},[W,ge]),Ke=D(async t=>{if(!fe){En(t),Z(null);try{await n.current.del(
 t),N("Stopped the monitor loop. Re-arming it is done from the session itself."),W()}catch(l){let u=l instanceof Error?l.
 message:"";/404|not found/i.test(u)?N("That loop had already stopped."):Z(u?`Could not stop it: ${u}`:"Could not stop it"),
-W()}finally{B.current&&En(null)}}},[W,me]),Se=D(async t=>{let l=oe&&!oe.permissionId?oe:null;if(w==="session"&&l?.sessionKey){
+W()}finally{B.current&&En(null)}}},[W,fe]),Se=D(async t=>{let l=oe&&!oe.permissionId?oe:null;if(w==="session"&&l?.sessionKey){
 let u=l.sessionKey;if(await n.current.post("/api/chat",{message:t,slot:u}).catch(h=>{if(!(h instanceof SyntaxError))throw h}),
 !B.current)return;ie(h=>({...h,[l.id]:Date.now()})),Ut(h=>h.includes(u)?h:[...h,u]),N(`Sent new instructions to ${l.title}`),
-p(null),W();return}await n.current.post(`/api/chat/slots/${encodeURIComponent(ge)}/context`,{content:Nr(oe,K,Cr(j,le?.last_ts)),
-source:"crew-manager",ephemeral:!0}).catch(()=>{}),await n.current.post("/api/chat",{message:t,slot:ge}).catch(u=>{if(!(u instanceof
+p(null),W();return}await n.current.post(`/api/chat/slots/${encodeURIComponent(pe)}/context`,{content:Nr(oe,K,Cr(j,le?.last_ts)),
+source:"crew-manager",ephemeral:!0}).catch(()=>{}),await n.current.post("/api/chat",{message:t,slot:pe}).catch(u=>{if(!(u instanceof
 SyntaxError))throw u})},[oe,K,W,w,j,le]),sn={"needs-you":ke.filter(t=>t.state==="needs-you"),running:ke.filter(t=>t.state===
 "running"),done:ke.filter(t=>t.state==="done")},De=D((t,l)=>{Gt(u=>{let h={...u,[t]:l};return ne(Et,h),h})},[]),Oe=t=>o(
-`/chat?sid=${encodeURIComponent(t)}`),Le=t=>{p(l=>l===t.id?null:t.id),N(null),S("session")},po=we?f("div",{className:"ow\
--quote ow-quote-docked",children:[f("div",{className:"ow-quote-body",children:[we.sessionKey?a("button",{type:"button",className:"\
+`/chat?sid=${encodeURIComponent(t)}`),Le=t=>{p(l=>l===t.id?null:t.id),N(null),S("session")},po=me?f("div",{className:"ow\
+-quote ow-quote-docked",children:[f("div",{className:"ow-quote-body",children:[me.sessionKey?a("button",{type:"button",className:"\
 ow-scope-toggle","aria-pressed":w==="conductor","aria-label":w==="session"?"Sending to this session. Activate to send to\
  the Conductor instead.":"Sending to the Conductor. Activate to send to this session instead.",onClick:()=>S(t=>t==="ses\
 sion"?"conductor":"session"),children:w==="session"?"Instructing":"To Conductor"}):a("span",{className:"ow-eyebrow",children:"\
-Quoted"}),a("span",{className:"ow-quote-title",title:we.title,children:we.title})]}),a(q,{className:"ow-quote-clear","ar\
+Quoted"}),a("span",{className:"ow-quote-title",title:me.title,children:me.title})]}),a(q,{className:"ow-quote-clear","ar\
 ia-label":"Remove the quoted work item",onClick:()=>{p(null),N(null)},children:"Clear"})]}):null;return f("div",{className:"\
 ow-root","data-crew-manager-shell":"quiet-split",children:[a("style",{children:Rt}),a("div",{className:"ow-titlebar",children:a(
 ur,{title:f("span",{className:"ow-title-line",children:["Crew Manager",a("span",{className:"ow-beta","aria-label":"Beta \
@@ -1335,17 +1335,17 @@ the filter to see sessions in another state."}):i==="all"?f(Ae,{children:[a(He,{
  decision or reply from you",items:sn["needs-you"],doneBySession:Un,selectedId:s,onSelect:Le,onSnooze:io,onHandled:lo,footer:Pe.
 snoozedCount>0?f("button",{type:"button",className:"ow-aside-note",onClick:co,children:[Pe.snoozedCount," set aside for \
 later \u2014 bring back"]}):void 0,onOpenSession:Oe,onAnswerPermission:(t,l)=>{_e(t,l)},onDecideApproval:(t,l)=>{$e(t,l)},
-permissionBusy:X!==null,onRetry:t=>{Me(t)},retryBusy:fe!==null,onStop:t=>{Ke(t)},stopBusy:me!==null,onPickStep:t=>{Se(t)},
+permissionBusy:X!==null,onRetry:t=>{Me(t)},retryBusy:ge!==null,onStop:t=>{Ke(t)},stopBusy:fe!==null,onPickStep:t=>{Se(t)},
 collapsedCards:Te,onToggleCard:De,emptyLabel:"Nothing needs your input right now."}),a(He,{title:"In progress",subtitle:"\
 Being worked on right now",items:sn.running,doneBySession:Un,selectedId:s,onSelect:Le,onOpenSession:Oe,onAnswerPermission:(t,l)=>{
-_e(t,l)},onDecideApproval:(t,l)=>{$e(t,l)},permissionBusy:X!==null,onRetry:t=>{Me(t)},retryBusy:fe!==null,onStop:t=>{Ke(
-t)},stopBusy:me!==null,onPickStep:t=>{Se(t)},collapsedCards:Te,onToggleCard:De,emptyLabel:"Nothing is in progress right \
+_e(t,l)},onDecideApproval:(t,l)=>{$e(t,l)},permissionBusy:X!==null,onRetry:t=>{Me(t)},retryBusy:ge!==null,onStop:t=>{Ke(
+t)},stopBusy:fe!==null,onPickStep:t=>{Se(t)},collapsedCards:Te,onToggleCard:De,emptyLabel:"Nothing is in progress right \
 now."}),a(He,{title:"Done recently",subtitle:"Finished in the last few days",items:sn.done,selectedId:s,onSelect:Le,collapsed:Yt,
 onToggleCollapsed:uo,onOpenSession:Oe,onAnswerPermission:(t,l)=>{_e(t,l)},onDecideApproval:(t,l)=>{$e(t,l)},permissionBusy:X!==
-null,onRetry:t=>{Me(t)},retryBusy:fe!==null,onStop:t=>{Ke(t)},stopBusy:me!==null,onPickStep:t=>{Se(t)},collapsedCards:Te,
+null,onRetry:t=>{Me(t)},retryBusy:ge!==null,onStop:t=>{Ke(t)},stopBusy:fe!==null,onPickStep:t=>{Se(t)},collapsedCards:Te,
 onToggleCard:De,emptyLabel:"No recent completed work."})]}):a(He,{title:Rn[i],items:ke,selectedId:s,onSelect:Le,onOpenSession:Oe,
-onAnswerPermission:(t,l)=>{_e(t,l)},onDecideApproval:(t,l)=>{$e(t,l)},permissionBusy:X!==null,onRetry:t=>{Me(t)},retryBusy:fe!==
-null,onStop:t=>{Ke(t)},stopBusy:me!==null,onPickStep:t=>{Se(t)},collapsedCards:Te,onToggleCard:De,emptyLabel:"No matchin\
+onAnswerPermission:(t,l)=>{_e(t,l)},onDecideApproval:(t,l)=>{$e(t,l)},permissionBusy:X!==null,onRetry:t=>{Me(t)},retryBusy:ge!==
+null,onStop:t=>{Ke(t)},stopBusy:fe!==null,onPickStep:t=>{Se(t)},collapsedCards:Te,onToggleCard:De,emptyLabel:"No matchin\
 g work"})})})]}),f("details",{...Ze("loops"),children:[f("summary",{onClick:t=>{t.preventDefault(),d!=="loops"&&A("loops")},
 children:[f("span",{className:"ow-stack-title",children:[a(ae,{className:"ow-icon ow-stack-chevron"}),a(qt,{className:"o\
 w-icon"}),"Loops"]}),f("span",{className:"ow-stack-actions",children:[a(L,{variant:"muted",children:rn.length}),d==="loo\
@@ -1358,12 +1358,12 @@ ow-mini-title",children:[t.title,a("span",{className:"ow-mini-chip",children:t.p
 ow-mini-desc",title:t.instruction,children:t.instruction}),u&&a("div",{className:"ow-mini-when",children:u})]}),a(L,{variant:"\
 ok",children:"Active"})]},t.key)})})]}),f("details",{...Ze("schedule"),children:[f("summary",{onClick:t=>{t.preventDefault(),
 d!=="schedule"&&A("schedule")},children:[f("span",{className:"ow-stack-title",children:[a(ae,{className:"ow-icon ow-stac\
-k-chevron"}),a(Lt,{className:"ow-icon"}),"Scheduled tasks"]}),f("span",{className:"ow-stack-actions",children:[f(L,{variant:he.
-failed>0?"err":"muted",children:[he.done,"/",he.total," today"]}),d==="schedule"?a(xn,{lastUpdated:nn,refreshing:ye,onRefresh:on}):
-a(yn,{id:"schedule",onPromote:ve})]})]}),a("p",{className:"ow-stack-sub",children:he.historyKnown?"Today's runs only \u2014 j\
+k-chevron"}),a(Lt,{className:"ow-icon"}),"Scheduled tasks"]}),f("span",{className:"ow-stack-actions",children:[f(L,{variant:we.
+failed>0?"err":"muted",children:[we.done,"/",we.total," today"]}),d==="schedule"?a(xn,{lastUpdated:nn,refreshing:ye,onRefresh:on}):
+a(yn,{id:"schedule",onPromote:ve})]})]}),a("p",{className:"ow-stack-sub",children:we.historyKnown?"Today's runs only \u2014 j\
 obs with nothing scheduled today are hidden":"Run history is unavailable, so completed counts may be low"}),a("div",{className:"\
-ow-stack-body",children:he.rows.length===0?a("p",{className:"ow-stack-empty",children:"Nothing is scheduled for today."}):
-he.rows.map(({job:t,ran:l,next:u,dueToday:h})=>{let k=!!(l&&l.failed>0),G=[l&&`ran today ${Tt(l.last)}${l.count>1?` (${l.
+ow-stack-body",children:we.rows.length===0?a("p",{className:"ow-stack-empty",children:"Nothing is scheduled for today."}):
+we.rows.map(({job:t,ran:l,next:u,dueToday:h})=>{let k=!!(l&&l.failed>0),G=[l&&`ran today ${Tt(l.last)}${l.count>1?` (${l.
 count}x)`:""}`,h&&u?`next ${Tt(u)}`:null].filter(Boolean).join(" \xB7 ");return f("div",{className:"ow-mini",children:[a(
 "span",{className:"ow-mini-rail",style:{background:k?"var(--danger)":t.enabled===!1?"var(--muted)":"var(--warn)"}}),f("d\
 iv",{children:[a("div",{className:"ow-mini-title",children:t.name}),t.schedule&&f("div",{className:"ow-mini-desc",children:[
@@ -1374,11 +1374,11 @@ ng"})]},t.id)})})]}),a(Mt,{side:"start",containerRef:Ye,min:J.workMin,reserve:J.
 l=>({...l,work:t})),label:"Resize the work column"})]}),a(Mt,{side:"end",containerRef:Ge,min:J.conductorMin,reserve:J.mainReserve,
 max:J.conductorMax,value:te.conductor,onChange:t=>Ve(l=>({...l,conductor:t})),label:"Resize the Conductor panel"}),f("as\
 ide",{className:"ow-conductor","aria-label":"Conductor",children:[a("div",{className:"ow-conductor-header",children:f("d\
-iv",{className:"ow-conductor-title",children:[a("h2",{children:"Conductor"}),!we&&a("span",{className:"ow-conductor-sub",
+iv",{className:"ow-conductor-title",children:[a("h2",{children:"Conductor"}),!me&&a("span",{className:"ow-conductor-sub",
 children:"select work, or ask across all"})]})}),a("div",{className:"ow-chat",children:ao?f("div",{className:"ow-chat-pa\
 nel",children:[Gn.length>0&&a("div",{className:"ow-permissions",role:"alert",children:Gn.map(t=>a(br,{tool:t.tool,purpose:t.
 purpose,where:t.sessionLabel,busy:X!==null,onAnswer:l=>{_e(t.id,l)}},t.id))}),v&&f("div",{className:"ow-conductor-receip\
 t",role:"status",children:[a(Ot,{className:"ow-icon"}),v]}),Fn&&a("div",{className:"ow-chat-error",role:"alert",children:Fn}),
-a("div",{className:"ow-embed",children:a(cr,{slotKey:ge,frameless:!0,startAtBottom:!0,slotControls:!0,placeholder:we?.sessionKey&&
+a("div",{className:"ow-embed",children:a(cr,{slotKey:pe,frameless:!0,startAtBottom:!0,slotControls:!0,placeholder:me?.sessionKey&&
 w==="session"?"New instructions for this session\u2026":"Ask across your work\u2026",onSend:Se,aboveComposer:po})})]}):a(
 "div",{className:"ow-chat-loading",children:a(Nt,{rows:4})})})]})]})})]})}export{Ir as default,Cr as noticedSinceLastTurn};

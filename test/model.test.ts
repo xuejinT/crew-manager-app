@@ -124,8 +124,10 @@ describe('normalizeWorkItems', () => {
     // said a failed monitor "is not actionable" and parked it in Done wearing an
     // Issue badge — which claimed the outcome had happened and had failed at once.
     // Its last check can simply be run again.
-    expect(workCounts(items)['needs-you']).toBe(2)
-    expect(items.find(item => item.id === 'session:session-1')?.state).toBe('needs-you')
+    // One, not two: the failed RUN is unfinished work and needs the user, while
+    // the session whose linked check is red is not waiting on anybody.
+    expect(workCounts(items)['needs-you']).toBe(1)
+    expect(items.find(item => item.id === 'session:session-1')?.state).toBe('done')
     const failedMonitor = items.find(item => item.id === 'monitor:monitor-1')
     expect(failedMonitor?.state).toBe('needs-you')
     expect(failedMonitor?.retryPath).toBe('/api/crons/monitor-1/run')
@@ -877,8 +879,11 @@ describe('actionable issues', () => {
     // Needs you is the one group ordered by score, so it is the one group whose
     // order needs explaining. Running and Done are plain recency.
     const failing = { provider: 'github' as const, number: 3188, url: 'https://github.com/kirodotdev/KiroCrew/pull/3188', ci: 'failed' as const }
+    // Reached through an OWED APPROVAL rather than a red check, because a red
+    // check no longer promotes on its own -- the point of the test is that the
+    // scored group explains itself, not how the item got there.
     const needsYou = normalizeWorkItems(sources({
-      slots: [slot({ key: 'blocked', source_links: [failing] })],
+      slots: [slot({ key: 'blocked', pending_approval: true, source_links: [failing] })],
     }))[0]
     const running = normalizeWorkItems(sources({
       slots: [slot({ key: 'busy', running: true, source_links: [failing] })],
@@ -891,7 +896,39 @@ describe('actionable issues', () => {
     expect(running.state).toBe('running')
   })
 
-  it('sends a failing linked change to Needs you, because it is actionable', () => {
+  it('leaves a queue the length of what is actually owed, not of the backlog', () => {
+    // The shape measured on a real fleet, which is what motivated this rule: many
+    // old sessions whose pull requests are still red, and a few things genuinely
+    // waiting on the developer. Before, all of them were Needs you and the oldest
+    // had been there for weeks; a queue that never empties is one nobody reads.
+    const red = {
+      provider: 'github' as const,
+      number: 1,
+      url: 'https://github.com/o/r/pull/1',
+      ci: 'failed' as const,
+    }
+    const backlog = Array.from({ length: 19 }, (_, index) => slot({
+      key: `stale-${index}`,
+      last_ts: '2026-07-28T00:00:00Z',
+      source_links: [{ ...red, number: 100 + index, url: `https://github.com/o/r/pull/${100 + index}` }],
+    }))
+    const owed = [
+      slot({ key: 'approval', pending_approval: true }),
+      slot({ key: 'asked', waiting_for_input: true, last_message: 'Which region should I use?' }),
+    ]
+
+    const items = normalizeWorkItems(sources({ slots: [...backlog, ...owed] }))
+
+    expect(workCounts(items)['needs-you']).toBe(owed.length)
+    // The backlog is not hidden -- it is still on the board, still marked, and
+    // still ranks wherever it appears. It just does not claim the queue.
+    const stale = items.filter(item => item.id.startsWith('session:stale-'))
+    expect(stale).toHaveLength(backlog.length)
+    expect(stale.every(item => item.issue && item.changeBlocked)).toBe(true)
+    expect(stale.every(item => item.state === 'done')).toBe(true)
+  })
+
+  it('does not send a quiet session to Needs you just because its change is red', () => {
     const [item] = normalizeWorkItems(sources({
       slots: [slot({
         source_links: [{
@@ -904,12 +941,19 @@ describe('actionable issues', () => {
       })],
     }))
 
-    // It used to sit in Done wearing an Issue badge, which contradicted both the
-    // completion model and the "an issue is a reason it needs you" rule.
-    expect(item.state).toBe('needs-you')
+    // This used to promote. Measured on a real fleet it put 19 sessions up to 23
+    // days old into a queue of 24, every one reading "a linked change is failing
+    // or conflicting" -- so the queue never emptied and stopped being read. A red
+    // change now reaches the board through owned work, which is current, ranked
+    // and capped; promoting the session as well double-counts it and removes the
+    // bound.
+    expect(item.state).toBe('done')
+    // The fact is kept, not discarded: it still marks the item and still ranks.
     expect(item.issue).toBe(true)
+    expect(item.changeBlocked).toBe(true)
     expect(item.action).toBe('open')
     expect(item.summary).toBe('linked_change_issue')
+    expect(explainRank(rankWorkItem(item), key => key)).toContain('rank_change_blocked')
   })
 
   it('keeps a recovering failure in Running, not Needs you', () => {
