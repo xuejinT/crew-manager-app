@@ -569,9 +569,9 @@ describe('intent summaries', () => {
       .toEqual(['Crew Companion polish', 'github #60'])
   })
 
-  it('keeps every link on the session-level item, which is not scoped to a goal', () => {
-    // Scoping belongs to goals. The session really is on all of its links, and
-    // the PR view fans out from this row.
+  it('keeps every link on the session-level item', () => {
+    // The session really is on all of its links, so the row can show every
+    // change it touches.
     const [item] = normalizeWorkItems(sources({ slots: [slot({
       source_links: [
         { provider: 'github', number: 6, url: 'https://github.com/o/r/pull/6', kind: 'change' },

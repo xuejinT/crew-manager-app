@@ -509,7 +509,7 @@ function sourceReferences(slot: ChatSlot): SourceReference[] {
 
 function sessionItem(slot: ChatSlot, copy: WorkCopy): WorkItem {
   // The SESSION-level item keeps every link the session has: the session really
-  // is on all of them, and it is the row the PR view fans out from.
+  // is on all of them, so the row can show which changes it touches.
   const changeRefs: WorkReference[] = sourceReferences(slot).map(entry => entry.ref)
   return {
     id: `session:${slot.key}`,

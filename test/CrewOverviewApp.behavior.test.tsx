@@ -67,8 +67,8 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(quote).not.toBeNull()
     expect(quote?.textContent).toContain('Instructing')
     expect(screen.queryByText('Private')).not.toBeInTheDocument()
-    // Selecting a quote sends no conductor message. (A background goal-pass POST
-    // may fire on the Goals tab -- that is not "sending", so scope to /api/chat.)
+    // Selecting a quote sends no conductor message. Scoped to /api/chat so an
+    // unrelated background POST cannot make this assertion pass or fail.
     expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', expect.anything())
   })
 

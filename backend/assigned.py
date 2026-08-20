@@ -12,8 +12,8 @@ entire changelog, and folding it in would bury the dozen items that genuinely ne
 a decision. Review load is a queue to work through, not a signal that something is
 stuck; if it is ever surfaced it needs its own view and its own ranking.
 
-Same posture as prchecks.py: `gh` is optional, every failure degrades to
-``available: False`` with a reason, and nothing here raises.
+`gh` is optional, every failure degrades to ``available: False`` with a reason,
+and nothing here raises.
 """
 
 from __future__ import annotations
@@ -46,16 +46,16 @@ _SEARCH_LIMIT = 100
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
 # (fetched_at, payload) for the single whole-answer key -- this module answers one
-# question, so unlike prchecks there is nothing to key by.
+# question, so there is nothing to key by.
 _cache: tuple[float, dict] | None = None
 
 
 def _gh_json(args: list[str]) -> Any | None:
     """Run gh and parse its JSON stdout. None on any failure.
 
-    Exit code is ignored on purpose, matching prchecks: several gh subcommands
-    exit non-zero while still printing the JSON that was asked for. Only empty
-    stdout is treated as a real failure.
+    Exit code is ignored on purpose: several gh subcommands exit non-zero while
+    still printing the JSON that was asked for. Only empty stdout is treated as a
+    real failure.
     """
     if shutil.which("gh") is None:
         return None

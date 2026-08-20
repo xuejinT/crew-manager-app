@@ -367,11 +367,6 @@ export const OVERWATCH_STYLES = String.raw`
    * line rather than sitting beside the name.
    */
   .ow-block-name { font-weight: 600; }
-  /* The NAME is the point of the header — the meta list yields, never the name. */
-  .ow-block-tab .ow-block-name { flex: none; max-width: 40ch; }
-  /* The NAME is the point of the header — the meta list yields, never the name. */
-  .ow-block-tab .ow-block-name { flex: none; max-width: 40ch; }
-  .ow-block-tab:hover .ow-block-name { text-decoration: underline; }
   /* Rows give up their own frame: the enclosing card already provides it. */
   .ow-block[data-grouped='true'] .ow-row {
     border: 0;
@@ -505,15 +500,6 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-filters { display: flex; flex-wrap: wrap; gap: 6px; flex-shrink: 0; order: 1; }
   .ow-filter { justify-content: center; gap: 5px; padding: 3px 10px; font-size: 12px; }
   .ow-filter .ow-count { font-size: 11px; }
-  /* Group by — vertical in the rail: label, then the two modes stacked. */
-  .ow-groupby { display: flex; flex-direction: column; gap: 4px; }
-  .ow-groupby-label { color: var(--muted); font-size: 12px; }
-  .ow-groupby-opt { width: 100%; justify-content: center; padding: 4px 12px; font-size: 12px; }
-  .ow-groupby-opt[data-selected='true'] {
-    border-color: var(--accent);
-    background: var(--aim-subtle);
-    color: var(--accent);
-  }
   /* Title block takes the width; the verdict and the forge link hold the right
      edge, so the pill lands in the same place on every row. */
   .ow-pr-head-row { display: flex; align-items: flex-start; gap: 8px; }
@@ -554,9 +540,6 @@ export const OVERWATCH_STYLES = String.raw`
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
   }
-  /* A jump-link, not a title: quieter and smaller than the PR name above it,
-     matching the goal card's secondary text rather than inheriting the 14px base. */
-  .ow-pr-session-chip .ow-icon { width: 13px; height: 13px; }
   .ow-focus-head {
     display: flex;
     flex: none;
@@ -671,9 +654,6 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-goalcard .ow-row-actions .ow-icon { transition: transform 0.15s ease; }
   .ow-goalcard .ow-row[data-selected='true'] .ow-row-actions .ow-icon { transform: rotate(90deg); }
   .ow-goalcard .ow-row[data-selected='true'] .ow-row-title { color: var(--text-strong); font-weight: 700; }
-  .ow-goalcard .ow-goal-digest { border-top: 0; padding: 8px 0 0 26px; }
-  /* Status dot on a goal member row (mockup goal-item language). */
-  .ow-goal-tab .ow-block-open { flex: none; }
   .ow-quote-docked .ow-eyebrow { flex: none; white-space: nowrap; }
   /* Looks like the eyebrow but reads as a control: accent colour + pointer signal
      the destination is switchable. Text carries the active target. */
