@@ -1240,3 +1240,81 @@ describe('what the watcher noticed since the Conductor last spoke', () => {
     expect(noticedSinceLastTurn(r, LAST_TURN)).toEqual([])
   })
 })
+
+describe('rebinding a Conductor that already exists', () => {
+  const AGENT_ROUTE = '/api/apps/crew-manager/conductor-agent'
+  const REBIND = `/api/chat/slots/${encodeURIComponent('crew-manager-conductor')}/agent`
+
+  function withConductor(agent: string | undefined, probe: unknown) {
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots') {
+        return [
+          { key: 'session-1', title: 'Work', messages: 1, running: true, last_ts: '2026-08-20T12:00:00Z' },
+          {
+            key: 'crew-manager-conductor',
+            title: 'Conductor',
+            messages: 3,
+            running: false,
+            last_ts: '2026-08-20T12:00:00Z',
+            ...(agent === undefined ? {} : { agent }),
+          },
+        ]
+      }
+      if (path === AGENT_ROUTE) {
+        if (probe instanceof Error) throw probe
+        return probe
+      }
+      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
+      if (path === '/api/approvals') return []
+      if (path === '/api/spawn') return { agents: [] }
+      if (path === '/api/workflows/runs') return { runs: [] }
+      if (path === '/api/crons') return { jobs: [] }
+      if (path === '/api/artifacts') return { artifacts: [] }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+  }
+
+  const rebinds = () => appSdkMocks.post.mock.calls.filter(call => call[0] === REBIND)
+
+  it('binds an unbound Conductor without the session having to be deleted', async () => {
+    // The agent is chosen at creation, so every Conductor created before the agent
+    // existed is stuck on the default one. Deleting the session to fix that throws
+    // away its history for a config change.
+    withConductor(undefined, { available: true, agent: 'crew-manager-conductor' })
+    renderApp()
+    await waitFor(() => expect(rebinds()).toHaveLength(1))
+    expect(rebinds()[0][1]).toEqual({ agent: 'crew-manager-conductor' })
+  })
+
+  it('leaves a Conductor the developer pointed at another agent alone', async () => {
+    // A non-empty binding was a deliberate choice; overriding it would be the app
+    // taking a decision that is not its own.
+    withConductor('some-other-agent', { available: true, agent: 'crew-manager-conductor' })
+    renderApp()
+    await waitFor(() => expect(appSdkMocks.get).toHaveBeenCalledWith('/api/chat/slots'))
+    expect(rebinds()).toHaveLength(0)
+  })
+
+  it('does not rebind when the agent is not registered on this install', async () => {
+    withConductor(undefined, { available: false, reason: 'agent not registered on this install' })
+    renderApp()
+    await waitFor(() => expect(appSdkMocks.get).toHaveBeenCalledWith(AGENT_ROUTE))
+    expect(rebinds()).toHaveLength(0)
+  })
+
+  it('does not rebind when the probe itself fails', async () => {
+    withConductor(undefined, new Error('404'))
+    renderApp()
+    await waitFor(() => expect(appSdkMocks.get).toHaveBeenCalledWith(AGENT_ROUTE))
+    expect(rebinds()).toHaveLength(0)
+  })
+
+  it('attempts the rebind once, not on every poll', async () => {
+    withConductor(undefined, { available: true, agent: 'crew-manager-conductor' })
+    const view = renderApp()
+    await waitFor(() => expect(rebinds()).toHaveLength(1))
+    view.rerender(<CrewOverviewApp />)
+    await waitFor(() => expect(appSdkMocks.get).toHaveBeenCalledWith('/api/chat/slots'))
+    expect(rebinds()).toHaveLength(1)
+  })
+})

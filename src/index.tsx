@@ -2754,6 +2754,43 @@ export default function CrewOverviewApp() {
 
   const conductorSlot = sources?.slots.find(slot => slot.key === CONDUCTOR_SLOT)
   const conductorAvailable = Boolean(conductorSlot || conductorCreated)
+  /*
+   * A Conductor slot that already exists gets bound too, once.
+   *
+   * The agent is chosen at CREATION, so every Conductor created before the agent
+   * shipped is still on the default agent and would stay there forever. The only
+   * remedy used to be deleting the session, which throws away its history to pick
+   * up a config change — a bad trade, and unnecessary: the platform serves
+   * `POST /api/chat/slots/{slot}/agent` for exactly this, and its own comments
+   * were written with materialized app agents in mind.
+   *
+   * Only an EMPTY binding is replaced. A slot naming some other agent was chosen
+   * deliberately by the developer, and silently overriding that would be the app
+   * taking a decision that is not its own.
+   */
+  const rebindAttemptedRef = useRef(false)
+  useEffect(() => {
+    const current = conductorSlot
+    if (!current || rebindAttemptedRef.current) return
+    if (current.agent) return
+    rebindAttemptedRef.current = true
+    const api = apiRef.current
+    void api.get<{ available?: boolean; agent?: string | null }>(
+      '/api/apps/crew-manager/conductor-agent',
+    )
+      .then(probe => (probe?.available && probe.agent ? probe.agent : null))
+      .catch(() => null)
+      .then(agent => {
+        if (!agent || !mountedRef.current) return
+        return api.post(
+          `/api/chat/slots/${encodeURIComponent(CONDUCTOR_SLOT)}/agent`,
+          { agent },
+        ).then(() => { void loadSources() })
+      })
+      // A refusal costs the manager role and nothing else: the Conductor keeps
+      // working on the default agent, which is what it was doing anyway.
+      .catch(() => { /* best effort */ })
+  }, [conductorSlot, loadSources])
   useEffect(() => {
     if (!sources || conductorSlot || conductorAttemptedRef.current) return
     conductorAttemptedRef.current = true
