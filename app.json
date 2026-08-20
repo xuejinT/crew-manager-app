@@ -51,7 +51,6 @@
       "/api/crons",
       "/api/artifacts",
       "/api/autonudge",
-      "/api/source/pull-request",
       "/api/apps/crew-manager"
     ],
     "events": [

@@ -12,8 +12,8 @@ afterEach(cleanup)
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // The view mode persists now, so a prior test's Goal click must not leak
-  // into tests that assume the default Session view.
+  // Card fold state, the primary panel and the open rail card all persist, so a
+  // prior test's clicks must not leak into the next one.
   localStorage.clear()
   appSdkMocks.get.mockImplementation(async (path: string) => {
     if (path === '/api/chat/slots') {
@@ -55,385 +55,6 @@ beforeEach(() => {
 })
 
 describe('Crew Manager Conductor boundaries', () => {
-  it('goal view merges same-titled sessions into one card and split undoes it', async () => {
-    localStorage.removeItem('crew-manager.goal-verdicts')
-    localStorage.removeItem('crew-manager.goal-memory')
-    localStorage.removeItem('crew-manager.goal-semantic')
-    localStorage.removeItem('crew-manager.goal-names')
-    // Two sessions whose slot titles say the same job in DIFFERENT words. That is
-    // no longer a deterministic merge (loose overlap chained the board into
-    // blobs); it is the semantic pass's job, so the test stages the pass's
-    // answer and asserts the whole loop: pairs merge the card, the model's name
-    // labels it, its why line explains it, and the user's Split still wins.
-    const now = new Date().toISOString()
-    appSdkMocks.get.mockImplementation(async (path: string) => {
-      if (path === '/api/chat/slots') {
-        return [
-          { key: 's1', title: 'Ship the avatar upload flow', messages: 4, running: true, last_ts: now },
-          { key: 's2', title: 'Avatar upload flow shipping', messages: 2, running: false, last_ts: now },
-        ]
-      }
-      if (path === '/api/approvals') return []
-      if (path === '/api/spawn') return { agents: [] }
-      if (path === '/api/workflows/runs') return { runs: [] }
-      if (path === '/api/crons') return { jobs: [] }
-      if (path === '/api/artifacts') return { artifacts: [] }
-      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
-      throw new Error(`Unexpected GET ${path}`)
-    })
-    appSdkMocks.post.mockImplementation(async (path: string) => {
-      if (path === '/api/apps/crew-manager/goal-pass') {
-        return {
-          available: true,
-          assignments: [
-            { item_id: 'session:s1', cluster: 'new:avatar', confidence: 0.9, why: 'both ship the avatar upload flow' },
-            { item_id: 'session:s2', cluster: 'new:avatar', confidence: 0.9, why: 'both ship the avatar upload flow' },
-          ],
-          names: [{ cluster: 'new:avatar', name: 'Avatar upload flow' }],
-        }
-      }
-      return {}
-    })
-    renderApp()
-
-    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
-    // One merged card, folded by default (nothing needs the user): digest shows.
-    // It carries the NAME the pass wrote, not the members' count.
-    expect(await screen.findByText('Avatar upload flow', { selector: '.ow-goalcard-title' }))
-      .toBeInTheDocument()
-    expect(screen.queryByText('2 sessions, one goal')).not.toBeInTheDocument()
-    // A merged card has to say what it merged on: the reason is what Split is
-    // judged against, so an unexplained merge is one the user cannot check. A
-    // semantic merge quotes the model's own one-line rationale.
-    expect(screen.getByText('Grouped because both ship the avatar upload flow.')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Avatar upload flow' }))
-    // Member rows carry a status dot + title; the lead is a row too (the header
-    // names the GROUP, not a member, so nothing is duplicated).
-    expect(await screen.findByTestId('work-item-session:s1')).toBeInTheDocument()
-    expect(screen.getByTestId('work-item-session:s2')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Split Ship the avatar upload flow' }))
-    // The ruling takes effect immediately AND outranks the semantic pair: two
-    // plain cards, no merged header, even though the pass still says "merge".
-    await waitFor(() => expect(
-      screen.queryByText('Avatar upload flow', { selector: '.ow-goalcard-title' }),
-    ).not.toBeInTheDocument())
-    localStorage.removeItem('crew-manager.goal-verdicts')
-    localStorage.removeItem('crew-manager.goal-semantic')
-    localStorage.removeItem('crew-manager.goal-names')
-  })
-
-  it('gives a deterministically-merged card the model outcome name over the derived label', async () => {
-    // Two sessions on the same PR merge deterministically (same_change), so the
-    // derived name would be the bare ref label "github #6". The naming rework
-    // sends even an already-derived-named cluster to the pass so the model can
-    // write an OUTCOME title — and it wins over the quote.
-    localStorage.removeItem('crew-manager.goal-verdicts')
-    localStorage.removeItem('crew-manager.goal-memory')
-    localStorage.removeItem('crew-manager.goal-semantic')
-    localStorage.removeItem('crew-manager.goal-names')
-    localStorage.removeItem('crew-manager.initiative-collapsed')
-    const now = new Date().toISOString()
-    const link = { kind: 'change', url: 'https://github.com/o/r/pull/6', number: 6, provider: 'github' }
-    appSdkMocks.get.mockImplementation(async (path: string) => {
-      if (path === '/api/chat/slots') {
-        return [
-          { key: 's1', title: 'Open a PR for the art', messages: 4, running: true, last_ts: now, source_links: [link] },
-          { key: 's2', title: 'Rebase after 8 merged', messages: 2, running: true, last_ts: now, source_links: [link] },
-        ]
-      }
-      if (path === '/api/approvals') return []
-      if (path === '/api/spawn') return { agents: [] }
-      if (path === '/api/workflows/runs') return { runs: [] }
-      if (path === '/api/crons') return { jobs: [] }
-      if (path === '/api/artifacts') return { artifacts: [] }
-      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
-      throw new Error(`Unexpected GET ${path}`)
-    })
-    // The pass echoes the unnamed existing cluster's own key back with an
-    // outcome name; a static name string cannot, since the key is derived.
-    appSdkMocks.post.mockImplementation(async (path: string, body?: any) => {
-      if (path === '/api/apps/crew-manager/goal-pass') {
-        const key = body?.clusters?.[0]?.key
-        return key
-          ? { available: true, assignments: [], names: [{ cluster: key, name: 'Ship the app store art' }] }
-          : { available: false }
-      }
-      return {}
-    })
-    renderApp()
-
-    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
-    // The model's outcome title, not the derived "github #6" ref label. Scoped
-    // to the Goals region: the PR rail now shares the .ow-goalcard-title class.
-    expect(await screen.findByText('Ship the app store art', { selector: 'section[aria-label="Work by goal"] .ow-goalcard-title' }))
-      .toBeInTheDocument()
-    expect(screen.queryByText('github #6', { selector: 'section[aria-label="Work by goal"] .ow-goalcard-title' })).not.toBeInTheDocument()
-    localStorage.removeItem('crew-manager.goal-semantic')
-    localStorage.removeItem('crew-manager.goal-names')
-    localStorage.removeItem('crew-manager.goal-memory')
-  })
-
-  it('groups a session with the loop it started, naming the card by the session', async () => {
-    // Recorded provenance is a fact, so it groups even inside one session — and
-    // such a card must not be named by counting sessions ("1 sessions, one goal").
-    localStorage.removeItem('crew-manager.goal-verdicts')
-    localStorage.removeItem('crew-manager.goal-memory')
-    localStorage.removeItem('crew-manager.initiative-collapsed')
-    const now = new Date().toISOString()
-    appSdkMocks.get.mockImplementation(async (path: string) => {
-      if (path === '/api/chat/slots') {
-        return [{ key: 's1', title: 'Ship the avatar upload flow', messages: 4, running: true, last_ts: now }]
-      }
-      if (path === '/api/autonudge') {
-        return {
-          loops: [{
-            id: 'nudge-1',
-            slot_key: 's1',
-            active: true,
-            message: 'watch the upload PR until checks pass',
-            cycle_count: 2,
-            max_cycles: 8,
-            last_fire_ts: now,
-          }],
-        }
-      }
-      if (path === '/api/approvals') return []
-      if (path === '/api/spawn') return { agents: [] }
-      if (path === '/api/workflows/runs') return { runs: [] }
-      if (path === '/api/crons') return { jobs: [] }
-      if (path === '/api/artifacts') return { artifacts: [] }
-      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
-      throw new Error(`Unexpected GET ${path}`)
-    })
-    renderApp()
-
-    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
-    // One card, named by its session — never "1 sessions, one goal".
-    expect(await screen.findByText('Ship the avatar upload flow', { selector: '.ow-goalcard-title' }))
-      .toBeInTheDocument()
-    expect(screen.queryByText('1 sessions, one goal')).not.toBeInTheDocument()
-    expect(screen.getByText('Grouped because watch the upload PR until checks pass was started by this work.'))
-      .toBeInTheDocument()
-    // Both the session's work and its loop are members of that one card.
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Ship the avatar upload flow' }))
-    expect(await screen.findByTestId('work-item-session:s1')).toBeInTheDocument()
-    expect(screen.getByTestId('work-item-loop:nudge-1')).toBeInTheDocument()
-    localStorage.removeItem('crew-manager.goal-memory')
-  })
-
-  it('names a lone goal card by its session, and drops the shell when that would repeat the row', async () => {
-    localStorage.removeItem('crew-manager.goal-verdicts')
-    localStorage.removeItem('crew-manager.goal-memory')
-    localStorage.removeItem('crew-manager.initiative-collapsed')
-    const now = new Date().toISOString()
-    appSdkMocks.get.mockImplementation(async (path: string) => {
-      if (path === '/api/chat/slots') {
-        return [
-          // Summarized: the intent's own work title differs from the session name,
-          // so the session names the card above it.
-          { key: 's1', title: 'Avatar upload work', messages: 6, running: true, last_ts: now },
-          // Not summarized: the item is titled after the session, so a header
-          // would print the same string twice.
-          { key: 's2', title: 'Irrigation timer planning', messages: 2, running: true, last_ts: now },
-        ]
-      }
-      if (path === '/api/chat/slots/s1/summary') {
-        return {
-          enabled: true,
-          intents: [{
-            id: 'i1',
-            title: 'Ship the cropping step',
-            state: 'in-progress',
-            progress: ['picked a library'],
-          }],
-        }
-      }
-      if (path === '/api/chat/slots/s2/summary') return { enabled: true, intents: [] }
-      if (path === '/api/approvals') return []
-      if (path === '/api/spawn') return { agents: [] }
-      if (path === '/api/workflows/runs') return { runs: [] }
-      if (path === '/api/crons') return { jobs: [] }
-      if (path === '/api/artifacts') return { artifacts: [] }
-      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
-      throw new Error(`Unexpected GET ${path}`)
-    })
-    renderApp()
-
-    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
-    // The summarized session names its card; the row keeps the work's own title.
-    expect(await screen.findByText('Avatar upload work', { selector: '.ow-goalcard-title' }))
-      .toBeInTheDocument()
-    expect(screen.getByText('Ship the cropping step')).toBeInTheDocument()
-    // The unsummarized one renders as a plain row: its title appears, but never
-    // twice, and it is not wrapped in a goal card.
-    expect(screen.getAllByText('Irrigation timer planning')).toHaveLength(1)
-    expect(screen.queryByText('Irrigation timer planning', { selector: '.ow-goalcard-title' }))
-      .not.toBeInTheDocument()
-    localStorage.removeItem('crew-manager.goal-memory')
-  })
-
-  it('titles a lone card by the model outcome name, distinguishing same-session cards', async () => {
-    // Two lone cards from ONE session used to collide on the session name. Now
-    // each solo item gets its own model outcome title (names entry item:<id>),
-    // so two goals in one session read distinctly.
-    localStorage.removeItem('crew-manager.goal-verdicts')
-    localStorage.removeItem('crew-manager.goal-memory')
-    localStorage.removeItem('crew-manager.goal-semantic')
-    localStorage.removeItem('crew-manager.goal-names')
-    localStorage.removeItem('crew-manager.initiative-collapsed')
-    const now = new Date().toISOString()
-    appSdkMocks.get.mockImplementation(async (path: string) => {
-      if (path === '/api/chat/slots') {
-        return [{ key: 's1', title: 'Local debug and Git requests', messages: 6, running: true, last_ts: now }]
-      }
-      if (path === '/api/chat/slots/s1/summary') {
-        return {
-          enabled: true,
-          intents: [
-            { id: 'i1', title: 'Make a DMG build from latest main', state: 'in-progress', progress: [] },
-            { id: 'i2', title: 'Restore SSH access to the remote box', state: 'in-progress', progress: [] },
-          ],
-        }
-      }
-      if (path === '/api/approvals') return []
-      if (path === '/api/spawn') return { agents: [] }
-      if (path === '/api/workflows/runs') return { runs: [] }
-      if (path === '/api/crons') return { jobs: [] }
-      if (path === '/api/artifacts') return { artifacts: [] }
-      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
-      throw new Error(`Unexpected GET ${path}`)
-    })
-    // The pass names each solo item by its own id -- distinct titles for two
-    // goals that share one session.
-    appSdkMocks.post.mockImplementation(async (path: string) => {
-      if (path === '/api/apps/crew-manager/goal-pass') {
-        return {
-          available: true,
-          assignments: [],
-          names: [
-            { cluster: 'item:intent:s1:0', name: 'Build a fresh DMG from main' },
-            { cluster: 'item:intent:s1:1', name: 'Restore remote SSH access' },
-          ],
-        }
-      }
-      return {}
-    })
-    renderApp()
-
-    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
-    // Each lone card carries its own model outcome title, not the shared session
-    // name -- and neither is titled "Local debug and Git requests".
-    expect(await screen.findByText('Build a fresh DMG from main', { selector: '.ow-goalcard-title' }))
-      .toBeInTheDocument()
-    expect(await screen.findByText('Restore remote SSH access', { selector: '.ow-goalcard-title' }))
-      .toBeInTheDocument()
-    expect(screen.queryByText('Local debug and Git requests', { selector: '.ow-goalcard-title' }))
-      .not.toBeInTheDocument()
-    localStorage.removeItem('crew-manager.goal-semantic')
-    localStorage.removeItem('crew-manager.goal-names')
-    localStorage.removeItem('crew-manager.goal-memory')
-  })
-
-  it('initiative buckets and auto clusters share one card anatomy; goal quote routes to the active session', async () => {
-    localStorage.removeItem('crew-manager.goal-verdicts')
-    localStorage.removeItem('crew-manager.initiative-collapsed')
-    localStorage.removeItem('crew-manager.goal-semantic')
-    localStorage.removeItem('crew-manager.goal-names')
-    const now = new Date().toISOString()
-    appSdkMocks.get.mockImplementation(async (path: string) => {
-      if (path === '/api/chat/slots') {
-        return [
-          // An unbucketed same-job pair: becomes a standalone cluster card.
-          { key: 's1', title: 'Ship the avatar upload flow', messages: 4, running: true, last_ts: now },
-          { key: 's2', title: 'Avatar upload flow shipping', messages: 2, running: false, last_ts: now },
-          // A bucketed session: folds into the Crew Companion goal card.
-          { key: 's3', title: 'Mochi bug triage', messages: 1, running: true, last_ts: now },
-        ]
-      }
-      if (path === '/api/apps/crew-manager/initiatives') {
-        return { initiatives: [{ name: 'Crew Companion', aliases: ['Crew Companion', 'mochi'] }] }
-      }
-      if (path === '/api/approvals') return []
-      if (path === '/api/spawn') return { agents: [] }
-      if (path === '/api/workflows/runs') return { runs: [] }
-      if (path === '/api/crons') return { jobs: [] }
-      if (path === '/api/artifacts') return { artifacts: [] }
-      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
-      throw new Error(`Unexpected GET ${path}`)
-    })
-    // The s1/s2 pair shares no hard signal — the merge is the semantic pass's.
-    appSdkMocks.post.mockImplementation(async (path: string) => {
-      if (path === '/api/apps/crew-manager/goal-pass') {
-        return {
-          available: true,
-          assignments: [
-            { item_id: 'session:s1', cluster: 'new:avatar', confidence: 0.9, why: 'both ship the avatar upload flow' },
-            { item_id: 'session:s2', cluster: 'new:avatar', confidence: 0.9, why: 'both ship the avatar upload flow' },
-          ],
-          names: [{ cluster: 'new:avatar', name: 'Avatar upload flow' }],
-        }
-      }
-      return {}
-    })
-    renderApp()
-
-    fireEvent.click(await screen.findByRole('tab', { name: 'Goals' }))
-    // The bucket card: name + a status flag in its header.
-    expect(await screen.findByText('Crew Companion')).toBeInTheDocument()
-    // The auto cluster arrives once the semantic pass answers: same card chrome,
-    // named by the pass rather than labelled by the members' count. It arrives
-    // FOLDED (nothing needs the user) showing the digest, not the rows — and the
-    // count lives in the meta. Both cards share one chrome, so two "Running"
-    // flags render.
-    expect(await screen.findByText('Avatar upload flow', { selector: '.ow-goalcard-title' })).toBeInTheDocument()
-    expect(screen.getAllByText('Running', { selector: '.ow-goal-flag' })).toHaveLength(2)
-    expect(screen.queryByText('2 sessions, one goal')).not.toBeInTheDocument()
-    expect(screen.getByText('2 sessions · 1 running · 1 done')).toBeInTheDocument()
-    expect(screen.queryByTestId('work-item-session:s2')).not.toBeInTheDocument()
-    // The chevron unfolds to the member rows.
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Avatar upload flow' }))
-    expect(await screen.findByTestId('work-item-session:s2')).toBeInTheDocument()
-    // The add-goal entry is ALWAYS reachable — buckets existing must not hide it.
-    expect(screen.getByLabelText('New goal name')).toBeInTheDocument()
-
-    // Selecting the cluster header quotes the GOAL and names the routing target —
-    // the ACTIVE session — before anything is sent. The header names the group.
-    fireEvent.click(screen.getByRole('button', { name: 'Avatar upload flow' }))
-    expect(await screen.findByText('Instructing goal')).toBeInTheDocument()
-    expect(screen.getByText(/→ Ship the avatar upload flow \(active\)/)).toBeInTheDocument()
-    expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', expect.anything())
-    localStorage.removeItem('crew-manager.goal-verdicts')
-    localStorage.removeItem('crew-manager.initiative-collapsed')
-    localStorage.removeItem('crew-manager.goal-semantic')
-    localStorage.removeItem('crew-manager.goal-names')
-  })
-
-  it('keeps the state filter inside the Sessions tab', async () => {
-    renderApp()
-    fireEvent.click(await screen.findByRole('tab', { name: 'Sessions' }))
-    await screen.findByTestId('work-item-session:session-1')
-
-    // Narrow Sessions to Running. session-1 is needs-you (it owns the pending
-    // approval), so its work leaves the Sessions list.
-    fireEvent.click(screen.getByRole('button', { name: /^Running/ }))
-    await waitFor(() => {
-      expect(screen.queryByTestId('work-item-session:session-1')).not.toBeInTheDocument()
-    })
-
-    // Switching to Goals with Running STILL selected must render the goal view,
-    // not the flat "Running" list. This is the regression: the render branch used
-    // to test the filter before the tab, so any active pill sent the Goals tab
-    // into the single filtered section and its goal cards vanished.
-    fireEvent.click(screen.getByRole('tab', { name: 'Goals' }))
-    // The goal list carries no visible heading — the card's own Goals tab already
-    // names it — so the region's accessible name is what proves the branch rendered.
-    expect(await screen.findByRole('region', { name: 'Work by goal' })).toBeInTheDocument()
-    expect(screen.queryByText('Work by goal')).not.toBeInTheDocument()
-    // And the full set is back, unnarrowed by the pill left behind on Sessions.
-    await screen.findByTestId('work-item-session:session-1')
-  })
-
   it('quotes a work item on selection without sending anything', async () => {
     renderApp()
 
@@ -446,8 +67,8 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(quote).not.toBeNull()
     expect(quote?.textContent).toContain('Instructing')
     expect(screen.queryByText('Private')).not.toBeInTheDocument()
-    // Selecting a quote sends no conductor message. (A background goal-pass POST
-    // may fire on the Goals tab -- that is not "sending", so scope to /api/chat.)
+    // Selecting a quote sends no conductor message. Scoped to /api/chat so an
+    // unrelated background POST cannot make this assertion pass or fail.
     expect(appSdkMocks.post).not.toHaveBeenCalledWith('/api/chat', expect.anything())
   })
 
@@ -462,9 +83,6 @@ describe('Crew Manager Conductor boundaries', () => {
 
   it('opens a session only through the one Open button on its title', async () => {
     renderApp()
-    // Goals is the card's default tab now, so a test about session headers has to
-    // ask for the Sessions lens explicitly.
-    fireEvent.click(await screen.findByRole('tab', { name: 'Sessions' }))
     await screen.findByTestId('work-item-session:session-1')
 
     // Exactly one visible way in per session header, and it is a button rather
@@ -578,96 +196,6 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(document.querySelectorAll('.ow-permission')).toHaveLength(0)
   })
 
-  it('a PR row names the repo, states one verdict, and lists what is holding it up', async () => {
-    localStorage.clear()
-    const now = new Date().toISOString()
-    appSdkMocks.post.mockImplementation(async (path: string) => {
-      if (path === '/api/source/pull-request') {
-        return {
-          title: 'feat: one card anatomy in Goal view', state: 'open', draft: false,
-          headBranch: 'feat/goal-digest', baseBranch: 'main',
-          author: 'xuejinT', updatedAt: new Date(Date.now() - 3600_000).toISOString(),
-          additions: 594, deletions: 396, changedFiles: 6,
-          mergeStateStatus: 'dirty', mergeable: 'conflicting',
-          checks: [{ bucket: 'passed' }, { bucket: 'failed' }, { bucket: 'failed' }],
-          comments: [
-            { kind: 'inline', resolvable: true, resolved: false, threadId: 't1' },
-            { kind: 'inline', resolvable: true, resolved: false, threadId: 't1' },
-            { kind: 'inline', resolvable: true, resolved: true, threadId: 't2' },
-          ],
-          files: [{ path: 'src/index.tsx', additions: 64, deletions: 13 }],
-        }
-      }
-      throw new Error(`Unexpected POST ${path}`)
-    })
-    appSdkMocks.get.mockImplementation(async (path: string) => {
-      if (path === '/api/chat/slots') {
-        return [{
-          key: 's1', title: 'Ship goal grouping', messages: 4, running: true, last_ts: now,
-          source_links: [{ kind: 'change', number: 4, url: 'https://github.com/x/crew-manager-app/pull/4', ci: 'passed' }],
-        }]
-      }
-      if (path === '/api/approvals') return []
-      if (path === '/api/spawn') return { agents: [] }
-      if (path === '/api/workflows/runs') return { runs: [] }
-      if (path === '/api/crons') return { jobs: [] }
-      if (path === '/api/artifacts') return { artifacts: [] }
-      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
-      throw new Error(`Unexpected GET ${path}`)
-    })
-    renderApp()
-
-    expect(await screen.findByText('feat: one card anatomy in Goal view')).toBeInTheDocument()
-    // The PR card now uses the shared goal-card anatomy: title tab, a right-aligned
-    // verdict pill, and one meta line. Target the card by its verdict pill.
-    const prCard = document.querySelector('.ow-pr-verdict')?.closest('.ow-block') as HTMLElement
-    const head = within(prCard)
-    const meta = prCard.querySelector('.ow-goal-meta')?.textContent ?? ''
-    // Which repo, whose PR — the identity line. The branch is not here: at rail
-    // width it crowded out the title, and the link goes to it.
-    expect(meta).toContain('crew-manager-app')
-    expect(meta).toContain('xuejinT')
-    // One verdict. A conflict outranks the failing checks: rebasing re-runs them.
-    expect(head.getByText('Conflict')).toBeInTheDocument()
-    // Every real obstacle folds into the meta line, threads counted once each.
-    expect(meta).toContain('2 checks failing · merge conflict with main · 1 unresolved comment')
-    // The diff itself is the forge's job — no file list, at rest or expanded.
-    expect(screen.queryByText('src/index.tsx')).not.toBeInTheDocument()
-    expect(screen.queryByText(/Files Changed/)).not.toBeInTheDocument()
-
-    // The card header already names the list and counts it, so the section's own
-    // heading only repeated both. It keeps its accessible name.
-    expect(screen.queryByText('Work by PR')).not.toBeInTheDocument()
-    expect(document.querySelector('section[aria-label="Work by PR"]')).not.toBeNull()
-
-    // The status filter sits OUTSIDE the scroll container: a filter that scrolls
-    // away from the list it filters can only be reached by scrolling back.
-    const card = document.querySelector('.ow-main > details[data-panel="prs"]') as HTMLElement
-    const tools = card.querySelector('.ow-pr-tools') as HTMLElement
-    expect(tools.querySelector('[aria-label="Filter by PR status"]')).not.toBeNull()
-    expect(card.querySelector('.ow-stack-body')?.contains(tools)).toBe(false)
-
-    // A conflicting PR arrives open, and what it reveals is the sessions —
-    // which is the thing a PR groups on this board.
-    const chips = within(document.querySelector('.ow-pr-sessions') as HTMLElement)
-    fireEvent.click(chips.getByRole('button', { name: /Ship goal grouping/ }))
-    expect(appSdkMocks.navigate).toHaveBeenCalledWith('/chat?sid=s1')
-
-    // Selecting the PR header quotes it into the Conductor — the same gesture a
-    // goal header carries. Selection shows on the header itself (the quote bar
-    // lives inside the async-mounted Conductor embed).
-    fireEvent.click(prCard.querySelector('.ow-pr-header') as HTMLElement)
-    await waitFor(() => expect(prCard.querySelector('.ow-pr-header')?.getAttribute('data-selected')).toBe('true'))
-    // Clicking again deselects — a mode you can leave from where you entered it.
-    fireEvent.click(prCard.querySelector('.ow-pr-header') as HTMLElement)
-    await waitFor(() => expect(prCard.querySelector('.ow-pr-header')?.getAttribute('data-selected')).toBeNull())
-
-    // The chevron folds it away, like every other card; the title is now a
-    // select target, not the fold toggle.
-    fireEvent.click(screen.getByRole('button', { name: /Collapse feat: one card anatomy/ }))
-    await waitFor(() => expect(document.querySelector('.ow-pr-sessions')).toBeNull())
-  })
-
   it('shows the verb, not an Issue badge, on a blocked change in Needs you', async () => {
     appSdkMocks.get.mockImplementation(async (path: string) => {
       if (path === '/api/chat/slots') {
@@ -691,8 +219,6 @@ describe('Crew Manager Conductor boundaries', () => {
       throw new Error(`Unexpected GET ${path}`)
     })
     renderApp()
-    // The lane head being tested belongs to the Sessions lens.
-    fireEvent.click(await screen.findByRole('tab', { name: 'Sessions' }))
     await screen.findByTestId('work-item-session:session-3')
 
     // The badge names the response, now on the lane head shared by the group.
@@ -731,45 +257,45 @@ describe('utility rail cards', () => {
   it('opens exactly one card at rest', async () => {
     localStorage.removeItem('crew-manager.stack-open-v2')
     renderApp()
-    await waitFor(() => expect(stackCards().length).toBe(3))
+    await waitFor(() => expect(stackCards().length).toBe(2))
 
     const open = stackCards().filter(card => card.open)
     expect(open).toHaveLength(1)
-    expect(open[0].querySelector('summary')?.textContent).toContain('PRs')
+    expect(open[0].querySelector('summary')?.textContent).toContain('Loops')
   })
 
   it('opening one card closes the others', async () => {
     localStorage.removeItem('crew-manager.stack-open-v2')
     renderApp()
-    await waitFor(() => expect(stackCards().length).toBe(3))
+    await waitFor(() => expect(stackCards().length).toBe(2))
 
-    const loops = cardTitled('Loops')!
-    fireEvent.click(loops.querySelector('summary') as HTMLElement)
+    const schedule = cardTitled('Scheduled tasks')!
+    fireEvent.click(schedule.querySelector('summary') as HTMLElement)
 
-    await waitFor(() => expect(loops.open).toBe(true))
+    await waitFor(() => expect(schedule.open).toBe(true))
     expect(stackCards().filter(card => card.open)).toHaveLength(1)
-    expect(cardTitled('PRs')!.open).toBe(false)
+    expect(cardTitled('Loops')!.open).toBe(false)
   })
 
   it('clicking the open card closes it, leaving none open', async () => {
     localStorage.removeItem('crew-manager.stack-open-v2')
     renderApp()
-    await waitFor(() => expect(stackCards().length).toBe(3))
+    await waitFor(() => expect(stackCards().length).toBe(2))
 
-    const prs = cardTitled('PRs')!
-    fireEvent.click(prs.querySelector('summary') as HTMLElement)
+    const loops = cardTitled('Loops')!
+    fireEvent.click(loops.querySelector('summary') as HTMLElement)
 
-    await waitFor(() => expect(prs.open).toBe(false))
+    await waitFor(() => expect(loops.open).toBe(false))
     expect(stackCards().filter(card => card.open)).toHaveLength(0)
   })
 
   it('remembers which card was open', async () => {
-    localStorage.setItem('crew-manager.stack-open-v2', JSON.stringify('loops'))
+    localStorage.setItem('crew-manager.stack-open-v2', JSON.stringify('schedule'))
     renderApp()
-    await waitFor(() => expect(stackCards().length).toBe(3))
+    await waitFor(() => expect(stackCards().length).toBe(2))
 
-    expect(cardTitled('Loops')!.open).toBe(true)
-    expect(cardTitled('PRs')!.open).toBe(false)
+    expect(cardTitled('Scheduled tasks')!.open).toBe(true)
+    expect(cardTitled('Loops')!.open).toBe(false)
   })
 
 })
@@ -807,17 +333,17 @@ describe('promotable primary column', () => {
 
   async function ready() {
     renderApp()
-    await waitFor(() => expect(panels()).toHaveLength(4))
+    await waitFor(() => expect(panels()).toHaveLength(3))
   }
 
-  it('starts with Work primary, PRs open in the rail, Conductor on the right', async () => {
+  it('starts with Work primary, Loops open in the rail, Conductor on the right', async () => {
     await ready()
 
     expect(primaryPanel().dataset.panel).toBe('work')
     expect(primaryPanel().open).toBe(true)
     const open = railPanels().filter(card => card.open)
     expect(open).toHaveLength(1)
-    expect(open[0].dataset.panel).toBe('prs')
+    expect(open[0].dataset.panel).toBe('loops')
     // Conductor is a sibling of .ow-main, not a panel inside it.
     expect(document.querySelector('.ow-main > .ow-conductor')).toBeNull()
     expect(document.querySelector('.ow-layout > .ow-conductor')).not.toBeNull()
@@ -839,7 +365,7 @@ describe('promotable primary column', () => {
     // Demoted Work is a rail card now: same shell, collapsed, with a label
     // instead of the tab row.
     expect(panel('work').open).toBe(false)
-    expect(panel('work').querySelector('summary')?.textContent).toContain('Goals / Sessions')
+    expect(panel('work').querySelector('summary')?.textContent).toContain('Sessions')
   })
 
   it('dropping the current primary on itself changes nothing', async () => {
@@ -851,22 +377,22 @@ describe('promotable primary column', () => {
 
     await waitFor(() => expect(panel('work').dataset.dragover).toBeUndefined())
     expect(panel('work').dataset.primary).toBe('true')
-    expect(railPanels().map(card => card.dataset.panel)).toEqual(['prs', 'loops', 'schedule'])
+    expect(railPanels().map(card => card.dataset.panel)).toEqual(['loops', 'schedule'])
   })
 
-  it('keeps exactly one card in column 1 and three in column 2 through promotions', async () => {
+  it('keeps exactly one card in column 1 and two in column 2 through promotions', async () => {
     await ready()
 
-    for (const id of ['prs', 'schedule', 'work', 'loops']) {
+    for (const id of ['schedule', 'work', 'loops']) {
       const dataTransfer = dragTransfer()
       fireEvent.dragStart(panel(id), { dataTransfer })
       fireEvent.drop(primaryPanel(), { dataTransfer })
       await waitFor(() => expect(panel(id).dataset.primary).toBe('true'))
 
       expect(document.querySelectorAll('.ow-main > details[data-primary="true"]')).toHaveLength(1)
-      expect(railPanels()).toHaveLength(3)
-      // Rail rows are 0,1,2 with no gaps, so no card lands off the grid.
-      expect(railPanels().map(card => card.dataset.railIndex)).toEqual(['0', '1', '2'])
+      expect(railPanels()).toHaveLength(2)
+      // Rail rows are 0,1 with no gaps, so no card lands off the grid.
+      expect(railPanels().map(card => card.dataset.railIndex)).toEqual(['0', '1'])
     }
   })
 
@@ -877,7 +403,7 @@ describe('promotable primary column', () => {
     fireEvent.dragStart(panel('loops'), { dataTransfer })
 
     // Left to pick its own drag image the browser painted the entire column, so
-    // moving one card looked like moving all three. The image is this card's
+    // moving one card looked like moving all of them. The image is this card's
     // own header, and nothing above or below it.
     const [image] = dataTransfer.setDragImage.mock.calls[0]
     expect(image).toBe(panel('loops').querySelector('summary'))
@@ -913,18 +439,6 @@ describe('promotable primary column', () => {
     expect(panel('work').dataset.primary).toBe('true')
   })
 
-  it('reveals Split on hover, and keeps it reachable by keyboard', async () => {
-    await ready()
-    const css = (document.querySelector('.ow-root style') as HTMLStyleElement).textContent as string
-
-    // Split is a correction, not a primary action: hidden at rest, shown on
-    // card hover, and still reachable without a mouse (focus-within / focus).
-    expect(css).toMatch(/\.ow-goal-split \{[^}]*opacity: 0/)
-    expect(css).toContain('.ow-goalcard:hover .ow-goal-split')
-    expect(css).toContain('.ow-goalcard:focus-within .ow-goal-split')
-    expect(css).toContain('.ow-goal-split:focus-visible')
-  })
-
   it('marks the whole page as Beta in the header', async () => {
     await ready()
     const beta = document.querySelector('.ow-titlebar .ow-beta') as HTMLElement
@@ -957,7 +471,6 @@ describe('promotable primary column', () => {
 
   it('does not double-label a session card: the needs-you count and the lane verb', async () => {
     await ready()
-    fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }))
     await waitFor(() => expect(document.querySelector('.ow-goalcard[data-grouped]')).not.toBeNull())
 
     // Find an expanded session card that has a needs-you lane (UNBLOCK / FOLLOW UP).
@@ -1018,16 +531,16 @@ describe('promotable primary column', () => {
 
   it('hands the rail its open slot when the open card is promoted', async () => {
     await ready()
-    expect(panel('prs').open).toBe(true)
+    expect(panel('loops').open).toBe(true)
 
-    fireEvent.click(screen.getByRole('button', { name: /Move PRs to the first column/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Move Loops to the first column/ }))
 
-    await waitFor(() => expect(panel('prs').dataset.primary).toBe('true'))
-    // PRs left the rail, so the next candidate in order takes the open slot.
+    await waitFor(() => expect(panel('loops').dataset.primary).toBe('true'))
+    // Loops left the rail, so the next candidate in order takes the open slot.
     const open = railPanels().filter(card => card.open)
     expect(open).toHaveLength(1)
-    expect(open[0].dataset.panel).toBe('loops')
-    expect(JSON.parse(localStorage.getItem('crew-manager.stack-open-v2') as string)).toBe('loops')
+    expect(open[0].dataset.panel).toBe('schedule')
+    expect(JSON.parse(localStorage.getItem('crew-manager.stack-open-v2') as string)).toBe('schedule')
   })
 
   it('persists the primary and the open card, and never lets them name the same panel', async () => {
@@ -1040,7 +553,7 @@ describe('promotable primary column', () => {
     cleanup()
     await ready()
     expect(primaryPanel().dataset.panel).toBe('loops')
-    expect(railPanels().filter(card => card.open)[0].dataset.panel).toBe('prs')
+    expect(railPanels().filter(card => card.open)[0].dataset.panel).toBe('schedule')
   })
 
   it('repairs a stored open card that names the stored primary', async () => {
@@ -1051,7 +564,7 @@ describe('promotable primary column', () => {
     expect(primaryPanel().dataset.panel).toBe('schedule')
     const open = railPanels().filter(card => card.open)
     expect(open).toHaveLength(1)
-    expect(open[0].dataset.panel).toBe('prs')
+    expect(open[0].dataset.panel).toBe('loops')
   })
 
   it('ignores a stored primary that is not a panel', async () => {
@@ -1084,11 +597,11 @@ describe('promotable primary column', () => {
   it('names the row that takes the leftover height in column 2', async () => {
     await ready()
     const main = document.querySelector('.ow-main') as HTMLElement
-    // PRs is rail row 0 by default.
+    // Loops is rail row 0 by default.
     expect(main.dataset.openRow).toBe('0')
 
     fireEvent.click(panel('schedule').querySelector('summary') as HTMLElement)
-    await waitFor(() => expect(main.dataset.openRow).toBe('2'))
+    await waitFor(() => expect(main.dataset.openRow).toBe('1'))
 
     fireEvent.click(panel('schedule').querySelector('summary') as HTMLElement)
     await waitFor(() => expect(main.dataset.openRow).toBe('none'))

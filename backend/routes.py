@@ -18,8 +18,8 @@ Endpoints:
 * ``GET  /peek``     -- the recent transcript rows of ONE named session, so the
   Conductor can look at what a session did instead of only reading a summary
   written about it
-* ``POST /goal-pass`` -- one semantic clustering pass over the items the
-  rule-based grouper left ungrouped; degrades to ``available: false``
+* ``GET  /assigned`` -- the developer's own open pull requests and assigned issues
+* ``GET  /conductor-agent`` -- whether the Conductor agent is bindable here
 """
 
 from __future__ import annotations
@@ -37,13 +37,10 @@ from aiohttp import web
 # under its own package name.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import goalpass  # noqa: E402
 from peek import peek_session, name_is_safe, normalize_name  # noqa: E402
 from conductor_agent import conductor_agent  # noqa: E402
 from recall import search_past_work  # noqa: E402
-from prchecks import pr_check_counts  # noqa: E402
 from assigned import assigned_work  # noqa: E402
-from initiatives import add_initiative, load_initiatives, remove_initiative  # noqa: E402
 from watcher import WATCHER  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -242,20 +239,6 @@ def _caller_workspace(request: web.Request) -> str | None:
     return _ws_bucket(name)
 
 
-async def handle_pr_checks(request: web.Request, ctx: Any) -> web.Response:
-    """GET /pr-checks?url=... — check-count rollup for one PR, from `gh`.
-
-    Degrades to ``available: False`` (never an error) when gh is missing, the URL
-    is not a GitHub PR, or the call fails, so the UI falls back to the coarse
-    status line rather than breaking.
-    """
-    denied = _unauthorized(request)
-    if denied is not None:
-        return denied
-    payload = await pr_check_counts(request.query.get("url"))
-    return web.json_response(payload)
-
-
 async def handle_assigned(request: web.Request, ctx: Any) -> web.Response:
     """GET /assigned — the developer's own open PRs and issues assigned to them.
 
@@ -271,166 +254,6 @@ async def handle_assigned(request: web.Request, ctx: Any) -> web.Response:
     force = str(request.query.get("force") or "") in {"1", "true", "yes"}
     payload = await assigned_work(force=force)
     return web.json_response(payload)
-
-
-async def handle_initiatives(request: web.Request, ctx: Any) -> web.Response:
-    """GET /initiatives — the user's big goals, from this app's own goals.json.
-
-    First run imports any existing projects.md once as a courtesy; after that
-    the store is Crew Manager's alone. Missing/corrupt store degrades to [].
-    """
-    denied = _unauthorized(request)
-    if denied is not None:
-        return denied
-    return web.json_response({"initiatives": load_initiatives()})
-
-
-async def handle_add_initiative(request: web.Request, ctx: Any) -> web.Response:
-    """POST /initiatives {name, aliases?} — define a big goal from the UI."""
-    denied = _unauthorized(request)
-    if denied is not None:
-        return denied
-    try:
-        payload = await request.json()
-    except Exception:
-        return web.json_response({"error": "invalid json"}, status=400)
-    aliases = payload.get("aliases")
-    if aliases is not None and not isinstance(aliases, list):
-        return web.json_response({"error": "aliases must be a list"}, status=400)
-    try:
-        buckets = add_initiative(payload.get("name", ""), aliases)
-    except ValueError as error:
-        return web.json_response({"error": str(error)}, status=400)
-    except OSError:
-        logger.exception("crew-manager: could not write goals.json")
-        return web.json_response({"error": "could not write goals"}, status=500)
-    return web.json_response({"initiatives": buckets})
-
-
-async def handle_remove_initiative(request: web.Request, ctx: Any) -> web.Response:
-    """POST /initiatives/remove {name} — drop a big goal. Unknown name: no-op."""
-    denied = _unauthorized(request)
-    if denied is not None:
-        return denied
-    try:
-        payload = await request.json()
-    except Exception:
-        return web.json_response({"error": "invalid json"}, status=400)
-    try:
-        buckets = remove_initiative(payload.get("name", ""))
-    except OSError:
-        logger.exception("crew-manager: could not write goals.json")
-        return web.json_response({"error": "could not write goals"}, status=500)
-    return web.json_response({"initiatives": buckets})
-
-
-async def handle_goal_pass(request: web.Request, ctx: Any) -> web.Response:
-    """POST /goal-pass — one semantic clustering pass over the ungrouped items.
-
-    Request: ``{"clusters": [{key, name, items:[{id,title}]}],
-    "ungrouped": [{id, title, detail?}]}``.
-
-    Success: ``{"available": true, "assignments": [...], "names": [...]}``.
-    ANY failure — no gateway state, no LLM helpers, timeout, unparseable reply —
-    answers HTTP 200 with ``{"available": false, "reason": "..."}``, because this
-    is an enhancement over the rule-based grouping the UI already shows. An error
-    status would make the Goals view look broken when it is merely unimproved.
-    """
-    denied = _unauthorized(request)
-    if denied is not None:
-        return denied
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
-
-    clusters = goalpass.clamp_clusters(body.get("clusters"))
-    ungrouped = goalpass.clamp_ungrouped(body.get("ungrouped"))
-
-    # Nothing to assign and nothing to name: the answer is already known, so no
-    # call is made at all.
-    if not goalpass.needs_pass(clusters, ungrouped):
-        return web.json_response({"available": True, "assignments": [], "names": []})
-
-    state = request.app.get("state")
-    sessions = getattr(state, "sessions", None)
-    if sessions is None:
-        return _pass_unavailable("no gateway session manager")
-
-    # Imported here, never at module scope: this app's backend must load (and its
-    # selftest must run) on a machine with no kiro_crew importable.
-    try:
-        import asyncio
-        import uuid
-
-        from kiro_crew.llm_helpers import (
-            ToolApprovalPolicy,
-            parse_llm_json,
-            stream_and_collect,
-        )
-    except Exception:
-        logger.debug("crew-manager: goal pass has no llm helpers", exc_info=True)
-        return _pass_unavailable("model helpers unavailable")
-
-    prompt = goalpass.build_prompt(clusters, ungrouped)
-    key = f"crew-manager-goalpass:{uuid.uuid4().hex}"
-    try:
-        provider, _n, _r = await sessions.get_or_create(key, agent=goalpass.PASS_AGENT)
-    except Exception:
-        logger.debug("crew-manager: goal pass could not open a session", exc_info=True)
-        return _pass_unavailable("could not start a model session")
-
-    text = ""
-    reason: str | None = None
-    try:
-        text = await asyncio.wait_for(
-            stream_and_collect(
-                provider,
-                prompt,
-                # The pass reads nothing and writes nothing; a tool request here
-                # would only be a prompt-injected title trying its luck.
-                approval_policy=ToolApprovalPolicy.REJECT_ALL,
-            ),
-            timeout=goalpass.PASS_TIMEOUT_SECS,
-        )
-    except (TimeoutError, asyncio.TimeoutError):
-        reason = "the model did not answer in time"
-    except Exception:
-        logger.debug("crew-manager: goal pass call failed", exc_info=True)
-        reason = "the model call failed"
-    finally:
-        # Both, always: release alone leaves the kiro-cli subprocess running for
-        # a session nobody will ever ask for again.
-        try:
-            sessions.release(key)
-        except Exception:
-            logger.debug("crew-manager: goal pass release failed", exc_info=True)
-        try:
-            await sessions.destroy(key)
-        except Exception:
-            logger.debug("crew-manager: goal pass destroy failed", exc_info=True)
-
-    if reason is not None:
-        return _pass_unavailable(reason)
-
-    payload = parse_llm_json(text or "")
-    if not isinstance(payload, dict):
-        return _pass_unavailable("the model reply was not usable JSON")
-
-    result = goalpass.parse_pass(
-        payload,
-        {cluster["key"] for cluster in clusters},
-        {item["id"] for item in ungrouped},
-    )
-    return web.json_response({"available": True, **result})
-
-
-def _pass_unavailable(reason: str) -> web.Response:
-    """HTTP 200 with available:false — a missing improvement, not an error."""
-    return web.json_response({"available": False, "reason": reason})
 
 
 def register_routes(ctx: Any) -> list:
@@ -449,10 +272,5 @@ def register_routes(ctx: Any) -> list:
         AppRoute(method="GET", path="/recall", handler=handle_recall),
         AppRoute(method="GET", path="/peek", handler=handle_peek),
         AppRoute(method="GET", path="/conductor-agent", handler=handle_conductor_agent),
-        AppRoute(method="GET", path="/pr-checks", handler=handle_pr_checks),
         AppRoute(method="GET", path="/assigned", handler=handle_assigned),
-        AppRoute(method="GET", path="/initiatives", handler=handle_initiatives),
-        AppRoute(method="POST", path="/initiatives", handler=handle_add_initiative),
-        AppRoute(method="POST", path="/initiatives/remove", handler=handle_remove_initiative),
-        AppRoute(method="POST", path="/goal-pass", handler=handle_goal_pass),
     ]

@@ -8,12 +8,6 @@ import {
   BRIEFING_LIMIT,
   applyInstructed,
   clusterBy,
-  prBucket,
-  prBlockers,
-  prVerdict,
-  repoFromUrl,
-  reviewDecision,
-  unresolvedThreads,
   rollUpSessions,
   applySetAside,
   DONE_WINDOW_MS,
@@ -23,27 +17,12 @@ import {
   RELATED_LIMIT,
   responseVerb,
   fleetBriefing,
-  clusterByInitiative,
   ambientPhrases,
   deliverablePhrases,
-  explainGoal,
   goalPairKey,
-  goalRouteTarget,
-  HARD_GOAL_MATCHES,
-  initiativeCandidates,
-  initiativeFor,
   markDuplicates,
-  memberDot,
-  memberKind,
   goalComposition,
-  goalName,
-  provenanceEdge,
-  reconcileGoalKeys,
-  rememberGoals,
-  rollupStatus,
   sameGoal,
-  sessionNameMismatch,
-  suggestGoalNames,
   titleOverlap,
   titleWords,
   normalizeWorkItems as normalizeWorkItemsWithCopy,
@@ -590,9 +569,9 @@ describe('intent summaries', () => {
       .toEqual(['Crew Companion polish', 'github #60'])
   })
 
-  it('keeps every link on the session-level item, which is not scoped to a goal', () => {
-    // Scoping belongs to goals. The session really is on all of its links, and
-    // the PR view fans out from this row.
+  it('keeps every link on the session-level item', () => {
+    // The session really is on all of its links, so the row can show every
+    // change it touches.
     const [item] = normalizeWorkItems(sources({ slots: [slot({
       source_links: [
         { provider: 'github', number: 6, url: 'https://github.com/o/r/pull/6', kind: 'change' },
@@ -1035,6 +1014,95 @@ describe('conductor briefing', () => {
   })
 })
 
+describe('the same-job judgement', () => {
+  // sameGoal is the ONE judge of "these two items are the same job". The goal and
+  // PR lenses are gone, but this still decides the DUPLICATE notice and the
+  // RELATED-SESSIONS line on a session row, so its semantics stay under test.
+  function goal(id: string, session: string | undefined, extra: Partial<WorkItem> = {}): WorkItem {
+    return {
+      id,
+      title: `work item ${id}`,
+      summary: 's',
+      state: 'running',
+      issue: false,
+      updatedAt: 1,
+      sessionKey: session,
+      provenance: 'p',
+      references: session
+        ? [{ kind: 'session', id: session, label: session, sessionKey: session }]
+        : [],
+      ...extra,
+    } as WorkItem
+  }
+
+  it('matches two sessions naming the same deliverable', () => {
+    // The sentences around the name share almost nothing, so loose word overlap
+    // misses it; the named thing is what they have in common.
+    const a = goal('a', 's1', { title: 'Finish and proof the GitLab Case Study deck' })
+    const b = goal('b', 's2', { title: 'rehearse timings, slide order and stage cues for GitLab Case Study' })
+    expect(titleOverlap(a.title, b.title)).toBeLessThan(0.6)
+    expect(sameGoal(a, b)).toBe('same_deliverable')
+  })
+
+  it('matches a deliverable across a plural', () => {
+    expect(deliverablePhrases('Restyle the Goal Cards')).toContain('goal card')
+    const a = goal('a', 's1', { title: 'Restyle the Goal Cards' })
+    const b = goal('b', 's2', { title: 'measure spacing on one Goal Card' })
+    expect(sameGoal(a, b)).toBe('same_deliverable')
+  })
+
+  it('does not match on a generic phrase, or on a single capitalized word', () => {
+    // The collapse-everything failures: "Pull Request" is in every title on the
+    // board, and one shared word is not a deliverable.
+    expect(deliverablePhrases('Pull Request cleanup')).toEqual([])
+    const a = goal('a', 's1', { title: 'Pull Request triage for today' })
+    const b = goal('b', 's2', { title: 'Pull Request numbering convention' })
+    expect(sameGoal(a, b)).toBeNull()
+
+    const c = goal('c', 's1', { title: 'Fix the login redirect' })
+    const d = goal('d', 's2', { title: 'Fix the export encoding' })
+    expect(sameGoal(c, d)).toBeNull()
+  })
+
+  it('does not treat the project name every title carries as a deliverable', () => {
+    // A board where nearly everything says "Crew Manager" must not have every row
+    // warning that every other row duplicates it.
+    const board = [
+      goal('a', 's1', { title: 'Crew Manager needs-you queue ordering' }),
+      goal('b', 's2', { title: 'Crew Manager linked-change chips' }),
+      goal('c', 's3', { title: 'Crew Manager Conductor quoting' }),
+      goal('d', 's4', { title: 'Crew Manager cron history counts' }),
+      goal('e', 's5', { title: 'unrelated irrigation timer install' }),
+    ]
+    const ambient = ambientPhrases(board)
+    expect(ambient.has('crew manager')).toBe(true)
+    expect(sameGoal(board[0], board[1], ambient)).toBeNull()
+  })
+
+  it('still matches on a shared name when the board is not saturated with it', () => {
+    const board = [
+      goal('a', 's1', { title: 'draft the Goal Extraction stages' }),
+      goal('b', 's2', { title: 'test fixtures for Goal Extraction' }),
+      goal('c', 's3', { title: 'unrelated irrigation timer install' }),
+      goal('d', 's4', { title: 'book the dentist appointment' }),
+      goal('e', 's5', { title: 'renew the parking permit' }),
+    ]
+    const ambient = ambientPhrases(board)
+    expect(ambient.has('goal extraction')).toBe(false)
+    expect(sameGoal(board[0], board[1], ambient)).toBe('same_deliverable')
+  })
+
+  it('never warns a session that it duplicates its own work', () => {
+    // markDuplicates is the warning's entry point and it compares ACROSS sessions
+    // only -- a session must never be told it duplicates the loop it started.
+    const session = goal('slot:s1', 's1', { title: 'rebuild the checkout flow' })
+    const loop = goal('loop:9', 's1', { title: 'watching pull request 12', parentId: 'slot:s1' })
+    markDuplicates([session, loop])
+    expect(session.duplicateOf).toBeUndefined()
+    expect(loop.duplicateOf).toBeUndefined()
+  })
+})
+
 describe('live duplicates', () => {
   it('flags two live sessions pointing at the same change', () => {
     const link = { provider: 'github', number: 7, url: 'https://github.com/o/r/pull/7', kind: 'change' as const }
@@ -1278,30 +1346,9 @@ describe('grouping the list', () => {
     } as WorkItem
   }
 
-  it('fans an item out to every PR it references', () => {
-    // A session touching several PRs must appear under each — otherwise all but
-    // the first PR are invisible in the PR view.
-    const multi = { ...item('a', 's1', '42'), references: [
-      { kind: 'session' as const, id: 's1', label: 's1', sessionKey: 's1' },
-      { kind: 'change' as const, id: '42', label: 'PR 42' },
-      { kind: 'change' as const, id: '43', label: 'PR 43' },
-    ] } as WorkItem
-    const blocks = clusterBy([multi], 'pr')
-    expect(blocks.map(b => b.changeRef?.label)).toEqual(['PR 42', 'PR 43'])
-    expect(blocks.every(b => b.items[0].id === 'a')).toBe(true)
-  })
-
-  it('excludes PR-less work from the PR view', () => {
-    // The PR view is about PRs — a session with no linked change does not appear.
-    const blocks = clusterBy([item('a', 's1', '42'), item('b', 's2')], 'pr')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0].header).toBe('pr')
-    expect(blocks.some(b => b.items.some(i => i.id === 'b'))).toBe(false)
-  })
-
-  it('rolls a PR block up to one row per session, keeping the most-urgent leader', () => {
-    // Under a PR the unit is the session, not every goal — two goals from one
-    // session collapse to a single row led by the first (most-urgent).
+  it('rolls a set of items up to one row per session, keeping the most-urgent leader', () => {
+    // The unit is the session, not every goal — two goals from one session
+    // collapse to a single row led by the first (most-urgent).
     const rollups = rollUpSessions([
       item('a', 's1', '42'),
       item('b', 's1', '42'),
@@ -1312,369 +1359,30 @@ describe('grouping the list', () => {
     expect(rollups[0].count).toBe(2)
   })
 
-  it('by session gathers a session even when its items are not adjacent', () => {
-    const blocks = clusterBy([item('a', 's1'), item('b', 's2'), item('c', 's1')], 'session')
+  it('gathers a session even when its items are not adjacent', () => {
+    const blocks = clusterBy([item('a', 's1'), item('b', 's2'), item('c', 's1')])
     expect(blocks.map(b => b.key)).toEqual(['s1', 's2'])
     expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'c'])
     expect(blocks[0].header).toBe('session')
   })
 
-  it('by PR groups the same change across different sessions', () => {
-    // The whole point: one PR touched by two sessions folds into one group.
-    const blocks = clusterBy([
-      item('a', 's1', '42'),
-      item('b', 's2', '42'),
-      item('c', 's3'),
-    ], 'pr')
-    const prBlock = blocks.find(b => b.header === 'pr')
-    expect(prBlock?.items.map(i => i.id)).toEqual(['a', 'b'])
-    expect(prBlock?.changeRef?.label).toBe('PR 42')
-    // A work item with no PR is excluded from the PR view entirely.
-    expect(blocks.some(b => b.items.some(i => i.id === 'c'))).toBe(false)
-  })
-
   it('a group takes the position of its most-urgent (first) member', () => {
     // Items arrive pre-sorted; grouping must not reorder across groups.
-    const blocks = clusterBy([item('a', 's1', '42'), item('b', 's2', '43'), item('c', 's3', '42')], 'pr')
-    expect(blocks[0].changeRef?.id).toBe('42')
+    const blocks = clusterBy([item('a', 's1'), item('b', 's2'), item('c', 's1')])
+    expect(blocks[0].key).toBe('s1')
     expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'c'])
-    expect(blocks[1].changeRef?.id).toBe('43')
+    expect(blocks[1].key).toBe('s2')
+  })
+
+  it('leaves an item with no session as its own headerless row', () => {
+    const orphan = { ...item('x', 's9'), sessionKey: undefined } as WorkItem
+    const blocks = clusterBy([orphan])
+    expect(blocks[0].header).toBeNull()
+    expect(blocks[0].key).toBe('x')
   })
 })
 
-describe('grouping by goal', () => {
-  function goal(id: string, session: string, extra: Partial<WorkItem> = {}): WorkItem {
-    return {
-      id, title: `ship the ${id} grouping view`, summary: 's', state: 'running',
-      issue: false, updatedAt: 1, sessionKey: session, provenance: 'p',
-      references: [{ kind: 'session', id: session, label: session, sessionKey: session }],
-      ...extra,
-    } as WorkItem
-  }
-
-  it('merges two sessions on the same linked change', () => {
-    const a = goal('a', 's1', { references: [
-      { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' },
-      { kind: 'change', id: '42', label: 'PR 42' },
-    ] })
-    const b = goal('b', 's2', { references: [
-      { kind: 'session', id: 's2', label: 's2', sessionKey: 's2' },
-      { kind: 'change', id: '42', label: 'PR 42' },
-    ] })
-    const blocks = clusterBy([a, b], 'goal')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0].header).toBe('goal')
-    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
-  })
-
-  it('merges two sessions on the same artifact', () => {
-    const a = goal('a', 's1', { title: 'polish the launch page', references: [
-      { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' },
-      { kind: 'artifact', id: 'launch-page', label: 'Launch page' },
-    ] })
-    const b = goal('b', 's2', { title: 'entirely different words here', references: [
-      { kind: 'session', id: 's2', label: 's2', sessionKey: 's2' },
-      { kind: 'artifact', id: 'launch-page', label: 'Launch page' },
-    ] })
-    expect(sameGoal(a, b)).toBe('same_artifact')
-    expect(clusterBy([a, b], 'goal')).toHaveLength(1)
-  })
-
-  it('does not merge on loose title or next-step overlap, but still reports it', () => {
-    // Loose overlap divides by the SMALLER title, so two shared words pair two
-    // items — and union-find is transitive, so those pairs chain until the board
-    // is one card. Deterministic clustering therefore keeps HARD signals only.
-    // sameGoal still reports them, because the duplicate warning and the merge
-    // hint are advice and want every resemblance they can find.
-    expect(HARD_GOAL_MATCHES).toEqual(['same_change', 'same_artifact', 'same_deliverable'])
-
-    const a = goal('a', 's1', { title: 'group crew manager by goal' })
-    const b = goal('b', 's2', { title: 'crew manager goal grouping logic' })
-    expect(sameGoal(a, b)).toBe('same_topic')
-    expect(clusterBy([a, b], 'goal')).toHaveLength(2)
-
-    const c = goal('c', 's1', { title: 'morning cleanup', nextSteps: [
-      { what: 'verify the goal grouping renders merged cards' },
-    ] })
-    const d = goal('d', 's2', { title: 'afternoon errands', nextSteps: [
-      { what: 'check merged cards in the goal grouping view' },
-    ] })
-    expect(sameGoal(c, d)).toBe('same_step')
-    expect(clusterBy([c, d], 'goal')).toHaveLength(2)
-  })
-
-  it('merges a loose-overlap pair when the semantic pass names it', () => {
-    // The judgement did not disappear, it moved: the model pass supplies its
-    // merges as enumerated pairs, so one decision cannot chain into a third item.
-    const a = goal('a', 's1', { title: 'group crew manager by goal' })
-    const b = goal('b', 's2', { title: 'crew manager goal grouping logic' })
-    const c = goal('c', 's3', { title: 'crew manager goal cards spacing' })
-
-    const semantic = new Set([goalPairKey(a, b)])
-    const blocks = clusterBy([a, b, c], 'goal', EMPTY_VERDICTS, semantic)
-    expect(blocks).toHaveLength(2)
-    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
-    expect(blocks[0].header).toBe('goal')
-    // c overlaps both titles, but no pair names it — so it stays its own row.
-    expect(blocks[1].items.map(i => i.id)).toEqual(['c'])
-  })
-
-  it('a hard change match still merges across sessions with no semantic pairs', () => {
-    // The hard signals are what deterministic clustering keeps: a shared change
-    // merges on its own, while a merely similar title in the same board does not.
-    const change = { kind: 'change' as const, id: 'https://x/pull/6', label: 'github #6' }
-    const a = goal('a', 's1', { title: 'one thing entirely', references: [
-      { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' }, change,
-    ] })
-    const b = goal('b', 's2', { title: 'another matter altogether', references: [
-      { kind: 'session', id: 's2', label: 's2', sessionKey: 's2' }, change,
-    ] })
-    const looseLeft = goal('c', 's3', { title: 'polish the papyrus export flow' })
-    const looseRight = goal('d', 's4', { title: 'papyrus export flow polish' })
-
-    const blocks = clusterBy([a, b, looseLeft, looseRight], 'goal')
-    expect(blocks.map(block => block.items.map(i => i.id))).toEqual([['a', 'b'], ['c'], ['d']])
-  })
-
-  it('never merges two goals inside one session', () => {
-    // Two intents in one session are distinct goals the session view already holds.
-    const blocks = clusterBy([goal('a', 's1'), goal('b', 's1')], 'goal')
-    expect(blocks).toHaveLength(2)
-    expect(blocks.every(b => b.header === null)).toBe(true)
-  })
-
-  it('merges two items inside one session when the semantic pass names the pair', () => {
-    // The deterministic matcher keeps same-session intents apart (test above),
-    // but the model may rule that several intents in one session are one piece
-    // of work — an explicit model pair merges even within a session.
-    const a = goal('a', 's1', { title: 'remove the goal-header icon' })
-    const b = goal('b', 's1', { title: 'fix the shared collapse state' })
-    const c = goal('c', 's1', { title: 'unrelated thing in the same session' })
-
-    const semantic = new Set([goalPairKey(a, b)])
-    const blocks = clusterBy([a, b, c], 'goal', EMPTY_VERDICTS, semantic)
-    expect(blocks).toHaveLength(2)
-    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
-    expect(blocks[0].header).toBe('goal')
-    // c shares the session but no pair named it — it stays its own row.
-    expect(blocks[1].items.map(i => i.id)).toEqual(['c'])
-  })
-
-  it('a user split ruling still beats a same-session semantic pair', () => {
-    // Stickiness of the user's own call: even within one session, if they ruled
-    // the pair apart, the model's merge does not override it.
-    const a = goal('a', 's1', { title: 'remove the goal-header icon' })
-    const b = goal('b', 's1', { title: 'fix the shared collapse state' })
-    const semantic = new Set([goalPairKey(a, b)])
-    const blocks = clusterBy([a, b], 'goal', { merged: [], split: [goalPairKey(a, b)] }, semantic)
-    expect(blocks).toHaveLength(2)
-  })
-
-  it('the user split ruling beats every signal, and merge beats no-signal', () => {
-    const change = { kind: 'change' as const, id: 'https://x/pull/9', label: 'github #9' }
-    const a = goal('a', 's1', { references: [
-      { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' }, change,
-    ] })
-    const b = goal('b', 's2', { references: [
-      { kind: 'session', id: 's2', label: 's2', sessionKey: 's2' }, change,
-    ] })
-    // A hard signal says same job (one shared change); the user said no.
-    expect(sameGoal(a, b)).toBe('same_change')
-    const split = clusterBy([a, b], 'goal', { merged: [], split: [goalPairKey(a, b)] })
-    expect(split).toHaveLength(2)
-
-    const c = goal('c', 's1', { title: 'one thing entirely' })
-    const d = goal('d', 's2', { title: 'another matter altogether' })
-    expect(sameGoal(c, d)).toBeNull()
-    const merged = clusterBy([c, d], 'goal', { merged: [goalPairKey(c, d)], split: [] })
-    expect(merged).toHaveLength(1)
-    expect(merged[0].header).toBe('goal')
-  })
-
-  it('the user split ruling beats a semantic pair too', () => {
-    // The model pass is a new source of merges, so it needs the same subordination
-    // every other signal has: a pair the user pulled apart stays apart.
-    const a = goal('a', 's1', { title: 'one thing entirely' })
-    const b = goal('b', 's2', { title: 'another matter altogether' })
-    const semantic = new Set([goalPairKey(a, b)])
-    expect(clusterBy([a, b], 'goal', EMPTY_VERDICTS, semantic)).toHaveLength(1)
-    const blocks = clusterBy([a, b], 'goal', { merged: [], split: [goalPairKey(a, b)] }, semantic)
-    expect(blocks).toHaveLength(2)
-  })
-
-  it('lone goals stay plain rows; a merged block anchors at its first member', () => {
-    const lone = goal('x', 's3', { title: 'entirely unrelated business' })
-    const a = goal('a', 's1')
-    const b = goal('b', 's2')
-    const semantic = new Set([goalPairKey(a, b)])
-    const blocks = clusterBy([a, lone, b], 'goal', EMPTY_VERDICTS, semantic)
-    // The a+b cluster keeps a's position (first), lone stays a headerless row.
-    expect(blocks.map(block => block.key)).toEqual(['goal:a', 'goal:x'])
-    expect(blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
-    expect(blocks[1].header).toBeNull()
-  })
-})
-
-describe('initiatives (the big-goal level)', () => {
-  const buckets = [
-    { name: 'Crew Manager', aliases: ['Crew Manager', 'overwatch', 'crew-manager'] },
-    { name: 'Crew Companion', aliases: ['Crew Companion', 'mochi', 'the pet'] },
-  ]
-
-  function goal(id: string, session: string, extra: Partial<WorkItem> = {}): WorkItem {
-    return {
-      id, title: `work on ${id}`, summary: 's', state: 'running', issue: false,
-      updatedAt: 1, sessionKey: session, provenance: 'p',
-      references: [{ kind: 'session', id: session, label: session, sessionKey: session }],
-      ...extra,
-    } as WorkItem
-  }
-
-  it('matches by alias against title, session label, and provenance', () => {
-    const byTitle = goal('a', 's1', { title: 'ship the overwatch grouping' })
-    const bySession = goal('b', 's2', { references: [
-      { kind: 'session', id: 's2', label: 'Crew Companion bug triage', sessionKey: 's2' },
-    ] })
-    const nowhere = goal('c', 's3', { title: 'unrelated errand' })
-    expect(initiativeFor(byTitle, buckets)).toBe('Crew Manager')
-    expect(initiativeFor(bySession, buckets)).toBe('Crew Companion')
-    expect(initiativeFor(nowhere, buckets)).toBeNull()
-  })
-
-  it('the item title outranks the session name it happens to live in', () => {
-    // "Redesign the Crew Manager cards" inside "Crew Companion Open Bugs" is
-    // Crew Manager work — the title says what it is, the session says where.
-    const crossed = goal('a', 's1', {
-      title: 'Redesign the Crew Manager cards',
-      references: [{ kind: 'session', id: 's1', label: 'Crew Companion Open Bugs', sessionKey: 's1' }],
-    })
-    expect(initiativeFor(crossed, buckets)).toBe('Crew Manager')
-  })
-
-  it('rolls status up: owed to the user beats motion beats done', () => {
-    const done = goal('a', 's1', { state: 'done' })
-    const running = goal('b', 's2', { state: 'running' })
-    const needs = goal('c', 's3', { state: 'needs-you' })
-    expect(rollupStatus([done, running, needs])).toBe('needs-you')
-    expect(rollupStatus([done, running])).toBe('running')
-    expect(rollupStatus([done])).toBe('done')
-  })
-
-  it('routes an instruction to the moving member, else the freshest', () => {
-    const idle = goal('a', 's1', { state: 'needs-you', updatedAt: 100 })
-    const active = goal('b', 's2', { state: 'running', moving: true, updatedAt: 50 })
-    expect(goalRouteTarget([idle, active]).id).toBe('b')
-    // Nobody moving: the most recently touched member, so sending resumes it.
-    const older = goal('c', 's1', { state: 'needs-you', updatedAt: 10 })
-    const newer = goal('d', 's2', { state: 'needs-you', updatedAt: 90 })
-    expect(goalRouteTarget([older, newer]).id).toBe('d')
-  })
-
-  it('buckets claim items, the bucket anchors at its most-urgent member', () => {
-    const cm1 = goal('a', 's1', { title: 'overwatch: verb badges' })
-    const loose = goal('x', 's9', { title: 'random errand' })
-    const cm2 = goal('b', 's2', { title: 'crew-manager stall backend' })
-    const units = clusterByInitiative([cm1, loose, cm2], buckets)
-    expect(units.map(unit => unit.name)).toEqual(['Crew Manager', null])
-    expect(units[0].blocks.flatMap(block => block.items.map(i => i.id))).toEqual(['a', 'b'])
-    expect(units[0].sessions).toEqual(['s1', 's2'])
-    expect(units[1].blocks[0].items[0].id).toBe('x')
-  })
-
-  it('loose items dedup among themselves, on the same signals as anywhere else', () => {
-    const a = goal('a', 's1', { title: 'polish the papyrus export flow' })
-    const b = goal('b', 's2', { title: 'papyrus export flow polish' })
-    // Loose title overlap no longer merges, so these are two units on their own.
-    expect(clusterByInitiative([a, b], buckets)).toHaveLength(2)
-    // The semantic pass reaches the loose tail too, not just bucketed work.
-    const units = clusterByInitiative([a, b], buckets, EMPTY_VERDICTS, [], new Set([goalPairKey(a, b)]))
-    expect(units).toHaveLength(1)
-    expect(units[0].name).toBeNull()
-    expect(units[0].blocks[0].header).toBe('goal')
-    expect(units[0].blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
-  })
-
-  it('threads the semantic pairs into a bucket as well as the loose tail', () => {
-    const left = goal('a', 's1', { title: 'overwatch verb badges' })
-    const right = goal('b', 's2', { title: 'crew-manager badge wording' })
-    const bucketed = clusterByInitiative([left, right], buckets)
-    expect(bucketed[0].name).toBe('Crew Manager')
-    // Same bucket, two goals — until the model says they are one job.
-    expect(bucketed[0].blocks).toHaveLength(2)
-    const merged = clusterByInitiative(
-      [left, right], buckets, EMPTY_VERDICTS, [], new Set([goalPairKey(left, right)]),
-    )
-    expect(merged[0].blocks).toHaveLength(1)
-    expect(merged[0].blocks[0].items.map(i => i.id)).toEqual(['a', 'b'])
-  })
-
-  it('suggests candidates from project dirs no bucket claims', () => {
-    const slots = [
-      { key: 's1', project: '/Users/x/Developer/papyrus-app' },
-      { key: 's2', project: '/Users/x/Developer/papyrus-app/' },
-      { key: 's3', project: '/Users/x/Developer/overwatch' },
-      { key: 's4' },
-      { key: 'crew-manager-conductor', project: '/Users/x/Developer/papyrus-app' },
-    ] as never[]
-    const candidates = initiativeCandidates(slots, buckets)
-    // overwatch is already a Crew Manager alias; the conductor never counts.
-    expect(candidates).toEqual([{ name: 'papyrus-app', sessions: 2 }])
-  })
-
-  it('mines a recurring title phrase from unbucketed work as a suggested goal', () => {
-    const noBuckets: { name: string; aliases: string[] }[] = []
-    const a = goal('a', 's1', { title: 'Papyrus Export flow polish' })
-    const b = goal('b', 's2', { title: 'Fix the Papyrus Export crash' })
-    const c = goal('c', 's3', { title: 'Book flights for the offsite' })
-    const suggestions = suggestGoalNames([a, b, c], noBuckets)
-    expect(suggestions[0]).toEqual({ name: 'Papyrus Export', sessions: 2 })
-    // A phrase living in one session only is not a goal, it is a title.
-    expect(suggestions.some(entry => entry.name.includes('Flights'))).toBe(false)
-  })
-
-  it('bucketed work feeds no suggestions', () => {
-    // Items a bucket already claims must not re-suggest their own bucket.
-    const a = goal('a', 's1', { title: 'overwatch verb badges' })
-    const b = goal('b', 's2', { title: 'overwatch stall backend' })
-    expect(suggestGoalNames([a, b], buckets)).toEqual([])
-  })
-
-  it('the longest matching alias wins over a shorter generic one', () => {
-    // A stray "Crew" bucket must not swallow Crew Manager and Crew Companion
-    // work — this is the real-data failure that hid the mismatch hint.
-    const withGeneric = [
-      { name: 'Crew', aliases: ['Crew'] },
-      ...buckets,
-    ]
-    const item = goal('a', 's1', { title: 'Redesign the Crew Manager cards' })
-    expect(initiativeFor(item, withGeneric)).toBe('Crew Manager')
-  })
-
-  it('flags a session whose name only mentions another goal', () => {
-    const crossed = goal('a', 's1', {
-      title: 'Redesign the Crew Manager cards',
-      references: [{ kind: 'session', id: 's1', label: 'Crew Companion Open Bugs', sessionKey: 's1' }],
-    })
-    expect(sessionNameMismatch(crossed, buckets)).toEqual({
-      itemGoal: 'Crew Manager',
-      sessionGoal: 'Crew Companion',
-    })
-    // Once the name covers both topics, the flag vanishes — that is the fix.
-    const renamed = goal('b', 's1', {
-      title: 'Redesign the Crew Manager cards',
-      references: [{ kind: 'session', id: 's1', label: 'Crew Companion Open Bugs & Crew Manager', sessionKey: 's1' }],
-    })
-    expect(sessionNameMismatch(renamed, buckets)).toBeNull()
-    // A session name matching no goal at all is vague, not contradictory.
-    const vague = goal('c', 's2', {
-      title: 'Redesign the Crew Manager cards',
-      references: [{ kind: 'session', id: 's2', label: 'Tuesday chores', sessionKey: 's2' }],
-    })
-    expect(sessionNameMismatch(vague, buckets)).toBeNull()
-  })
-})
-
-describe('goal-card member presentation', () => {
+describe('card composition', () => {
   function item(id: string, extra: Partial<WorkItem> = {}): WorkItem {
     return {
       id, title: 't', summary: 's', state: 'running', issue: false,
@@ -1683,56 +1391,6 @@ describe('goal-card member presentation', () => {
       ...extra,
     } as WorkItem
   }
-
-  it('the dot follows the same state language as the badge', () => {
-    // Red means the developer is owed an action -- the same thing the lane and the
-    // badge mean by "unblock".
-    expect(memberDot(item('c', { state: 'needs-you', action: 'reply' }))).toBe('crit')
-    expect(memberDot(item('d', { state: 'needs-you', unattendedGoals: 1, action: 'resume' }))).toBe('warn')
-    expect(memberDot(item('e', { state: 'running' }))).toBe('good')
-    expect(memberDot(item('f', { state: 'done' }))).toBe('idle')
-  })
-
-  it('a red linked change does not by itself paint the row critical', () => {
-    // `issue` is a fact about the world, not a measure of what is owed. Leading
-    // with it painted every row with a failing PR red -- on a real account that
-    // was nearly the whole list, while only two rows carried a needs-you badge, so
-    // the dot stopped discriminating. Work that is RUNNING needs nobody, whatever
-    // its checks say.
-    expect(memberDot(item('b', { state: 'running', issue: true }))).toBe('good')
-    expect(memberDot(item('g', { state: 'done', issue: true }))).toBe('idle')
-    // It still colours work that genuinely needs the developer, because the state
-    // says so -- not because the flag is set.
-    expect(memberDot(item('a', { state: 'needs-you', issue: true, changeBlocked: true }))).toBe('crit')
-  })
-
-  it('stays discriminating on a fleet where most work has a red change', () => {
-    // The shape that broke it: a developer with many failing pull requests. Twenty
-    // sessions running fine with red checks, two actually owed something. Leading
-    // with `issue` painted twenty-two rows red; the badge said two. A signal that
-    // fires on nearly every row is not a signal.
-    const busy = Array.from({ length: 20 }, (_, index) => (
-      item(`running-${index}`, { state: 'running', issue: true, changeBlocked: true })
-    ))
-    const owed = [
-      item('reply', { state: 'needs-you', action: 'reply' }),
-      item('approval', { state: 'needs-you', approvalKind: 'tool' }),
-    ]
-    const dots = [...busy, ...owed].map(work => memberDot(work))
-
-    expect(dots.filter(dot => dot === 'crit')).toHaveLength(owed.length)
-    expect(dots.filter(dot => dot === 'good')).toHaveLength(busy.length)
-  })
-
-  it('the kind names the response owed when it needs you, else the entity', () => {
-    expect(memberKind(item('a', { state: 'needs-you', action: 'reply' }))).toBe('unblock')
-    expect(memberKind(item('b', { state: 'needs-you', unattendedGoals: 1, action: 'resume' }))).toBe('follow-up')
-    expect(memberKind(item('monitor:x', { state: 'running' }))).toBe('cron')
-    expect(memberKind(item('workflow:x', { state: 'running' }))).toBe('loop')
-    expect(memberKind(item('agent:x', { state: 'running' }))).toBe('agent')
-    expect(memberKind(item('artifact:x', { state: 'done' }))).toBe('artifact')
-    expect(memberKind(item('intent:s1:0', { state: 'running' }))).toBe('session')
-  })
 
   it('composition counts only entities that actually exist among members', () => {
     const a = item('intent:s1:0', { sessionKey: 's1', updatedAt: 5, references: [
@@ -1905,37 +1563,6 @@ describe('searchWorkItems', () => {
     expect(searchWorkItems(items, '#2051')).toHaveLength(1)
     expect(searchWorkItems(items, 'crew companion')).toHaveLength(1)
     expect(searchWorkItems(items, 'missing')).toHaveLength(0)
-  })
-})
-
-describe('prBucket', () => {
-  it('prefers live GitHub check counts over the coarse status', () => {
-    expect(prBucket({ status: 'checks running', available: true, total: 5, failing: 2 })).toBe('failing')
-    expect(prBucket({ status: 'checks failing', available: true, total: 5, pending: 1 })).toBe('running')
-    expect(prBucket({ status: 'checks failing', available: true, total: 5, failing: 0, pending: 0 })).toBe('other')
-  })
-
-  it('counts a merge conflict as failing even with green checks', () => {
-    expect(prBucket({ status: 'conflict', available: true, total: 5, failing: 0 })).toBe('failing')
-  })
-
-  it('agrees with the row pill, so no chip contradicts a visible row', () => {
-    // The fetched state is what the pill reads, so the chip must read it too:
-    // a Merged row in a list whose Merged chip says 0 is the bug this prevents.
-    expect(prBucket({ state: 'MERGED' })).toBe('merged')
-    expect(prBucket({ state: 'OPEN', review: 'changes-requested' })).toBe('failing')
-    expect(prBucket({ state: 'OPEN', mergeState: 'blocked' })).toBe('other')
-  })
-
-  it('sends merged to its own bucket and closed/open to other', () => {
-    expect(prBucket({ status: 'merged' })).toBe('merged')
-    expect(prBucket({ status: 'closed' })).toBe('other')
-    expect(prBucket({ status: undefined })).toBe('other')
-  })
-
-  it('falls back to the coarse status when no live checks exist', () => {
-    expect(prBucket({ status: 'checks failing' })).toBe('failing')
-    expect(prBucket({ status: 'checks running' })).toBe('running')
   })
 })
 
@@ -2177,478 +1804,6 @@ describe('related sessions', () => {
  * merges where loose word overlap misses; nothing is force-fit; and a goal keeps
  * one identity as its membership moves.
  */
-describe('goal extraction', () => {
-  function goal(id: string, session: string | undefined, extra: Partial<WorkItem> = {}): WorkItem {
-    return {
-      id,
-      title: `work item ${id}`,
-      summary: 's',
-      state: 'running',
-      issue: false,
-      updatedAt: 1,
-      sessionKey: session,
-      provenance: 'p',
-      references: session
-        ? [{ kind: 'session', id: session, label: session, sessionKey: session }]
-        : [],
-      ...extra,
-    } as WorkItem
-  }
-
-  it('groups a loop with the session that started it, inside that one session', () => {
-    // Spec case 2. The loop records its parent, so this is a graph edge, not a
-    // guess -- and the same-session rule must not veto a recorded fact.
-    const session = goal('slot:s1', 's1', { title: 'rebuild the checkout flow' })
-    const loop = goal('loop:9', 's1', { title: 'watching pull request 12', parentId: 'slot:s1' })
-    expect(provenanceEdge(loop, session)).toBe('spawned')
-    const blocks = clusterBy([session, loop], 'goal')
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0].items.map(item => item.id)).toEqual(['slot:s1', 'loop:9'])
-  })
-
-  it('still keeps two unrelated intents of one session apart', () => {
-    // The provenance exception is narrow: without a recorded edge, two intents in
-    // one session remain the distinct goals they are.
-    const blocks = clusterBy([
-      goal('a', 's1', { title: 'one thing entirely' }),
-      goal('b', 's1', { title: 'another matter altogether' }),
-    ], 'goal')
-    expect(blocks).toHaveLength(2)
-  })
-
-  it('reads the edge from whichever side recorded it', () => {
-    // The session folded the artifact in as a reference; only one end knows.
-    const session = goal('slot:s1', 's1', {
-      title: 'draft the pricing note',
-      references: [
-        { kind: 'session', id: 's1', label: 's1', sessionKey: 's1' },
-        { kind: 'artifact', id: 'pricing-note', label: 'Pricing note' },
-      ],
-    })
-    const artifact = goal('artifact:pricing-note', undefined, { title: 'Pricing note' })
-    expect(provenanceEdge(session, artifact)).toBe('references')
-    expect(clusterBy([session, artifact], 'goal')).toHaveLength(1)
-  })
-
-  it('a provenance pair is one goal but never a duplicate warning', () => {
-    // sameGoal feeds the duplicate warning too, which is why provenance is a
-    // separate judge: a session must never be told it duplicates its own loop.
-    const session = goal('slot:s1', 's1', { title: 'rebuild the checkout flow' })
-    const loop = goal('loop:9', 's1', { title: 'watching pull request 12', parentId: 'slot:s1' })
-    markDuplicates([session, loop])
-    expect(session.duplicateOf).toBeUndefined()
-    expect(loop.duplicateOf).toBeUndefined()
-  })
-
-  it('merges two sessions naming the same deliverable', () => {
-    // Spec case 6. The sentences around the name share almost nothing, so loose
-    // word overlap misses it; the named thing is what they have in common.
-    const a = goal('a', 's1', { title: 'Finish and proof the GitLab Case Study deck' })
-    const b = goal('b', 's2', { title: 'rehearse timings, slide order and stage cues for GitLab Case Study' })
-    expect(titleOverlap(a.title, b.title)).toBeLessThan(0.6)
-    expect(sameGoal(a, b)).toBe('same_deliverable')
-    expect(clusterBy([a, b], 'goal')).toHaveLength(1)
-  })
-
-  it('matches a deliverable across a plural', () => {
-    expect(deliverablePhrases('Restyle the Goal Cards')).toContain('goal card')
-    const a = goal('a', 's1', { title: 'Restyle the Goal Cards' })
-    const b = goal('b', 's2', { title: 'measure spacing on one Goal Card' })
-    expect(sameGoal(a, b)).toBe('same_deliverable')
-  })
-
-  it('does not merge on a generic phrase, or on a single capitalized word', () => {
-    // Spec cases 3 and 5: the collapse-everything failures. "Pull Request" is in
-    // every title on the board, and one shared word is not a deliverable.
-    expect(deliverablePhrases('Pull Request cleanup')).toEqual([])
-    const a = goal('a', 's1', { title: 'Pull Request triage for today' })
-    const b = goal('b', 's2', { title: 'Pull Request numbering convention' })
-    expect(sameGoal(a, b)).toBeNull()
-
-    const c = goal('c', 's1', { title: 'Fix the login redirect' })
-    const d = goal('d', 's2', { title: 'Fix the export encoding' })
-    expect(sameGoal(c, d)).toBeNull()
-    expect(clusterBy([a, b, c, d], 'goal')).toHaveLength(4)
-  })
-
-  it('does not treat the project name every title carries as a deliverable', () => {
-    // The collapse failure the spec warns about, in this product's real shape: a
-    // board where nearly everything says "Crew Manager" must not become ONE goal.
-    // The project level is the initiative bucket's job, not a goal's.
-    const board = [
-      goal('a', 's1', { title: 'Crew Manager needs-you queue ordering' }),
-      goal('b', 's2', { title: 'Crew Manager PR view filters' }),
-      goal('c', 's3', { title: 'Crew Manager Conductor quoting' }),
-      goal('d', 's4', { title: 'Crew Manager cron history counts' }),
-      goal('e', 's5', { title: 'unrelated irrigation timer install' }),
-    ]
-    expect(ambientPhrases(board).has('crew manager')).toBe(true)
-    // Four separate goals plus the stray, not one merged card.
-    expect(clusterBy(board, 'goal')).toHaveLength(5)
-  })
-
-  it('still merges on a shared name when the board is not saturated with it', () => {
-    const board = [
-      goal('a', 's1', { title: 'draft the Goal Extraction stages' }),
-      goal('b', 's2', { title: 'test fixtures for Goal Extraction' }),
-      goal('c', 's3', { title: 'unrelated irrigation timer install' }),
-      goal('d', 's4', { title: 'book the dentist appointment' }),
-      goal('e', 's5', { title: 'renew the parking permit' }),
-    ]
-    expect(ambientPhrases(board).has('goal extraction')).toBe(false)
-    const blocks = clusterBy(board, 'goal')
-    expect(blocks).toHaveLength(4)
-    expect(blocks[0].items.map(item => item.id)).toEqual(['a', 'b'])
-  })
-
-  it('leaves a genuinely unrelated item on its own', () => {
-    // Spec case 8, the one that decides whether the view is usable: a pipeline
-    // that never says "these are not the same" force-fits everything.
-    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
-    const b = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
-    const stray = goal('c', 's3', { title: 'book the irrigation timer install' })
-    const blocks = clusterBy([a, b, stray], 'goal')
-    expect(blocks).toHaveLength(2)
-    expect(blocks.find(block => block.items.some(item => item.id === 'c'))?.header).toBeNull()
-  })
-
-  it('the user ruling beats a recorded provenance edge', () => {
-    // Spec case 9. Pins are Stage 0 and win outright -- including over a fact.
-    const session = goal('slot:s1', 's1', { title: 'rebuild the checkout flow' })
-    const loop = goal('loop:9', 's1', { title: 'watching pull request 12', parentId: 'slot:s1' })
-    const blocks = clusterBy([session, loop], 'goal', {
-      merged: [],
-      split: [goalPairKey(session, loop)],
-    })
-    expect(blocks).toHaveLength(2)
-  })
-
-  it('keys a goal on its membership, not on which member is most urgent', () => {
-    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
-    const b = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
-    // Same cluster, opposite order: a re-rank must not rename the goal.
-    expect(clusterBy([a, b], 'goal')[0].key).toBe(clusterBy([b, a], 'goal')[0].key)
-  })
-
-  it('keeps one goal id when the goal gains a member', () => {
-    // Spec case 10. The fold state is stored against this key, so a goal that is
-    // renamed every poll silently reopens itself.
-    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
-    const b = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
-    const first = clusterBy([a, b], 'goal')
-    const prior = rememberGoals(first)
-
-    const c = goal('c', 's3', { title: 'print the GitLab Case Study handout' })
-    const second = reconcileGoalKeys(clusterBy([c, a, b], 'goal'), prior)
-    expect(second).toHaveLength(1)
-    expect(second[0].key).toBe(first[0].key)
-  })
-
-  it('gives a split the old id for the larger part and a new one for the rest', () => {
-    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
-    const b = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
-    const c = goal('c', 's3', { title: 'print the GitLab Case Study handout' })
-    const prior = rememberGoals(clusterBy([a, b, c], 'goal'))
-    const priorKey = prior[0].key
-
-    // The user pulls c out; a+b stay together and keep the goal's identity.
-    const split = reconcileGoalKeys(
-      clusterBy([a, b, c], 'goal', {
-        merged: [],
-        split: [goalPairKey(a, c), goalPairKey(b, c)],
-      }),
-      prior,
-    )
-    expect(split).toHaveLength(2)
-    const larger = split.find(block => block.items.length === 2)
-    const remainder = split.find(block => block.items.length === 1)
-    expect(larger?.key).toBe(priorKey)
-    expect(remainder?.key).not.toBe(priorKey)
-  })
-
-  it('never hands two live goals the same key, even when an intrinsic key collides with a reclaimed prior', () => {
-    // The bug: a bigger block reclaims prior `goal:x`; a different single-item
-    // block whose own smallest-id member is `x` keeps its intrinsic `goal:x` and
-    // finds no match -- so both end up `goal:x`, sharing React key + fold state
-    // (one chevron toggled both). Reconcile must uniquify.
-    const x = goal('x', 'S', { title: 'alpha' })
-    const y = goal('y', 'S', { title: 'alpha' })
-    const z = goal('z', 'S', { title: 'alpha' })
-    type Block = ReturnType<typeof clusterBy>[number]
-    const bigger: Block = { key: 'goal:y', items: [y, z], header: 'goal', sessionKey: null, changeRef: null }
-    const lone: Block = { key: 'goal:x', items: [x], header: 'goal', sessionKey: null, changeRef: null }
-    const prior = [{ key: 'goal:x', members: ['S|alpha'] }]
-    const out = reconcileGoalKeys([bigger, lone], prior)
-    const keys = out.map(b => b.key)
-    expect(new Set(keys).size).toBe(2)
-    // The larger block reclaims the prior id; the colliding lone block is moved off it.
-    expect(out.find(b => b.items.length === 2)?.key).toBe('goal:x')
-    expect(out.find(b => b.items.length === 1)?.key).not.toBe('goal:x')
-  })
-
-  it('does not hand a prior id to an unrelated new goal', () => {
-    const a = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
-    const prior = rememberGoals(clusterBy([a], 'goal'))
-    const fresh = goal('z', 's9', { title: 'book the irrigation timer install' })
-    const next = reconcileGoalKeys(clusterBy([fresh], 'goal'), prior)
-    expect(next[0].key).not.toBe(prior[0].key)
-  })
-
-  it('names a merged goal from what its members share', () => {
-    // "N sessions, one goal" describes the grouping, not the work. A card gets a
-    // real name when the members share a nameable thing — and only falls back to
-    // the count label when they do not.
-    const deck = goal('a', 's1', { title: 'Finish the GitLab Case Study deck' })
-    const drill = goal('b', 's2', { title: 'rehearse timings for GitLab Case Study' })
-    expect(goalName([deck, drill])).toBe('GitLab Case Study')
-
-    // A shared change is a shared ENTITY, so it names the goal without touching
-    // any member's title.
-    const change = { kind: 'change' as const, id: 'https://example.invalid/pull/6', label: 'github #6' }
-    const left = goal('c', 's1', { title: 'one thing entirely', references: [change] })
-    const right = goal('d', 's2', { title: 'another matter altogether', references: [change] })
-    expect(goalName([left, right])).toBe('github #6')
-
-    // Else the words the titles have in common, in a member's own casing — and
-    // preferring the member that capitalizes them, since a name is a heading.
-    const ship = goal('e', 's1', { title: 'Ship the avatar upload flow' })
-    const also = goal('f', 's2', { title: 'Avatar upload flow shipping' })
-    expect(goalName([ship, also])).toBe('Avatar upload flow')
-
-    // Punctuation between words survives the round trip: the run is compared on
-    // words but rendered as the title writes it.
-    const sizes = [
-      goal('g', 's1', { title: 'Icon at 16/20/24/48 on light and dark' }),
-      goal('h', 's2', { title: 'Icon at 16/20/24/48 on light and dark, after the contrast fix' }),
-    ]
-    expect(goalName(sizes)).toBe('Icon at 16/20/24/48 on light and dark')
-
-    // Nothing shared is a real answer, not a guess: the caller keeps its label.
-    expect(goalName([
-      goal('i', 's1', { title: 'book the dentist appointment' }),
-      goal('j', 's2', { title: 'renew the parking permit' }),
-    ])).toBeNull()
-    // One item is not a merge, so it has no group to name.
-    expect(goalName([deck])).toBeNull()
-  })
-
-  it('says why it grouped, in words the user can act on', () => {
-    // The reason is a product surface: it is what Split is judged against.
-    const change = [
-      { kind: 'session' as const, id: 's1', label: 's1', sessionKey: 's1' },
-      { kind: 'change' as const, id: '42', label: 'PR 42' },
-    ]
-    const a = goal('a', 's1', { references: change })
-    const b = goal('b', 's2', {
-      references: [{ kind: 'change' as const, id: '42', label: 'PR 42' }],
-    })
-    expect(explainGoal([a, b])).toBe('these sessions work on the same change')
-
-    const deck = goal('d1', 's1', { title: 'Finish the GitLab Case Study deck' })
-    const drill = goal('d2', 's2', { title: 'rehearse timings for GitLab Case Study' })
-    // The name is quoted as the title writes it, not as the matcher normalized it.
-    expect(explainGoal([deck, drill])).toBe('both are about GitLab Case Study')
-
-    const session = goal('slot:s1', 's1', { title: 'rebuild the checkout flow' })
-    const loop = goal('loop:9', 's1', { title: 'watching pull request 12', parentId: 'slot:s1' })
-    expect(explainGoal([session, loop])).toBe('watching pull request 12 was started by this work')
-
-    const pinnedA = goal('p1', 's1', { title: 'one thing entirely' })
-    const pinnedB = goal('p2', 's2', { title: 'another matter altogether' })
-    expect(explainGoal([pinnedA, pinnedB], { merged: [goalPairKey(pinnedA, pinnedB)], split: [] }))
-      .toBe('you merged these')
-
-    // A single item was never grouped, so it has nothing to explain.
-    expect(explainGoal([pinnedA])).toBeNull()
-  })
-
-  it('uses the model\'s sentence only where no hard edge explains the card', () => {
-    // The semantic pass owns the merges deterministic clustering gave up, so it
-    // has to own the sentence too — otherwise a card merged by the model can only
-    // say nothing about why.
-    const a = goal('a', 's1', { title: 'group crew manager by goal' })
-    const b = goal('b', 's2', { title: 'crew manager goal grouping logic' })
-    const why = new Map([[goalPairKey(a, b), 'both are rebuilding the goal grouping pipeline']])
-    expect(explainGoal([a, b], EMPTY_VERDICTS, why))
-      .toBe('both are rebuilding the goal grouping pipeline')
-
-    // A hard edge is a fact about the items, so it outranks the model's prose.
-    const change = { kind: 'change' as const, id: '42', label: 'PR 42' }
-    const left = goal('c', 's1', { title: 'group crew manager by goal', references: [change] })
-    const right = goal('d', 's2', { title: 'crew manager goal grouping logic', references: [change] })
-    const hardWhy = new Map([[goalPairKey(left, right), 'the model would have said this']])
-    expect(explainGoal([left, right], EMPTY_VERDICTS, hardWhy))
-      .toBe('these sessions work on the same change')
-
-    // Loose overlap can no longer have caused a grouping, so it is never the
-    // reason given — with no semantic entry there is simply nothing to say.
-    expect(explainGoal([a, b])).toBeNull()
-    const steppy = [
-      goal('e', 's1', { title: 'morning cleanup', nextSteps: [{ what: 'verify the goal grouping renders merged cards' }] }),
-      goal('f', 's2', { title: 'afternoon errands', nextSteps: [{ what: 'check merged cards in the goal grouping view' }] }),
-    ]
-    expect(explainGoal(steppy)).toBeNull()
-  })
-})
-
-describe('PR verdict and blockers', () => {
-  const NOW = Date.parse('2026-08-19T18:00:00Z')
-  const clean = {
-    state: 'OPEN', mergeState: 'clean', base: 'main', available: true,
-    total: 3, passing: 3, failing: 0, pending: 0, updatedAt: NOW,
-  }
-
-  it('gives a merged PR one verdict and no work to do', () => {
-    expect(prVerdict({ state: 'MERGED', failing: 2, mergeState: 'dirty' })).toBe('merged')
-    // The pill already says Merged; a line repeating it spends a row on nothing.
-    expect(prBlockers({ state: 'MERGED', failing: 2 }, NOW)).toEqual([])
-    expect(prBlockers({ state: 'CLOSED' }, NOW)).toEqual([])
-  })
-
-  it('never restates the verdict pill in the blocker line', () => {
-    // Draft's only real content here is the staleness, so that is all it says.
-    expect(prBlockers({ ...clean, isDraft: true, updatedAt: NOW - 4 * 86_400_000 }, NOW))
-      .toEqual(['All checks passing', 'no activity in 4 days'])
-    expect(prBlockers({ ...clean, review: 'changes-requested' }, NOW))
-      .toEqual(['All checks passing'])
-  })
-
-  it('ranks a conflict above failing checks, because rebasing re-runs them', () => {
-    expect(prVerdict({ ...clean, mergeState: 'dirty', failing: 2 })).toBe('conflict')
-    expect(prBlockers({ ...clean, mergeState: 'dirty', failing: 2, passing: 1 }, NOW)).toEqual([
-      '2 checks failing', 'merge conflict with main',
-    ])
-  })
-
-  it('ranks a draft above every blocker it happens to carry', () => {
-    expect(prVerdict({ ...clean, isDraft: true, mergeState: 'dirty', failing: 1 })).toBe('draft')
-  })
-
-  it('calls a clean, fully passing PR ready and says so', () => {
-    expect(prVerdict(clean)).toBe('ready')
-    expect(prBlockers(clean, NOW)).toEqual(['All checks passing', 'ready to merge'])
-  })
-
-  it('reports auto-merge instead of ready when GitHub will land it', () => {
-    expect(prBlockers({ ...clean, autoMerge: true }, NOW)).toEqual([
-      'All checks passing', 'auto-merge armed',
-    ])
-  })
-
-  it('surfaces a behind-base PR that no single field calls broken', () => {
-    expect(prVerdict({ ...clean, mergeState: 'behind' })).toBe('behind')
-    expect(prBlockers({ ...clean, mergeState: 'behind' }, NOW)).toContain('behind main')
-  })
-
-  it('puts a person waiting on you above bookkeeping', () => {
-    // A rebase does not answer a review, so the review wins the pill.
-    expect(prVerdict({ ...clean, mergeState: 'behind', review: 'changes-requested' }))
-      .toBe('changes-requested')
-    expect(prVerdict({ ...clean, mergeState: 'behind', unresolved: 2 })).toBe('comments-open')
-    // But a failing build still comes first: the reviewer is reading broken code.
-    expect(prVerdict({ ...clean, failing: 1, review: 'changes-requested' })).toBe('ci-failing')
-  })
-
-  it('names staleness, which no other field reports', () => {
-    const stale = { ...clean, updatedAt: NOW - 4 * 86_400_000 }
-    expect(prBlockers(stale, NOW)).toContain('no activity in 4 days')
-    // A PR touched today is not stale.
-    expect(prBlockers(clean, NOW).join(' ')).not.toContain('no activity')
-  })
-
-  it('treats a change request as blocking and an approval as ready', () => {
-    expect(prVerdict({ ...clean, mergeState: 'blocked', review: 'changes-requested' }))
-      .toBe('changes-requested')
-    expect(prVerdict({ ...clean, review: 'approved' })).toBe('ready')
-    // Approved but still blocked is NOT ready: the host is authoritative about
-    // mergeability, and something else (a code-owner review, a required check)
-    // still holds it. Calling it Ready would send the user to a merge button
-    // the host refuses.
-    expect(prVerdict({ ...clean, mergeState: 'blocked', review: 'approved' })).toBe('needs-review')
-    expect(prVerdict({ ...clean, mergeState: 'blocked', review: 'none' })).toBe('needs-review')
-    expect(prBlockers({ ...clean, mergeState: 'blocked', review: 'none' }, NOW))
-      .toContain('waiting on review')
-  })
-
-  it('counts open threads, and singular reads as one comment', () => {
-    expect(prBlockers({ ...clean, unresolved: 1 }, NOW)).toContain('1 unresolved comment')
-    expect(prBlockers({ ...clean, unresolved: 3 }, NOW)).toContain('3 unresolved comments')
-  })
-
-  it('falls back to the platform status when the rich fields are missing', () => {
-    expect(prVerdict({ status: 'checks failing' })).toBe('ci-failing')
-    expect(prVerdict({ status: 'conflict' })).toBe('conflict')
-    expect(prVerdict({ status: 'merged' })).toBe('merged')
-    expect(prVerdict({})).toBe('open')
-  })
-
-  it('lets live data outrank a stale coarse status', () => {
-    // The coarse status is the platform's cached reading and lags the fetch. If
-    // it could override live fields, a fixed PR would keep reporting the old
-    // failure and a merged-then-reopened one would read Merged forever.
-    expect(prVerdict({ ...clean, status: 'checks failing' })).toBe('ready')
-    expect(prVerdict({ ...clean, status: 'merged' })).toBe('ready')
-    expect(prVerdict({ ...clean, status: 'conflict', mergeable: 'mergeable' })).toBe('ready')
-    // With no live checks it is still the best answer available.
-    expect(prVerdict({ status: 'checks failing', state: 'OPEN' })).toBe('ci-failing')
-  })
-
-  it('keeps the line to one row', () => {
-    const everything = {
-      ...clean, failing: 2, mergeState: 'dirty', unresolved: 5,
-      review: 'changes-requested' as const, autoMerge: true, updatedAt: NOW - 9 * 86_400_000,
-    }
-    expect(prBlockers(everything, NOW)).toHaveLength(4)
-  })
-})
-
-describe('PR review signals', () => {
-  it('lets a later approval clear the same reviewer’s change request', () => {
-    expect(reviewDecision([
-      { kind: 'review', state: 'CHANGES_REQUESTED', author: 'a', createdAt: '2026-08-01T00:00:00Z' },
-      { kind: 'review', state: 'APPROVED', author: 'a', createdAt: '2026-08-02T00:00:00Z' },
-    ])).toBe('approved')
-  })
-
-  it('keeps a change request that nobody has withdrawn', () => {
-    expect(reviewDecision([
-      { kind: 'review', state: 'APPROVED', author: 'a', createdAt: '2026-08-01T00:00:00Z' },
-      { kind: 'review', state: 'CHANGES_REQUESTED', author: 'b', createdAt: '2026-08-02T00:00:00Z' },
-    ])).toBe('changes-requested')
-  })
-
-  it('ignores plain comments and bare review notes', () => {
-    expect(reviewDecision([
-      { kind: 'comment', state: '', author: 'a' },
-      { kind: 'review', state: 'COMMENTED', author: 'b' },
-    ])).toBe('none')
-  })
-
-  it('counts each open thread once, however many comments it holds', () => {
-    expect(unresolvedThreads([
-      { resolvable: true, resolved: false, threadId: 't1' },
-      { resolvable: true, resolved: false, threadId: 't1' },
-      { resolvable: true, resolved: true, threadId: 't2' },
-      { resolvable: false, resolved: false, id: 'plain' },
-    ])).toBe(1)
-  })
-})
-
-describe('repoFromUrl', () => {
-  it('reads the repo out of a GitHub PR url', () => {
-    expect(repoFromUrl('https://github.com/xuejinT/crew-manager-app/pull/6')).toBe('crew-manager-app')
-  })
-
-  it('reads the project out of a nested GitLab merge request url', () => {
-    expect(repoFromUrl('https://gitlab.com/group/sub/project/-/merge_requests/12')).toBe('project')
-  })
-
-  it('answers nothing rather than guessing when there is no url', () => {
-    expect(repoFromUrl(undefined)).toBeUndefined()
-    expect(repoFromUrl('not a url')).toBeUndefined()
-  })
-})
-
 describe('owned work folded in', () => {
   const NOW = Date.parse('2026-08-20T12:00:00Z')
   // One shared timestamp across every row and slot, so age credit is identical
