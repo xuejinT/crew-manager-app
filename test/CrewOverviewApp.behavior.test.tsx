@@ -867,6 +867,7 @@ describe('the row title has room to distinguish itself', () => {
  */
 describe('a work card accounts for the goal it stands for', () => {
   const ASK = 'Make the cards say what I asked for and where it got to.'
+  const SECOND_ASK = 'And leave the rest of the list alone.'
   const FACTS = [
     'Read the summary payload and found progress was never rendered.',
     'Drafted the three-section card against the existing styles.',
@@ -933,23 +934,49 @@ describe('a work card accounts for the goal it stands for', () => {
   })
 
   it('keeps the resting row compact and says so, revealing nothing until asked', async () => {
-    withFullIntent()
+    /*
+     * TWO intents, and this asserts on the SECOND.
+     *
+     * The board now opens the first card of Needs you by itself, so the first row
+     * is no longer a witness for "reveals nothing until asked" -- it is the one
+     * deliberate exception. The property still holds for every other row, which
+     * is what this pins; the exception is pinned separately below.
+     */
+    withIntents([
+      {
+        title: 'Restyle the work cards',
+        initial_intent: ASK,
+        progress: FACTS,
+        next_steps: [STEP],
+        state: 'needs-you',
+        verified: false,
+        last_touched_turn: 7,
+      },
+      {
+        title: 'Second thing',
+        initial_intent: SECOND_ASK,
+        progress: FACTS,
+        next_steps: [STEP],
+        state: 'needs-you',
+        verified: false,
+        last_touched_turn: 7,
+      },
+    ])
     renderApp()
 
-    const row = await screen.findByTestId(rowId)
+    const row = await screen.findByTestId('work-item-intent:session-2:1')
 
     // The board answers "what needs me now" by being scannable. None of the
     // three sections may cost a row anything before it is picked.
     expect(within(row).queryByText('You asked for')).toBeNull()
     expect(within(row).queryByText('Where it stands')).toBeNull()
     expect(within(row).queryByText('Suggested next')).toBeNull()
-    expect(within(row).queryByText(ASK)).toBeNull()
-    expect(within(row).queryByText(FACTS[0])).toBeNull()
+    expect(within(row).queryByText(SECOND_ASK)).toBeNull()
     expect(row.querySelector('.ow-row-detail')).toBeNull()
 
     // Reachable and labelled, and honest about being closed: a row that hides
     // detail must announce that it has detail to hide.
-    expect(row).toHaveAttribute('aria-label', 'Restyle the work cards')
+    expect(row).toHaveAttribute('aria-label', 'Second thing')
     expect(row).toHaveAttribute('aria-expanded', 'false')
     expect(row).toHaveAttribute('tabindex', '0')
 
@@ -957,6 +984,73 @@ describe('a work card accounts for the goal it stands for', () => {
     // is the only turn datum the payload carries, so a span would be invented.
     expect(within(row).getByText('turn 7')).toBeInTheDocument()
     expect(row.textContent).not.toMatch(/turns \d/)
+  })
+
+  it('opens nothing when the first card has no account to give', async () => {
+    // Title and state only: no ask, no progress, no steps. An empty expansion
+    // would teach the user that opening a card is not worth doing.
+    withIntents([{
+      title: 'Restyle the work cards',
+      state: 'needs-you',
+      verified: false,
+      last_touched_turn: 7,
+    }])
+    renderApp()
+
+    const row = await screen.findByTestId(rowId)
+    expect(row.querySelector('.ow-row-detail')).toBeNull()
+    // No detail at all means the row must not CLAIM to be expandable either.
+    expect(row).not.toHaveAttribute('aria-expanded')
+  })
+
+  it('substitutes the run facts through the real copy catalog', async () => {
+    /*
+     * A GUARD against the test-double gap, not a duplicate of the model tests.
+     * Those pass a `copy` that ignores its template, so they cannot tell
+     * `{error}` from `{{error}}` -- and the catalog interpolates only the latter,
+     * so the first spelling reaches the user verbatim. Only rendered output
+     * catches that, which is why this asserts on text and on the absence of a
+     * brace rather than on a key.
+     */
+    const base = appSdkMocks.get.getMockImplementation() as (path: string) => Promise<unknown>
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/workflows/runs') {
+        return {
+          runs: [{
+            run_id: 'wf_000024',
+            name: 'kiro-agent compatibility',
+            status: 'failed',
+            session_key: null,
+            error: "RuntimeError('no nudge port wired')",
+            event_count: 36,
+            phase: 'red-team',
+            last_log: 'Phase 5: writing final report',
+            agent_error_count: 3,
+            partial_result_count: 9,
+          }],
+        }
+      }
+      if (path.endsWith('/summary')) return { enabled: true, intents: [] }
+      return base(path)
+    })
+    renderApp()
+
+    const row = await screen.findByTestId('work-item-workflow:wf_000024')
+
+    // #34 shows the account in the expanded detail (not auto-opened) — click to reveal it.
+    fireEvent.click(row)
+
+    // The values the board was already holding and discarding.
+    expect(within(row).getByText('Got as far as: Phase 5: writing final report')).toBeInTheDocument()
+    expect(within(row).getByText('It was in the red-team phase')).toBeInTheDocument()
+    // Unwrapped out of the python repr, which is what the platform stores.
+    expect(within(row).getByText('It stopped with: no nudge port wired')).toBeInTheDocument()
+    expect(within(row).getByText('3 of its agents reported an error')).toBeInTheDocument()
+    expect(within(row).getByText('9 agents finished first, so their output survived')).toBeInTheDocument()
+
+    // No placeholder may survive into anything a person reads.
+    const detail = row.querySelector('.ow-row-detail')
+    expect(detail?.textContent).not.toMatch(/[{}]/)
   })
 
   it('expands and collapses on the same affordance', async () => {

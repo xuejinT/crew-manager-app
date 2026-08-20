@@ -48,6 +48,16 @@ export type WorkCopyKey =
   | 'workflow_failed_generic'
   | 'workflow_running'
   | 'workflow_finished'
+  | 'workflow_fact_last_log'
+  | 'workflow_fact_phase'
+  | 'workflow_fact_error'
+  | 'workflow_fact_agent_errors'
+  | 'workflow_fact_partials'
+  | 'workflow_step_diagnose'
+  | 'workflow_step_why_error'
+  | 'workflow_step_why_generic'
+  | 'workflow_step_expect_partials'
+  | 'workflow_step_expect_generic'
   | 'monitor_failed'
   | 'monitor_running'
   | 'monitor_next_check'
@@ -323,6 +333,23 @@ export interface WorkflowRow {
   session_key: string | null
   error: string | null
   event_count: number
+  /**
+   * The run's own account of itself, all of it already in the LIST response the
+   * board fetches — no per-run request needed. These were declared away for a
+   * while and the card said "This workflow stopped before finishing" while
+   * holding `error: 'timeout'` and a phase name, which is why a stalled workflow
+   * read as a dead end instead of a diagnosis.
+   *
+   * All optional: an older gateway omits them, and a run that never got going
+   * has no phase to report.
+   */
+  phase?: string | null
+  /** Last progress line the run emitted — how far it actually got. */
+  last_log?: string | null
+  /** Agents that reported an error, distinct from the run's own failure. */
+  agent_error_count?: number
+  /** Agents that DID finish, so their output survived the failure. */
+  partial_result_count?: number
 }
 
 export interface WorkSources {
@@ -630,11 +657,121 @@ function mergeAgent(item: WorkItem, agent: AgentRow, copy: WorkCopy): void {
   })
 }
 
+/**
+ * How much of an error message a card shows before it is cut.
+ *
+ * Sized for two lines at card width. Long enough that the common
+ * one-clause failures ("timeout", a missing-port message) arrive whole, short
+ * enough that a stack-trace-shaped error cannot push the rest of the card off
+ * screen.
+ */
+const MAX_ERROR_CHARS = 160
+
+/**
+ * How far a workflow run actually got, as a list of facts.
+ *
+ * Every line is a field the platform sent; nothing here is narrated. That
+ * constraint is the point — a card that pads three labelled sections with
+ * invented prose is worse than one honest line, so a run with nothing to report
+ * returns an empty list and the section does not render at all.
+ *
+ * Ordered by what a person reads first when a run has failed: how far it got,
+ * then why it stopped, then what survived. `partial_result_count` is last but is
+ * often the most consequential — it says the output of the agents that DID
+ * finish is still there, which decides whether a re-run starts from zero.
+ */
+export function workflowFacts(workflow: WorkflowRow, copy: WorkCopy): string[] {
+  const facts: string[] = []
+  const lastLog = workflow.last_log?.trim()
+  const phase = workflow.phase?.trim()
+  if (lastLog) facts.push(copy('workflow_fact_last_log', { log: lastLog }))
+  // Only when it adds something. The last log line usually NAMES the phase it
+  // was in ("Phase 5: Red-teaming findings"), and printing both then says the
+  // same thing twice in adjacent bullets.
+  if (phase && !(lastLog && lastLog.toLowerCase().includes(phase.toLowerCase()))) {
+    facts.push(copy('workflow_fact_phase', { phase }))
+  }
+  const error = workflow.error?.trim()
+  if (error) facts.push(copy('workflow_fact_error', { error: shortError(error) }))
+  const agentErrors = workflow.agent_error_count ?? 0
+  if (agentErrors > 0) {
+    facts.push(copy('workflow_fact_agent_errors', { count: String(agentErrors) }))
+  }
+  const partials = workflow.partial_result_count ?? 0
+  if (partials > 0) {
+    facts.push(copy('workflow_fact_partials', { count: String(partials) }))
+  }
+  return facts
+}
+
+/**
+ * A Python exception repr is what the platform stores, and the whole of it is
+ * unreadable in a card: `RuntimeError('ctx.nudge is not available for this run
+ * (no nudge port wired)')`. Unwrap the message out of the repr and keep the type
+ * only when there is no message to show instead.
+ *
+ * Truncation is last-resort and marked, because a silently cut error message
+ * reads as a complete one and sends the reader looking for a cause that is
+ * really just off the end of the string.
+ */
+export function shortError(error: string): string {
+  const repr = /^([A-Za-z_][\w.]*)\((['"])([\s\S]*)\2,?\s*\)$/.exec(error.trim())
+  const text = (repr ? repr[3] : error).trim() || error.trim()
+  return text.length > MAX_ERROR_CHARS ? `${text.slice(0, MAX_ERROR_CHARS - 1)}…` : text
+}
+
+/**
+ * What to do about a failed run, as a step the Conductor can act on.
+ *
+ * Deliberately NOT "click Retry": the card already carries a Retry button for
+ * that, and a suggestion that duplicates an adjacent control wastes the one
+ * section that could say something else. A re-run of a workflow that timed out
+ * or hit a wiring error repeats the failure, so the useful step is to find the
+ * cause first — which is a question for the Conductor, which is where picking a
+ * step sends it.
+ */
+export function workflowSteps(workflow: WorkflowRow, copy: WorkCopy): SummaryNextStep[] {
+  if (workflow.status !== 'failed') return []
+  const error = workflow.error?.trim()
+  const name = workflow.name || workflow.run_id
+  return [{
+    what: copy('workflow_step_diagnose', { name }),
+    why: error
+      ? copy('workflow_step_why_error', { error: shortError(error) })
+      : copy('workflow_step_why_generic'),
+    expect: (workflow.partial_result_count ?? 0) > 0
+      ? copy('workflow_step_expect_partials', {
+        count: String(workflow.partial_result_count ?? 0),
+      })
+      : copy('workflow_step_expect_generic'),
+  }]
+}
+
 function mergeWorkflow(item: WorkItem, workflow: WorkflowRow, copy: WorkCopy): void {
   item.issue ||= workflow.status === 'failed'
   if (workflow.status === 'running' && item.state !== 'needs-you') item.state = 'running'
   if (workflow.status === 'failed' && item.state !== 'needs-you') {
     item.summary = copy('workflow_failed', { name: workflow.name })
+  }
+  /*
+   * The run's facts, on the SESSION's card too.
+   *
+   * A session that owns a failed run is the one place the two accounts meet, and
+   * the session's own summarized intents may already have filled these. Append
+   * rather than replace: both are true, and the run's facts are the more
+   * specific of the two.
+   */
+  const facts = workflowFacts(workflow, copy)
+  if (facts.length > 0) {
+    item.progress = [...(item.progress ?? []), ...facts.filter(fact => (
+      !(item.progress ?? []).includes(fact)
+    ))]
+  }
+  const steps = workflowSteps(workflow, copy)
+  if (steps.length > 0) {
+    item.nextSteps = [...(item.nextSteps ?? []), ...steps.filter(step => (
+      !(item.nextSteps ?? []).some(existing => existing.what === step.what)
+    ))]
   }
   upsertReference(item, {
     kind: 'workflow',
@@ -1880,6 +2017,15 @@ export function normalizeWorkItems(
       state: failed ? 'needs-you' : workflow.status === 'running' ? 'running' : 'done',
       issue: failed,
       runFailed: failed || undefined,
+      /*
+       * The same account a summarized session gets, built from the run's own
+       * fields. A workflow has no user sentence to quote, so it fills two of the
+       * three sections rather than inventing an "asked for" — and a run that
+       * reported nothing fills none, leaving the card exactly as compact as it
+       * was.
+       */
+      progress: workflowFacts(workflow, copy),
+      nextSteps: workflowSteps(workflow, copy),
       retryPath: failed
         ? `/api/workflows/runs/${encodeURIComponent(workflow.run_id)}/rerun`
         : undefined,
