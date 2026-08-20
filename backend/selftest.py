@@ -1318,6 +1318,144 @@ else:
 
 print()
 
+print("conductor agent: is it bindable on this install")
+
+import os as _os  # noqa: E402
+import json as _cj  # noqa: E402
+import tempfile as _ctmp  # noqa: E402
+from pathlib import Path as _CPath  # noqa: E402
+
+import conductor_agent as _ca  # noqa: E402
+
+# The declared name is the ONLY name a session can bind: the platform records
+# <app>/<agent> for reporting and writes <app>--<agent>.json on disk, but
+# kiro-cli enumerates agents by their `name` field. So the constant this module
+# hands the frontend must equal what the shipped spec declares -- if a rename
+# touches one and not the other, the slot binds a name nothing answers to and
+# the Conductor goes quiet.
+_spec = _cj.loads((_CPath(__file__).resolve().parent.parent / "agents" / "crew-manager-conductor.json").read_text())
+check(
+    "the name offered for binding is the name the spec declares",
+    _ca.CONDUCTOR_AGENT == _spec["name"],
+    f"module={_ca.CONDUCTOR_AGENT!r} spec={_spec['name']!r}",
+)
+check(
+    "the on-disk link name is the namespaced spelling the platform writes",
+    _ca._LINK_NAME == f"crew-manager--{_spec['name']}.json",
+    _ca._LINK_NAME,
+)
+
+_prior_kiro_home = _os.environ.get("KIRO_HOME")
+
+with _ctmp.TemporaryDirectory() as _ctd:
+    _os.environ["KIRO_HOME"] = _ctd
+    _agents = _CPath(_ctd) / "agents"
+    _agents.mkdir(parents=True)
+    _link = _agents / _ca._LINK_NAME
+
+    # An install that does not trust app-provided agents never materializes the
+    # file. Reporting "available" here is what produces a Conductor that accepts
+    # a message and never replies, so absence must read as unavailable.
+    _out = _ca.conductor_agent()
+    check(
+        "an unregistered agent is unavailable, not assumed",
+        _out["available"] is False and _out["agent"] is None,
+        repr(_out),
+    )
+    check(
+        "and it says WHY, so a trust setting is not mistaken for a bug",
+        "not registered" in _out["reason"],
+        repr(_out),
+    )
+
+    _link.write_text(_cj.dumps({"name": _ca.CONDUCTOR_AGENT, "prompt": "x"}))
+    _out = _ca.conductor_agent()
+    check(
+        "a registered agent is offered by its declared name",
+        _out == {"available": True, "agent": _ca.CONDUCTOR_AGENT},
+        repr(_out),
+    )
+
+    # A config that declares a DIFFERENT name is the rename-drift case: the file
+    # exists, so a presence-only check would call it available and hand over a
+    # name the platform cannot resolve.
+    _link.write_text(_cj.dumps({"name": "something-else", "prompt": "x"}))
+    _out = _ca.conductor_agent()
+    check(
+        "a registered agent declaring another name is refused",
+        _out["available"] is False and _out["agent"] is None,
+        repr(_out),
+    )
+    check(
+        "and the refusal names both sides so the drift is fixable",
+        "something-else" in _out["reason"] and _ca.CONDUCTOR_AGENT in _out["reason"],
+        repr(_out),
+    )
+
+    for _junk in ["not json at all", "[]", "null", '{"name": ""}', '{"name": 7}', "{"]:
+        _link.write_text(_junk)
+        _out = _ca.conductor_agent()
+        check(
+            f"a malformed agent config {_junk[:18]!r} is unavailable rather than raising",
+            _out["available"] is False and _out["agent"] is None,
+            repr(_out),
+        )
+
+    # A directory where the file should be: is_file() is the right predicate and
+    # a bare exists() would have called this available.
+    _link.unlink()
+    _link.mkdir()
+    _out = _ca.conductor_agent()
+    check(
+        "a directory in the agent config's place is unavailable",
+        _out["available"] is False,
+        repr(_out),
+    )
+    _link.rmdir()
+
+if _prior_kiro_home is None:
+    _os.environ.pop("KIRO_HOME", None)
+else:
+    _os.environ["KIRO_HOME"] = _prior_kiro_home
+
+# The reader must honour KIRO_HOME rather than the developer's real agent dir,
+# or the check answers about the wrong machine under test and in a pod.
+check(
+    "the agents dir follows KIRO_HOME",
+    _ca._agents_dir() == (_CPath(_prior_kiro_home) / "agents" if _prior_kiro_home else _CPath.home() / ".kiro" / "agents"),
+    str(_ca._agents_dir()),
+)
+
+# Same guarded shape peek uses: routes.py imports aiohttp at module scope and
+# register_routes imports the gateway's AppRoute, so a host without either is a
+# skip rather than a failure.
+try:
+    import routes as _croutes  # noqa: E402
+except Exception as _croutes_error:  # pragma: no cover - host without aiohttp
+    print(f"  skip conductor-agent wiring -- {_croutes_error}")
+else:
+    check(
+        "routes.py exposes a conductor-agent handler",
+        callable(getattr(_croutes, "handle_conductor_agent", None)),
+    )
+    try:
+        _cdeclared = _croutes.register_routes(None)
+    except Exception as _creg_error:  # pragma: no cover - host without the registry
+        print(f"  skip conductor-agent declaration -- {_creg_error}")
+    else:
+        check(
+            "the route is declared as GET /conductor-agent",
+            any(
+                getattr(route, "path", "") == "/conductor-agent"
+                and getattr(route, "method", "") == "GET"
+                and getattr(route, "handler", None) is _croutes.handle_conductor_agent
+                for route in _cdeclared
+            ),
+            repr([getattr(r, "path", None) for r in _cdeclared]),
+        )
+
+print()
+
 if FAILURES:
     print(f"{len(FAILURES)} failing check(s): {', '.join(FAILURES)}")
     sys.exit(1)

@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import goalpass  # noqa: E402
 from peek import peek_session, name_is_safe, normalize_name  # noqa: E402
+from conductor_agent import conductor_agent  # noqa: E402
 from recall import search_past_work  # noqa: E402
 from prchecks import pr_check_counts  # noqa: E402
 from initiatives import add_initiative, load_initiatives, remove_initiative  # noqa: E402
@@ -201,6 +202,25 @@ async def handle_peek(request: web.Request, ctx: Any) -> web.Response:
         workspace=_caller_workspace(request),
     )
     return web.json_response(payload)
+
+
+async def handle_conductor_agent(request: web.Request, ctx: Any) -> web.Response:
+    """GET /conductor-agent — whether the Conductor agent can be bound here.
+
+    The frontend cannot answer this for itself: creating a slot validates only the
+    agent name's charset, so a name nothing answers to is accepted and the
+    Conductor then takes a message and never replies. Registration is also
+    conditional on this install trusting app-provided agents, so shipping the
+    spec is not evidence that it exists.
+
+    Always HTTP 200. ``available: false`` with a reason is a legitimate answer,
+    not a failure -- the caller falls back to the default agent, which is what
+    ships today.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+    return web.json_response(conductor_agent())
 
 
 def _caller_workspace(request: web.Request) -> str | None:
@@ -410,6 +430,7 @@ def register_routes(ctx: Any) -> list:
         AppRoute(method="POST", path="/settings", handler=handle_settings),
         AppRoute(method="GET", path="/recall", handler=handle_recall),
         AppRoute(method="GET", path="/peek", handler=handle_peek),
+        AppRoute(method="GET", path="/conductor-agent", handler=handle_conductor_agent),
         AppRoute(method="GET", path="/pr-checks", handler=handle_pr_checks),
         AppRoute(method="GET", path="/initiatives", handler=handle_initiatives),
         AppRoute(method="POST", path="/initiatives", handler=handle_add_initiative),

@@ -1093,3 +1093,70 @@ describe('promotable primary column', () => {
     await waitFor(() => expect(main.dataset.openRow).toBe('none'))
   })
 })
+
+describe('binding the Conductor to its own agent', () => {
+  // The conductor slot must be ABSENT for the creation path to run at all.
+  function withoutConductor(probe: unknown) {
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      if (path === '/api/chat/slots') {
+        return [{ key: 'session-1', title: 'Work', messages: 1, running: true, last_ts: '2026-08-10T18:00:00Z' }]
+      }
+      if (path === '/api/apps/crew-manager/conductor-agent') {
+        if (probe instanceof Error) throw probe
+        return probe
+      }
+      if (path.startsWith('/api/chat/slots/')) return { messages: [], running: false }
+      if (path === '/api/approvals') return []
+      if (path === '/api/spawn') return { agents: [] }
+      if (path === '/api/workflows/runs') return { runs: [] }
+      if (path === '/api/crons') return { jobs: [] }
+      if (path === '/api/artifacts') return { artifacts: [] }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+  }
+
+  async function slotCreateBody() {
+    await waitFor(() => {
+      expect(appSdkMocks.post.mock.calls.some(call => call[0] === '/api/chat/slots')).toBe(true)
+    })
+    return appSdkMocks.post.mock.calls.find(call => call[0] === '/api/chat/slots')?.[1] as Record<string, unknown>
+  }
+
+  it('binds the declared agent name when the backend confirms it is registered', async () => {
+    withoutConductor({ available: true, agent: 'crew-manager-conductor' })
+    renderApp()
+    // The declared name is the only name kiro-cli can resolve — not the
+    // namespaced `crew-manager/...` form and not the `crew-manager--...` filename.
+    expect(await slotCreateBody()).toMatchObject({
+      name: 'crew-manager-conductor',
+      agent: 'crew-manager-conductor',
+    })
+  })
+
+  it('omits the agent when this install has not registered it', async () => {
+    // An install that does not trust app-provided agents never materializes the
+    // config. Binding anyway creates a slot that accepts a message and never
+    // replies, so the absence of the field is the whole safety property.
+    withoutConductor({ available: false, reason: 'agent not registered on this install', agent: null })
+    renderApp()
+    expect(await slotCreateBody()).not.toHaveProperty('agent')
+  })
+
+  it('still creates the Conductor when the probe itself fails', async () => {
+    // A backend too old to serve the route must not cost the user their
+    // Conductor: no agent, but the slot is still created.
+    withoutConductor(new Error('404'))
+    renderApp()
+    const body = await slotCreateBody()
+    expect(body).toMatchObject({ name: 'crew-manager-conductor' })
+    expect(body).not.toHaveProperty('agent')
+  })
+
+  it('never binds a name the backend did not hand back', async () => {
+    // available:true with no agent name is a malformed answer; trusting the flag
+    // alone would send `agent: undefined` or a guessed literal.
+    withoutConductor({ available: true })
+    renderApp()
+    expect(await slotCreateBody()).not.toHaveProperty('agent')
+  })
+})

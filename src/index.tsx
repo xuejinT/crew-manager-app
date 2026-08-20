@@ -2633,23 +2633,43 @@ export default function CrewOverviewApp() {
     if (!sources || conductorSlot || conductorAttemptedRef.current) return
     conductorAttemptedRef.current = true
     /*
-     * No `agent` field on purpose.
-     *
-     * This used to ask for `agent: 'kirocrew'`, which is not a Kiro Crew agent
-     * name — it is the underlying kiro-cli agent that the `default` agent happens
-     * to be bound to (`kirocrew agent list` shows them in separate columns, and
-     * every real session reports `agent=default`). The endpoint's validation is
-     * only a charset check, so the wrong name passes it and the slot is created
-     * with a binding that resolves to nothing. A Conductor that accepts a message
-     * and never answers looks exactly like a Conductor that is broken.
-     *
-     * The endpoint treats an omitted agent as "bind the default", which is the
-     * one answer that cannot be wrong from here.
+     * A previous attempt asked for `agent: 'kirocrew'`, which is not a Kiro Crew
+     * agent name at all — it is the underlying kiro-cli agent the `default` agent
+     * happens to be bound to. That shipped a dead Conductor, and the fix at the
+     * time was to send no agent, because nothing here could tell a good name from
+     * a bad one. The backend can, so it is asked.
      */
-    void api.post<ChatSlot>('/api/chat/slots', {
-      name: CONDUCTOR_SLOT,
-      title: 'Conductor',
-    }).then(() => {
+    /*
+     * The `agent` field is sent ONLY when the backend has confirmed the agent is
+     * registered on this install, and is omitted otherwise.
+     *
+     * Two facts make the check load-bearing rather than defensive. The bindable
+     * name is the agent's DECLARED name — the platform records `<app>/<agent>` for
+     * reporting and writes `<app>--<agent>.json` on disk, but kiro-cli enumerates
+     * agents by their `name` field, so only the declared name resolves. And
+     * registration is CONDITIONAL: an app's agents are materialized only where the
+     * install trusts app-provided agents, so shipping the spec is not evidence
+     * that it exists.
+     *
+     * Getting this wrong is silent. The endpoint validates only the charset, so a
+     * name nothing answers to is accepted, the slot is created, and the Conductor
+     * accepts a message and never replies — indistinguishable from a broken app.
+     * That is why this shipped with no agent at all rather than with a guess.
+     *
+     * An unavailable agent is not an error: the Conductor still works on the
+     * default agent exactly as before, just without the manager role.
+     */
+    void api.get<{ available?: boolean; agent?: string | null }>(
+      '/api/apps/crew-manager/conductor-agent',
+    )
+      .then(probe => (probe?.available && probe.agent ? probe.agent : null))
+      .catch(() => null)
+      .then(agent => api.post<ChatSlot>('/api/chat/slots', {
+        name: CONDUCTOR_SLOT,
+        title: 'Conductor',
+        ...(agent ? { agent } : {}),
+      }))
+      .then(() => {
       if (!mountedRef.current) return
       setConductorCreated(true)
       void loadSources()
