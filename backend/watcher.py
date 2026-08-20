@@ -238,6 +238,35 @@ class StallWatcher:
 
     # -- model-written reasons ---------------------------------------------
 
+    def _is_current(self, finding: StallFinding) -> bool:
+        """Is this finding still in the live set the most recent sweep produced?
+
+        The staleness test is MEMBERSHIP OF THE KEY in ``self._findings``, because
+        that is already this module's definition of "no longer current": absence
+        from the live set is exactly what invalidates ``_reasons`` and
+        ``_notified_at`` in ``sweep``. Reusing it keeps one notion of currency
+        rather than inventing a second one that could disagree with the memo purge.
+
+        Two alternatives are deliberately rejected:
+
+        * **Object identity** (``finding in self._findings``) is too strict.
+          ``sweep`` builds fresh ``StallFinding`` objects every pass, and ``POST
+          /sweep`` (the UI's manual refresh) runs one on demand while this await is
+          in flight — so a stall that is genuinely still standing would lose its
+          reason merely because a refresh landed mid-call.
+        * **A time-based cooldown** does not test the thing that matters. The
+          window is however long the model takes, not a fixed span, so a timer
+          either discards good reasons or lets stale ones through. Overwatch records
+          the same conclusion for this race in ``tests/approval-resume.test.ts``:
+          only re-reading the live state can tell whether the user acted inside it.
+
+        A session that recovered and re-stalled inside the window would read as
+        current, but that is not reachable: a fresh stall needs ``stall_secs`` of
+        new silence (minutes by configuration, floor of one minute) against an await
+        bounded by ``REASON_TIMEOUT_SECS``.
+        """
+        return any(f.key == finding.key for f in self._findings)
+
     async def _explain(self, state: Any, findings: list[StallFinding]) -> None:
         """Attach a one-sentence account of what each stalled session was doing.
 
@@ -291,6 +320,24 @@ class StallWatcher:
                 continue
             reason = clean_reason(_redact(raw))
             if not reason:
+                continue
+            # Re-validate before storing. The model call takes seconds, and the
+            # user frequently acts inside that window: reply to the session, or
+            # stop it. A reason stored for a session that has since recovered is
+            # not merely useless -- `_reasons` is a write-once memo, so it would
+            # be kept and phrased into the NEXT notice for whatever stall comes
+            # after, describing something the session is no longer doing.
+            #
+            # This is the guard Overwatch's src/main/orchestrator.ts applies in
+            # three places (lines 412, 628, 700) after its own slow
+            # `summarizeBlocked` returns -- `if (session.state !== 'blocked' ||
+            # session.blockedReason !== 'approval') return` -- for exactly this
+            # reason. Discarding costs one wasted model call; the next sweep will
+            # ask again if the stall is real, since the memo was never written.
+            if not self._is_current(finding):
+                logger.debug(
+                    "crew-manager: discarded a stale stall reason for %s", finding.key
+                )
                 continue
             self._reasons[finding.key] = reason
             finding.reason = reason
