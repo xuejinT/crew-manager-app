@@ -530,7 +530,7 @@ describe('intent summaries', () => {
     const redesign = items.find(item => item.title.startsWith('Redesign'))
     // Both numbers are named, so both links are this goal's.
     expect(rebase?.references.filter(ref => ref.kind === 'change').map(ref => ref.label))
-      .toEqual(['github #6', 'github #8'])
+      .toEqual(['PR #6', 'PR #8'])
     // The other goal names neither, so it carries no change at all.
     expect(redesign?.references.map(ref => ref.kind)).toEqual(['session'])
   })
@@ -564,11 +564,11 @@ describe('intent summaries', () => {
     // own text — the title alone would have missed both links.
     const gate = items.find(item => item.title.startsWith('Ship'))
     expect(gate?.references.map(ref => ref.label))
-      .toEqual(['Crew Companion polish', 'github #6', 'issue #42'])
+      .toEqual(['Crew Companion polish', 'PR #6', 'issue #42'])
     // The right-hand boundary is load-bearing: #6 must not answer for #60.
     const flaky = items.find(item => item.title.startsWith('Chase'))
     expect(flaky?.references.map(ref => ref.label))
-      .toEqual(['Crew Companion polish', 'github #60'])
+      .toEqual(['Crew Companion polish', 'PR #60'])
   })
 
   it('keeps every link on the session-level item', () => {

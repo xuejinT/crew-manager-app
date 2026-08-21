@@ -541,7 +541,7 @@ function sourceReferences(slot: ChatSlot): SourceReference[] {
       id: link.url,
       label: link.kind === 'issue'
         ? `issue #${link.number}`
-        : `${link.provider} #${link.number}`,
+        : `${link.provider === 'gitlab' ? 'MR' : 'PR'} #${link.number}`,
       url: link.url,
       sessionKey: slot.key,
       status: changeStatus(link),

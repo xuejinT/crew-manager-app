@@ -33,7 +33,7 @@ export const OVERWATCH_STYLES = String.raw`
    * and it cost 24px on both sides plus 24px at the bottom of a layout whose
    * columns are supposed to fill the viewport.
    */
-  .ow-body { flex: 1; min-height: 0; padding: 0; border-top: 1px solid var(--border); }
+  .ow-body { flex: 1; min-height: 0; padding: 0; }
   /*
    * No frame of its own. Every other dashboard page puts content directly in the
    * page gutter; this app used to draw a bordered, rounded, shadowed box INSIDE
@@ -60,9 +60,9 @@ export const OVERWATCH_STYLES = String.raw`
     display: grid;
     min-width: 0;
     min-height: 0;
-    grid-template-columns: var(--ow-work-w, minmax(0, 1fr)) 6px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
-    padding: 16px;
+    padding: 6px 6px 16px 16px;
   }
   /* Column 2's rows: the open card's row takes the remainder, the other two
      shrink to their header. A grid row cannot size itself from its item, so the
@@ -94,7 +94,7 @@ export const OVERWATCH_STYLES = String.raw`
     position: absolute;
     inset: 0 2px;
     border-radius: 2px;
-    background: var(--border);
+    background: transparent;
     transition: background 0.12s ease;
   }
   .ow-resizer:hover::before,
@@ -175,6 +175,15 @@ export const OVERWATCH_STYLES = String.raw`
   /* The only scroll container in the column. */
   .ow-work { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   .ow-work-inner { padding: 0 14px 14px; }
+  /* Layout C — left rail: the state filter as a vertical nav beside the list.
+     The rail holds still (its own scroll); .ow-work scrolls the list. */
+  .ow-worksplit { flex: 1 1 auto; min-height: 0; display: flex; align-items: stretch; }
+  .ow-railnav {
+    flex: none; width: 150px; display: flex; flex-direction: column; gap: 2px;
+    padding: 2px 10px 14px 14px; border-right: 1px solid var(--border); overflow-y: auto;
+  }
+  .ow-railnav .ow-railitem { width: 100%; justify-content: space-between; text-align: left; padding: 7px 10px; font-size: 12.5px; }
+  .ow-railitem-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ow-stack-card > summary {
     display: flex;
     align-items: center;
@@ -234,8 +243,16 @@ export const OVERWATCH_STYLES = String.raw`
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
   }
-  .ow-section { margin: 0 0 24px; }
-  .ow-section-header { display: flex; flex-direction: column; gap: 2px; }
+  .ow-section { margin: 0 0 28px; }
+  /* Airy, and pinned: the header sticks to the top of the scrolling list so you
+     always know which group you are in. The --card background covers rows that
+     scroll up beneath it. */
+  .ow-section-header {
+    display: flex; flex-direction: column; gap: 3px;
+    position: sticky; top: 0; z-index: 2;
+    background: var(--card);
+    padding: 14px 0 10px;
+  }
   .ow-section-heading { display: flex; align-items: baseline; gap: 8px; }
   .ow-section-title {
     margin: 0;
@@ -257,6 +274,13 @@ export const OVERWATCH_STYLES = String.raw`
     outline: none;
     transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
   }
+  /* State rail on the left edge (option D). The selected / instructed accent
+     rails are defined later in this sheet and outrank these, so an active row
+     still reads as accent rather than its lane colour. */
+  .ow-row[data-lane='unblock'] { box-shadow: inset 3px 0 0 var(--warn); }
+  .ow-row[data-lane='followup'] { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warn) 55%, transparent); }
+  .ow-row[data-lane='running'] { box-shadow: inset 3px 0 0 var(--accent); }
+  .ow-row[data-lane='done'] { box-shadow: inset 3px 0 0 var(--ok); }
   .ow-row:hover { border-color: var(--border-strong); background: var(--bg-hover); }
   .ow-row:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
   .ow-row[data-selected='true'] {
@@ -269,20 +293,59 @@ export const OVERWATCH_STYLES = String.raw`
   /* Title line. The chevron is pushed to the trailing edge by the title's own
      flex growth, so it lands in the same place on every card. */
   .ow-row-heading { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
-  .ow-row-chevron { margin-top: 3px; margin-left: auto; color: var(--muted); transition: transform 140ms ease; }
+  .ow-row-chevron { margin-top: 3px; color: var(--muted); transition: transform 140ms ease; }
   .ow-row-chevron[data-expanded='true'] { transform: rotate(90deg); }
-  /* State, then turn. The turn is monospace so a number reads as a coordinate
-     into the transcript rather than as prose. */
-  .ow-row-metaline { display: flex; min-width: 0; align-items: center; gap: 8px; margin-top: 5px; }
+  /* Status line (option B): the state badge, then the one-line reason. */
+  .ow-row-status { display: flex; min-width: 0; align-items: center; gap: 8px; margin-top: 6px; }
+  .ow-row-statustext {
+    min-width: 0;
+    flex: 1 1 auto;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Turn rides at the trailing edge of the title line; monospace so a number
+     reads as a coordinate into the transcript rather than as prose. */
   .ow-row-turn {
+    flex: none;
+    margin-left: auto;
+    margin-top: 1px;
     color: var(--muted);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
     white-space: nowrap;
   }
-  /* Hugs its text like the "N need you" count pill so the two read as one
-     family; sentence-case labels make a fixed alignment width pointless. */
-  .ow-verb { flex: none; font-size: 11px; }
+  /* State pill — one shape for all four states, colour + leading glyph vary.
+     Translucent fills are mixed from the theme tokens so they track the theme. */
+  .ow-rowstate {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .ow-rowstate .ow-icon { width: 11px; height: 11px; }
+  .ow-rowstate-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .ow-rowstate-spin {
+    flex: none; width: 9px; height: 9px; border-radius: 50%;
+    border: 1.5px solid currentColor; border-right-color: transparent;
+    animation: ow-rowstate-spin 0.9s linear infinite;
+  }
+  @keyframes ow-rowstate-spin { to { transform: rotate(360deg); } }
+  .ow-rowstate--need   { color: var(--warn);   background: color-mix(in srgb, var(--warn) 14%, transparent);   border-color: color-mix(in srgb, var(--warn) 34%, transparent); }
+  .ow-rowstate--follow { color: var(--warn);   background: color-mix(in srgb, var(--warn) 7%, transparent);    border-color: color-mix(in srgb, var(--warn) 20%, transparent); }
+  .ow-rowstate--run    { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-color: color-mix(in srgb, var(--accent) 34%, transparent); }
+  .ow-rowstate--queued { color: var(--muted);  background: color-mix(in srgb, var(--muted) 12%, transparent);  border-color: color-mix(in srgb, var(--muted) 26%, transparent); }
+  .ow-rowstate--done   { color: var(--ok);     background: color-mix(in srgb, var(--ok) 13%, transparent);     border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
   .ow-row-title {
     min-width: 0;
     color: var(--text-strong);
@@ -322,7 +385,14 @@ export const OVERWATCH_STYLES = String.raw`
     min-width: 0;
     min-height: 0;
     flex-direction: column;
-    background: var(--bg);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg, 8px);
+    overflow: hidden;
+    /* Match the Sessions card's inset so the two boxes read as siblings and the
+       border never hugs the resizer hairline. Left inset is tighter than the
+       outer edge so the gutter between the two boxes stays small. */
+    margin: 6px 16px 16px 6px;
   }
   .ow-conductor-header { padding: 8px 10px; border-bottom: 1px solid var(--border); }
   .ow-conductor-title { display: flex; align-items: baseline; gap: 8px; }
@@ -647,6 +717,9 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-goalcard-static { cursor: default; }
   .ow-goalcard-static:hover .ow-goalcard-title { text-decoration: none; }
   .ow-goalcard-header[data-selected='true'] .ow-goalcard-title { color: var(--accent); }
+  /* The session name reads as a labelled chip now that the icon is gone: a
+     subtle background marks "this is a session" in the icon's place, hugging the
+     name (flex 0 1 auto) and still truncating a long one. */
   .ow-goalcard-title { flex: 1; min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; max-width: none; }
   .ow-goalcard .ow-block-open { flex: none; margin: 0; }
   .ow-goal-flag {
@@ -655,12 +728,28 @@ export const OVERWATCH_STYLES = String.raw`
     color: var(--muted); background: var(--bg-hover); border: 1px solid var(--border);
   }
   .ow-goal-flag-warn { color: var(--warn); background: var(--warn-subtle, rgba(251,191,36,.12)); border-color: transparent; }
-  .ow-goal-meta { margin: 4px 0 0 26px; color: var(--muted); font-size: 11px; }
+  /* The whole header is a filled band that bleeds to the card's inner edges
+     (cancelling the card's 12/14 padding); the card's overflow:hidden rounds its
+     top corners. Left padding lands the content at 23px, aligned with the rows. */
+  .ow-goalcard-head {
+    margin: -12px -14px 10px;
+    padding: 10px 14px 10px 23px;
+    background: var(--bg-hover);
+  }
+  .ow-goal-meta { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+  /* PR/issue links share the line and the muted look of the rest of the meta;
+     a dot separates each piece the way the text parts are joined. */
+  .ow-goal-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .ow-goal-meta-row > * + *::before { content: '·'; margin-right: 6px; color: var(--border); }
+  .ow-goal-meta-row .ow-reference { color: var(--muted); font-size: 11px; }
+  .ow-goal-meta-row .ow-reference .ow-icon { width: 12px; height: 12px; }
+  .ow-goal-meta-row .ow-reference-link:hover { color: var(--text); text-decoration: underline; }
   /* Why the merge happened. Subdued below the meta: it answers a question the
      user only asks when the grouping looks wrong, so it must not compete with
      the goal's own name or its composition. */
-  /* Member rows: indent under the title, a divider between them, lighter label. */
-  .ow-goalcard .ow-row { padding: 7px 4px 7px 26px; }
+  /* Member rows: content aligns with the header title's text (the icon that
+     used to force a 26px indent is gone); the state rail sits in the gutter. */
+  .ow-goalcard .ow-row { padding: 7px 4px 7px 9px; }
   .ow-goalcard .ow-row + .ow-row { border-top: 1px solid var(--border); }
   .ow-goalcard .ow-row-title { color: var(--text); font-weight: 500; }
   .ow-goalcard .ow-row[data-selected='true'] .ow-row-title { color: var(--text-strong); font-weight: 700; }
@@ -859,6 +948,13 @@ export const OVERWATCH_STYLES = String.raw`
     .ow-main > .ow-stack-card[data-rail-index] { grid-column: 1; grid-row: auto; }
     /* No side-by-side columns to divide once everything stacks. */
     .ow-resizer { display: none; }
-    .ow-conductor { min-height: 560px; border-left: 0; border-top: 1px solid var(--border); }
+    .ow-conductor { min-height: 560px; margin: 0 16px 16px; }
+    /* The left rail folds back into a horizontal filter row above the list. */
+    .ow-worksplit { flex-direction: column; }
+    .ow-railnav {
+      flex-direction: row; flex-wrap: wrap; width: auto; overflow: visible;
+      border-right: 0; border-bottom: 1px solid var(--border); padding: 0 14px 10px;
+    }
+    .ow-railnav .ow-railitem { width: auto; }
   }
 `

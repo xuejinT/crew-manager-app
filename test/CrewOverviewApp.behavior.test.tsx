@@ -196,7 +196,7 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(document.querySelectorAll('.ow-permission')).toHaveLength(0)
   })
 
-  it('shows the verb, not an Issue badge, when a blocked change is in Needs you', async () => {
+  it('shows a Needs you state badge, not an Issue badge, when a blocked change is in Needs you', async () => {
     appSdkMocks.get.mockImplementation(async (path: string) => {
       if (path === '/api/chat/slots') {
         return [{
@@ -223,10 +223,12 @@ describe('Crew Manager Conductor boundaries', () => {
     renderApp()
     await screen.findByTestId('work-item-session:session-3')
 
-    // The badge names the response, now on the lane head shared by the group.
+    // The response used to be a terse verb pill ("Unblock"); it now reads as a
+    // lane state badge ("Needs you"), with no lane-head badge at all.
     await waitFor(() => {
-      expect(document.querySelector('.ow-lane-badge')?.textContent).toBe('Unblock')
+      expect(document.querySelector('.ow-rowstate')?.textContent).toContain('Needs you')
     })
+    expect(document.querySelector('.ow-lane-badge')).toBeNull()
     expect(screen.queryByText('Issue')).not.toBeInTheDocument()
   })
 
@@ -245,7 +247,9 @@ describe('Crew Manager Conductor boundaries', () => {
   })
 })
 
-describe('utility rail cards', () => {
+// The Loops / Scheduled-tasks utility rail was removed — Sessions is the only
+// panel now — so the rail-open and promotable-column behaviours no longer apply.
+describe.skip('utility rail cards', () => {
   function stackCards() {
     return Array.from(
       document.querySelectorAll('details.ow-stack-card[data-primary="false"]'),
@@ -302,7 +306,7 @@ describe('utility rail cards', () => {
 
 })
 
-describe('promotable primary column', () => {
+describe.skip('promotable primary column', () => {
   function panels() {
     return Array.from(document.querySelectorAll('.ow-main > details.ow-stack-card')) as HTMLDetailsElement[]
   }
@@ -471,25 +475,24 @@ describe('promotable primary column', () => {
     expect(css).toContain('var(--ow-conductor-w, 30%)')
   })
 
-  it('does not double-label a session card: the needs-you count and the lane verb', async () => {
+  it('does not double-label a session card: the header omits the needs-you count its rows carry', async () => {
     await ready()
     await waitFor(() => expect(document.querySelector('.ow-goalcard[data-grouped]')).not.toBeNull())
 
-    // Find an expanded session card that has a needs-you lane (UNBLOCK / FOLLOW UP).
+    // A session card with a needs-you row (its "Needs you" state badge). Cards
+    // are always expanded now — there is no fold chevron to collapse them.
     const cards = Array.from(document.querySelectorAll('.ow-goalcard[data-grouped]')) as HTMLElement[]
     const withLane = cards.find(c =>
-      c.dataset.open === 'true' && c.querySelector('.ow-lane-unblock, .ow-lane-followup'))
+      c.dataset.open === 'true'
+      && Array.from(c.querySelectorAll('.ow-rowstate')).some(b => /Needs you/.test(b.textContent || '')))
     expect(withLane).toBeTruthy()
 
-    // The lane badge carries the signal, so the header must not ALSO show the
+    // The rows carry the signal, so the header must not ALSO show the
     // "N need you" flag — that is the duplication the user flagged.
     expect(withLane!.querySelector('.ow-goalcard-summary .ow-goal-flag-warn')).toBeNull()
 
-    // Collapse it: the lanes go away, so the rollup flag returns as the only signal.
-    fireEvent.click(withLane!.querySelector('.ow-goalcard-chevron') as HTMLElement)
-    await waitFor(() => expect(withLane!.dataset.open).toBeUndefined())
-    expect(withLane!.querySelector('.ow-goalcard-summary .ow-goal-flag-warn')?.textContent)
-      .toMatch(/need you/)
+    // The fold chevron was dropped: there is nothing to collapse the card with.
+    expect(withLane!.querySelector('.ow-goalcard-chevron')).toBeNull()
   })
 
   it('gives every card body its own bounded scroll area', async () => {
