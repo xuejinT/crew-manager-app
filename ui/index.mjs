@@ -1,196 +1,190 @@
-import{useCallback as K,useEffect as U,useId as er,useMemo as F,useRef as G,useState as S}from"react";import{AlertTriangle as zn,
-Bot as tr,Check as nr,ChevronRight as pe,Check as qn,Clock as or,Package as rr,ExternalLink as sr,MessageSquare as ar,RefreshCw as ir,
-Shield as lr,Waves as Fn,Search as dr,Tag as cr,Users as It,Zap as ur}from"lucide-react";import{useAppApi as pr,useNavigate as gr,
-useNavBadge as wr,ChatEmbed as fr}from"@kirocrew/app-sdk";import{Badge as Q,Btn as L,ContentSkeleton as Pn,EmptyState as En,
-PageHeader as hr}from"@kirocrew/app-sdk/ui";function le(e){let t=Math.max(1,Math.floor(e/60));if(t<60)return`${t} minute${t===1?"":"s"}`;let o=Math.floor(t/60),r=t%
-60;return r===0?`${o} hour${o===1?"":"s"}`:`${o}h ${r}m`}function ho(e){if(e.state==="merged")return"merged";if(e.state===
+import{useCallback as z,useEffect as J,useId as Xo,useMemo as U,useRef as Q,useState as N}from"react";import{AlertTriangle as Dn,
+ArrowRight as Zo,Bot as er,Check as tr,ChevronRight as le,Check as zn,Clock as nr,Package as or,ExternalLink as rr,MessageSquare as sr,
+RefreshCw as ar,Shield as ir,Waves as On,Search as lr,Tag as dr,Users as St,Zap as cr}from"lucide-react";import{useAppApi as ur,
+useNavigate as pr,useNavBadge as gr,ChatEmbed as wr}from"@kirocrew/app-sdk";import{Badge as oe,Btn as G,ContentSkeleton as An,
+EmptyState as Wn,PageHeader as fr}from"@kirocrew/app-sdk/ui";function ce(e){let t=Math.max(1,Math.floor(e/60));if(t<60)return`${t} minute${t===1?"":"s"}`;let o=Math.floor(t/60),s=t%
+60;return s===0?`${o} hour${o===1?"":"s"}`:`${o}h ${s}m`}function go(e){if(e.state==="merged")return"merged";if(e.state===
 "closed")return"closed";if(e.mergeable==="conflicting")return"conflict";if(e.ci==="failed")return"checks failing";if(e.ci===
-"pending")return"checks running"}function dn(e,t,o){let r=new Set(t.filter(Boolean));if(r.size===0)return[];let a=new Set,
-c=[];for(let d of e){let w=d.slot;!w||!r.has(w)||!d.id||a.has(d.id)||(a.add(d.id),c.push({id:d.id,sessionKey:w,sessionLabel:o(
-w),tool:d.tool||"a tool",purpose:d.tool_purpose}))}return c}var Yt=5,Vt={"needs-you":0,running:1,done:2};function M(e){if(typeof e==
-"number")return e>1e10?e:e*1e3;if(!e)return 0;let t=Date.parse(e);return Number.isFinite(t)?t:0}function mo(e,t){if(e.paused)
-return"";let o=M(e.next_run_ts);if(!o)return"";let r=Math.round((o-t)/1e3);return r<=0?"":le(r)}var Jt=72;function ie(e,t){
+"pending")return"checks running"}function on(e,t,o){let s=new Set(t.filter(Boolean));if(s.size===0)return[];let a=new Set,
+c=[];for(let d of e){let p=d.slot;!p||!s.has(p)||!d.id||a.has(d.id)||(a.add(d.id),c.push({id:d.id,sessionKey:p,sessionLabel:o(
+p),tool:d.tool||"a tool",purpose:d.tool_purpose}))}return c}var Ht=5,jt={"needs-you":0,running:1,done:2};function D(e){if(typeof e==
+"number")return e>1e10?e:e*1e3;if(!e)return 0;let t=Date.parse(e);return Number.isFinite(t)?t:0}function wo(e,t){if(e.paused)
+return"";let o=D(e.next_run_ts);if(!o)return"";let s=Math.round((o-t)/1e3);return s<=0?"":ce(s)}var Ut=72;function ve(e,t){
 let o=e?.replace(/\s+/g," ").trim();if(!o)return t;let a=(o.split(/(?<=[.!?])\s+|;\s+|\s+[–—-]\s+/)[0]?.trim()||o).replace(
-/[.;,]$/,"");if(a.length<=Jt)return a;let c=a.slice(0,Jt),d=c.lastIndexOf(" ");return`${(d>24?c.slice(0,d):c).trim()}\u2026`}
-function me(e){return!!e.source_links?.some(t=>t.kind!=="issue"&&(t.ci==="failed"||t.mergeable==="conflicting"))}var bo=/<\/?(?:invoke|parameter|function_calls|antml)|<[a-z_-]+\s+name="/i,
-xo=/^\((?:code|diff|widget|image)\)$/,vo=/(?:^|\s)(?:🎉|✅|✔|🚀)|^(?:goal completed|done\b|completed\b|finished\b|success\b|merged\b)|完成|已合并|已完成|完了/i,
-yo=/\bwhat next\??$|\bwould you like\b|\blet me know if\b|\bfeel free to\b|\banything else\b/i,ko=/\b(?:please|need your|need you to|needs? your|requires? your|waiting for you|waiting on you|blocked until|before i can|to proceed|to continue)\b/i,
-_o=/[?？]["'”’)\]]*$/;function cn(e){let t=e.last_message?.replace(/\s+/g," ").trim();return!t||xo.test(t)||bo.test(
-t)?null:t}function pt(e){if(!e.waiting_for_input)return null;let t=cn(e);return!t||vo.test(t)||yo.test(t)?null:ko.test(t)||
-_o.test(t)?t:null}function Qt(e){return e.pending_approval||pt(e)?"needs-you":e.running||e.subagents_running||e.orchestrating?
-"running":"done"}function So(e,t){if(e.pending_approval)return t("approval_waiting");let o=pt(e);return o||(e.running||e.
-subagents_running||e.orchestrating?t("work_in_progress"):me(e)?t("linked_change_issue"):cn(e)??t("recent_work_ready"))}function lt(e,t){
-let o=e.project||e.workspace||e.agent;return o&&o.replace(/\\/g,"/").replace(/\/+$/,"").split("/").pop()||t("session")}function Ro(e){
-return e.pending_approval?"review-approval":pt(e)?"reply":"open"}function un(e){return(e.source_links??[]).map(t=>({number:String(
+/[.;,]$/,"");if(a.length<=Ut)return a;let c=a.slice(0,Ut),d=c.lastIndexOf(" ");return`${(d>24?c.slice(0,d):c).trim()}\u2026`}
+function Fe(e){return!!e.source_links?.some(t=>t.kind!=="issue"&&(t.ci==="failed"||t.mergeable==="conflicting"))}var fo=/<\/?(?:invoke|parameter|function_calls|antml)|<[a-z_-]+\s+name="/i,
+ho=/^\((?:code|diff|widget|image)\)$/,mo=/(?:^|\s)(?:🎉|✅|✔|🚀)|^(?:goal completed|done\b|completed\b|finished\b|success\b|merged\b)|完成|已合并|已完成|完了/i,
+bo=/\bwhat next\??$|\bwould you like\b|\blet me know if\b|\bfeel free to\b|\banything else\b/i,xo=/\b(?:please|need your|need you to|needs? your|requires? your|waiting for you|waiting on you|blocked until|before i can|to proceed|to continue)\b/i,
+vo=/[?？]["'”’)\]]*$/;function rn(e){let t=e.last_message?.replace(/\s+/g," ").trim();return!t||ho.test(t)||fo.test(
+t)?null:t}function pt(e){if(!e.waiting_for_input)return null;let t=rn(e);return!t||mo.test(t)||bo.test(t)?null:xo.test(t)||
+vo.test(t)?t:null}function Gt(e){return e.pending_approval||pt(e)?"needs-you":e.running||e.subagents_running||e.orchestrating?
+"running":"done"}function yo(e,t){if(e.pending_approval)return t("approval_waiting");let o=pt(e);return o||(e.running||e.
+subagents_running||e.orchestrating?t("work_in_progress"):Fe(e)?t("linked_change_issue"):rn(e)??t("recent_work_ready"))}function sn(e,t){
+let o=e.project||e.workspace||e.agent;return o&&o.replace(/\\/g,"/").replace(/\/+$/,"").split("/").pop()||t("session")}function ko(e){
+return e.pending_approval?"review-approval":pt(e)?"reply":"open"}function an(e){return(e.source_links??[]).map(t=>({number:String(
 t.number??""),ref:{kind:t.kind==="issue"?"issue":"change",id:t.url,label:t.kind==="issue"?`issue #${t.number}`:`${t.provider===
-"gitlab"?"MR":"PR"} #${t.number}`,url:t.url,sessionKey:e.key,status:ho(t)}}))}function No(e,t){let o=un(e).map(r=>r.ref);
-return{id:`session:${e.key}`,title:e.title||t("untitled_work"),summary:So(e,t),state:Qt(e),moving:Qt(e)==="running"||void 0,
-issue:me(e),updatedAt:M(e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:lt(e,t),queuedBehind:e.queue_depth||
-void 0,changeBlocked:me(e)||void 0,action:Ro(e),references:[{kind:"session",id:e.key,label:e.title||t("untitled_work"),sessionKey:e.
-key},...o]}}function gt(e,t){e.references.some(o=>o.kind===t.kind&&o.id===t.id)||e.references.push(t)}function pn(e){return(e.
-source||"").toLowerCase()==="subagent"}function Io(e,t,o){let r=pn(t);e.state="needs-you",e.updatedAt=Math.max(e.updatedAt,
-M(t.ts)),e.summary=o(r?"subagent_gate_waiting":"approval_waiting"),e.approvalKind=r?"subagent":"tool",e.action="review-a\
+"gitlab"?"MR":"PR"} #${t.number}`,url:t.url,sessionKey:e.key,status:go(t)}}))}function _o(e,t){let o=an(e).map(s=>s.ref);
+return{id:`session:${e.key}`,title:e.title||t("untitled_work"),summary:yo(e,t),state:Gt(e),moving:Gt(e)==="running"||void 0,
+issue:Fe(e),updatedAt:D(e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:sn(e,t),queuedBehind:e.queue_depth||
+void 0,changeBlocked:Fe(e)||void 0,action:ko(e),references:[{kind:"session",id:e.key,label:e.title||t("untitled_work"),sessionKey:e.
+key},...o]}}function gt(e,t){e.references.some(o=>o.kind===t.kind&&o.id===t.id)||e.references.push(t)}function ln(e){return(e.
+source||"").toLowerCase()==="subagent"}function So(e,t,o){let s=ln(t);e.state="needs-you",e.updatedAt=Math.max(e.updatedAt,
+D(t.ts)),e.summary=o(s?"subagent_gate_waiting":"approval_waiting"),e.approvalKind=s?"subagent":"tool",e.action="review-a\
 pproval",e.permissionId=t.id,e.permissionTool=t.tool||t.source,e.permissionPurpose=t.tool_purpose,e.permissionInput=t.tool_input,
-gt(e,{kind:"approval",id:t.id,label:t.tool||t.source||o("approval"),sessionKey:t.slot||e.sessionKey})}function Co(e,t,o){
-e.updatedAt=Math.max(e.updatedAt,M(t.started)),e.issue||=!!(t.done&&(t.error||t.outcome==="failed")),t.done?(t.error||t.
+gt(e,{kind:"approval",id:t.id,label:t.tool||t.source||o("approval"),sessionKey:t.slot||e.sessionKey})}function Ro(e,t,o){
+e.updatedAt=Math.max(e.updatedAt,D(t.started)),e.issue||=!!(t.done&&(t.error||t.outcome==="failed")),t.done?(t.error||t.
 outcome==="failed")&&e.state!=="needs-you"&&(e.summary=o("agent_failed",{task:t.task})):e.state!=="needs-you"&&(e.state=
 "running",e.summary=o("work_in_progress")),gt(e,{kind:"agent",id:t.id,label:t.agent||o("agent"),sessionKey:t.parent||e.sessionKey})}
-var Xt=160;function gn(e,t){let o=[],r=e.last_log?.trim(),a=e.phase?.trim();r&&o.push(t("workflow_fact_last_log",{log:r})),
-a&&!(r&&r.toLowerCase().includes(a.toLowerCase()))&&o.push(t("workflow_fact_phase",{phase:a}));let c=e.error?.trim();c&&
-o.push(t("workflow_fact_error",{error:wn(c)}));let d=e.agent_error_count??0;d>0&&o.push(t("workflow_fact_agent_errors",{
-count:String(d)}));let w=e.partial_result_count??0;return w>0&&o.push(t("workflow_fact_partials",{count:String(w)})),o}function wn(e){
-let t=/^([A-Za-z_][\w.]*)\((['"])([\s\S]*)\2,?\s*\)$/.exec(e.trim()),o=(t?t[3]:e).trim()||e.trim();return o.length>Xt?`${o.
-slice(0,Xt-1)}\u2026`:o}function fn(e,t){if(e.status!=="failed")return[];let o=e.error?.trim(),r=e.name||e.run_id;return[
-{what:t("workflow_step_diagnose",{name:r}),why:o?t("workflow_step_why_error",{error:wn(o)}):t("workflow_step_why_generic"),
+var Yt=160;function dn(e,t){let o=[],s=e.last_log?.trim(),a=e.phase?.trim();s&&o.push(t("workflow_fact_last_log",{log:s})),
+a&&!(s&&s.toLowerCase().includes(a.toLowerCase()))&&o.push(t("workflow_fact_phase",{phase:a}));let c=e.error?.trim();c&&
+o.push(t("workflow_fact_error",{error:cn(c)}));let d=e.agent_error_count??0;d>0&&o.push(t("workflow_fact_agent_errors",{
+count:String(d)}));let p=e.partial_result_count??0;return p>0&&o.push(t("workflow_fact_partials",{count:String(p)})),o}function cn(e){
+let t=/^([A-Za-z_][\w.]*)\((['"])([\s\S]*)\2,?\s*\)$/.exec(e.trim()),o=(t?t[3]:e).trim()||e.trim();return o.length>Yt?`${o.
+slice(0,Yt-1)}\u2026`:o}function un(e,t){if(e.status!=="failed")return[];let o=e.error?.trim(),s=e.name||e.run_id;return[
+{what:t("workflow_step_diagnose",{name:s}),why:o?t("workflow_step_why_error",{error:cn(o)}):t("workflow_step_why_generic"),
 expect:(e.partial_result_count??0)>0?t("workflow_step_expect_partials",{count:String(e.partial_result_count??0)}):t("wor\
-kflow_step_expect_generic")}]}function Ao(e,t,o){e.issue||=t.status==="failed",t.status==="running"&&e.state!=="needs-yo\
-u"&&(e.state="running"),t.status==="failed"&&e.state!=="needs-you"&&(e.summary=o("workflow_failed",{name:t.name}));let r=gn(
-t,o);r.length>0&&(e.progress=[...e.progress??[],...r.filter(c=>!(e.progress??[]).includes(c))]);let a=fn(t,o);a.length>0&&
+kflow_step_expect_generic")}]}function No(e,t,o){e.issue||=t.status==="failed",t.status==="running"&&e.state!=="needs-yo\
+u"&&(e.state="running"),t.status==="failed"&&e.state!=="needs-you"&&(e.summary=o("workflow_failed",{name:t.name}));let s=dn(
+t,o);s.length>0&&(e.progress=[...e.progress??[],...s.filter(c=>!(e.progress??[]).includes(c))]);let a=un(t,o);a.length>0&&
 (e.nextSteps=[...e.nextSteps??[],...a.filter(c=>!(e.nextSteps??[]).some(d=>d.what===c.what))]),gt(e,{kind:"workflow",id:t.
-run_id,label:t.name||t.run_id,sessionKey:t.session_key||e.sessionKey})}function Wo(e,t){if(t.pending_approval)return"nee\
-ds-you";switch(e.state){case"needs-you":return"needs-you";case"done":case"dropped":return"done";case"in-progress":return"\
-running";default:return null}}function To(e,t,o){return!(t.running||t.subagents_running||t.orchestrating)?!1:e===o}function Po(e){
-let t=null,o=-1;for(let r of e){let a=r.last_touched_turn??0;a>o&&(o=a,t=r)}return t}function Eo(e,t){let o=e.next_steps?.find(a=>a.what?.trim())?.what?.trim();if(o)return o;let r=[...e.progress??[]].reverse().
-find(a=>a.trim());return r?r.trim():e.initial_intent?.trim()||t("work_in_progress")}var Mo=3;function Bo(e){return[e.title??
-"",e.initial_intent??"",...e.progress??[],...(e.next_steps??[]).map(t=>t.what??"")].join(" ")}function $o(e,t){if(!t)return!1;
-let o=t.replace(/[.*+?^${}()|[\]\\]/gu,"\\$&");return new RegExp(`#\\s?${o}\\b`,"u").test(e)}function Zt(e,t){if(e.length===
-0)return[];let o=Bo(t);return e.filter(r=>$o(o,r.number)).map(r=>r.ref)}function Ko(e,t,o){if(!t?.enabled)return[];let r=t.
-intents??[];if(r.length===0)return[];let a=un(e),c=[],d=Po(r),m=!!(e.running||e.subagents_running||e.orchestrating)?[]:r.
-filter(s=>s.state==="in-progress");m.forEach(s=>{let u=r.indexOf(s),g=(s.next_steps??[]).filter(k=>k.what?.trim());c.push(
-{id:`unattended:${e.key}:${u}`,title:ie(s.title,e.title||o("untitled_work")),summary:g[0]?.what?.trim()||o("no_next_step"),
-state:"needs-you",issue:me(e),updatedAt:M(e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:lt(e,o),
-queuedBehind:e.queue_depth||void 0,changeBlocked:me(e)||void 0,unattendedGoals:1,action:"resume",references:[{kind:"sess\
-ion",id:e.key,label:e.title||o("untitled_work"),sessionKey:e.key},...Zt(a,s)],nextSteps:g,initialIntent:s.initial_intent?.
-trim()||void 0,progress:(s.progress??[]).filter(k=>k.trim()),stale:!!t.stale,lastTouchedTurn:s.last_touched_turn??0})}),
-r.forEach((s,u)=>{if(m.includes(s))return;let g=Wo(s,e);if(!g)return;let k=(s.next_steps??[]).filter(x=>x.what?.trim());
-c.push({id:`intent:${e.key}:${u}`,title:ie(s.title,e.title||o("untitled_work")),summary:Eo(s,o),state:g,issue:!1,updatedAt:M(
-e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:lt(e,o),queuedBehind:e.queue_depth||void 0,changeBlocked:me(
-e)||void 0,unverified:s.verified===!1||void 0,action:"open",references:[{kind:"session",id:e.key,label:e.title||o("untit\
-led_work"),sessionKey:e.key},...Zt(a,s)],nextSteps:k,initialIntent:s.initial_intent?.trim()||void 0,progress:(s.progress??
-[]).filter(x=>x.trim()),stale:!!t.stale,lastTouchedTurn:s.last_touched_turn??0,moving:To(s,e,d)||void 0})});let R=c.filter(
-s=>s.state==="needs-you"),I=c.filter(s=>s.state!=="needs-you").sort((s,u)=>(u.lastTouchedTurn??0)-(s.lastTouchedTurn??0));
-return[...R,...I].slice(0,Math.max(Mo,R.length))}var Do=new Set(["crew-manager-conductor","overwatch-conductor"]),Oo={approval_owed:100,
-subagent_gate:95,input_requested:80,unverified_completion:70,error_loop:60,changes_requested:58,run_failed:55,stalled:50,
-change_blocked:40,merge_ready:34,assigned_to_you:32,nobody_on_it:30,queued_behind:12,waiting_a_while:8},Lo=3;function zo(e,t){
-return e.updatedAt?Math.max(0,Math.floor((t-e.updatedAt)/36e5)):0}var Fe=5;function hn(e,t,o=Date.now()){let r=ft(e),a=Nn(
-e.filter(d=>d.state==="needs-you"),o),c=[`Fleet: ${r["needs-you"]} waiting on the user, ${r.running} in progress, ${r.done}\
- finished recently.`];return a.length===0?(c.push("Nothing is waiting on the user."),c):(c.push(`Waiting on the user, in\
- the order the list shows them (top ${Math.min(Fe,a.length)}):`),a.slice(0,Fe).forEach((d,w)=>{let m=He(be(d,o),t),R=d.sessionKey?
-` [session ${d.sessionKey}]`:"";c.push(`${w+1}. ${d.title} \u2014 ${d.summary} (${m})${R}`)}),a.length>Fe&&c.push(`\u2026and ${a.
-length-Fe} more waiting.`),c)}var dt=new Set(["the","a","an","and","or","to","for","of","in","on","at","is","it","this",
-"that","with","from","into","be","do","so","as","by","fix","add","make","update","work","session","app","new","use","run",
-"why","what","how","again","still","not"]),en=.6,tn=2,mn=new Set;function ct(e){return[...new Set(e.toLowerCase().replace(
-/[^\p{L}\p{N}\s]+/gu," ").split(/\s+/).filter(t=>t.length>2&&!dt.has(t)))]}function nn(e,t){let o=ct(e),r=ct(t);if(o.length<
-tn||r.length<tn)return 0;let a=o.length<=r.length?o:r,c=new Set(o.length<=r.length?r:o);return a.filter(w=>c.has(w)).length/
-a.length}function on(e){return e.references.filter(t=>t.kind==="change"||t.kind==="issue").map(t=>t.id)}function rn(e){return e.
-references.filter(t=>t.kind==="artifact").map(t=>t.id)}function sn(e){return(e.nextSteps??[]).map(t=>t.what).filter(Boolean)}
-var qo=new Set(["pull request","pull requests","status update","work in progress","code review","follow up","next step",
-"next steps","action item","action items","kiro crew","in progress","needs you"]);function ut(e){let t=new Set,o=e.match(
-/\b\p{Lu}[\p{L}\p{N}]*(?:\s+\p{Lu}[\p{L}\p{N}]*)+/gu)??[];for(let r of o){let a=r.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu,
-" ").split(/\s+/).filter(Boolean).map(c=>c.length>3&&c.endsWith("s")&&!c.endsWith("ss")?c.slice(0,-1):c);for(;a.length&&
-dt.has(a[0]);)a.shift();for(;a.length&&dt.has(a[a.length-1]);)a.pop();if(!(a.length<2))for(let c=a.length;c>=2;c-=1)for(let d=0;d+
-c<=a.length;d+=1){let w=a.slice(d,d+c).join(" ");qo.has(w)||t.add(w)}}return[...t]}function Fo(e){let t=new Set;if(e.length<
-Ho)return t;let o=new Map;for(let r of e)for(let a of ut(r.title))o.set(a,(o.get(a)??0)+1);for(let[r,a]of o)a/e.length>=
-jo&&t.add(r);return t}var Ho=4,jo=.75;function bn(e,t,o=mn){if(on(e).find(d=>on(t).includes(d)))return"same_change";if(rn(
-e).find(d=>rn(t).includes(d)))return"same_artifact";let c=ut(t.title).filter(d=>!o.has(d));if(ut(e.title).some(d=>c.includes(
-d)))return"same_deliverable";if(nn(e.title,t.title)>=en)return"same_topic";for(let d of sn(e))for(let w of sn(t))if(nn(d,
-w)>=en)return"same_step";return null}var xn={merged:[],split:[]};function an(e){return`${e.sessionKey??e.id}|${ct(e.title).
-join(" ")}`}function vn(e,t){return[an(e),an(t)].sort().join("")}function Uo(e,t=xn){let o=e.filter(a=>a.state!=="done"&&
-a.sessionKey).sort((a,c)=>(a.updatedAt||0)-(c.updatedAt||0)),r=Fo(o);for(let a=1;a<o.length;a+=1){let c=o[a];for(let d=0;d<
-a;d+=1){let w=o[d];if(w.sessionKey===c.sessionKey||t.split.includes(vn(c,w)))continue;let m=bn(c,w,r);if(m){c.duplicateOf=
-{sessionKey:w.sessionKey,title:w.title,because:m};break}}}Go(o,t,r)}var it=3,ln=["same_change","same_artifact","same_del\
-iverable","same_topic","same_step"];function Go(e,t,o=mn){for(let r of e){let a=[],c=new Set;for(let d of e){let w=d.sessionKey;
-if(w===r.sessionKey||c.has(w)||t.split.includes(vn(r,d)))continue;let m=bn(r,d,o);m&&(c.add(w),a.push({sessionKey:w,title:d.
-title,because:m}))}a.length!==0&&(a.sort((d,w)=>ln.indexOf(d.because)-ln.indexOf(w.because)),r.relatedSessions=a.slice(0,
-it),a.length>it&&(r.relatedMore=a.length-it))}}var Yo=3e4;function yn(e,t,o=Date.now()){return Object.keys(t).length===0?
-e:e.map(r=>{let a=t[r.id];return!a||o-a>Yo||r.state==="running"?r:{...r,state:"running",moving:!0,instructed:!0}})}function be(e,t=Date.
-now()){let o=[],r=(c,d,w=1)=>{o.push({signal:c,weight:Oo[c]*w,values:d})};e.approvalKind==="subagent"?r("subagent_gate"):
-e.approvalKind==="tool"&&r("approval_owed"),e.action==="reply"&&r("input_requested"),e.unverified&&r("unverified_complet\
-ion"),e.loopRepeats&&r("error_loop",{repeats:String(e.loopRepeats)}),e.changesRequested&&r("changes_requested"),e.runFailed&&
-r("run_failed"),e.stalledFor&&r("stalled",{duration:le(e.stalledFor)}),e.assignedToYou&&r("assigned_to_you"),e.changeBlocked&&
-r("change_blocked"),e.mergeReady&&r("merge_ready"),e.unattendedGoals&&r("nobody_on_it",{count:String(e.unattendedGoals)}),
-e.queuedBehind&&r("queued_behind",{count:String(e.queuedBehind)},Math.min(e.queuedBehind,3));let a=zo(e,t);return a>0&&r(
-"waiting_a_while",{hours:String(a)},Math.min(a,Lo)),o.sort((c,d)=>d.weight-c.weight),{score:o.reduce((c,d)=>c+d.weight,0),
-signals:o}}var Vo={approval_owed:"unblock",subagent_gate:"unblock",input_requested:"unblock",unverified_completion:"unbl\
-ock",error_loop:"unblock",run_failed:"unblock",stalled:"unblock",changes_requested:"unblock",change_blocked:"unblock",merge_ready:"\
-unblock",assigned_to_you:"followup",nobody_on_it:"followup"};function kn(e,t=Date.now()){if(e.state!=="needs-you")return null;
-for(let o of be(e,t).signals){let r=Vo[o.signal];if(r)return r}return null}var _n=14400*1e3;function Sn(e,t,o,r=Date.now()){
-let a=0,c=[];for(let d of e){if(d.state!=="needs-you"){c.push(d);continue}let w=t[d.id];if(w&&w>r){a+=1;continue}let m=o[d.
-id];if(m!==void 0&&d.updatedAt<=m){c.push({...d,state:"done",issue:!1});continue}c.push(d)}return{items:c,snoozedCount:a}}
-var wt=4320*60*1e3;function Rn(e,t=Date.now()){return e.state!=="done"||e.updatedAt===0?!0:t-e.updatedAt<=wt}var Jo={"ne\
-eds-you":1,running:-1,done:-1};function Qo(e,t,o){let r=e.updatedAt>0,a=t.updatedAt>0;return!r&&!a?0:r?a?(e.updatedAt-t.
-updatedAt)*o:-1:1}function He(e,t){let o=e.signals.slice(0,2);return o.length===0?t("rank_nothing_pressing"):o.map(a=>t(
-`rank_${a.signal}`,a.values)).join(t("rank_join"))}function Nn(e,t=Date.now()){let o=new Map(e.map(r=>[r.id,be(r,t)]));return[
-...e].sort((r,a)=>{let c=Vt[r.state]-Vt[a.state];if(c!==0)return c;if(r.state==="needs-you"){let d=(o.get(a.id)?.score??
-0)-(o.get(r.id)?.score??0);if(d!==0)return d}else if(r.issue!==a.issue)return r.issue?-1:1;return Qo(r,a,Jo[r.state])})}
-function In(e,t,o={},r={},a={},c=xn,d=Date.now()){let w=new Map,m=new Map;for(let s of e.slots){if(!s.key||Do.has(s.key)||
-s.memory_mode==="incognito")continue;let u=Ko(s,o[s.key],t);if(u.length>0){for(let x of u)w.set(x.id,x);let k=u.find(x=>x.
-state==="needs-you")??u[0];m.set(s.key,k);continue}let g=No(s,t);w.set(g.id,g),m.set(s.key,g)}if(e.assigned?.length){let s=new Map;
-for(let h of w.values())for(let v of h.references)(v.kind==="change"||v.kind==="issue")&&v.url&&!s.has(v.url)&&s.set(v.url,
-h);let u={changes_requested:0,conflict:1,checks_failing:2,ready_to_merge:3,assigned:4},g=new Map;for(let h of e.assigned){
-if(!h?.url||s.has(h.url)||!(h.status in u))continue;let v=g.get(h.status);v?v.push(h):g.set(h.status,[h])}let k=[...g.entries()].
-sort((h,v)=>(u[h[0]]??9)-(u[v[0]]??9)).map(h=>h[1]),x=[];for(let h=0;x.length<Yt;h+=1){let v=!1;for(let $ of k){if(x.length>=
-Yt)break;let E=$[h];E&&(x.push(E),v=!0)}if(!v)break}let N=new Set(x.map(h=>h.url));for(let h of e.assigned){if(!h?.url||
-!s.has(h.url)&&!N.has(h.url))continue;let v=h.kind==="issue"?"issue":"pull",$=h.status==="conflict"||h.status==="checks_\
-failing",E=h.status==="changes_requested",H=h.status==="ready_to_merge",z=v==="issue",B=s.get(h.url);if(B){B.owned=v,$&&
-(B.changeBlocked=!0,B.issue=!0),E&&(B.changesRequested=!0),H&&(B.mergeReady=!0),($||E||H)&&B.state==="done"&&(B.state="n\
-eeds-you");continue}let W=$||E||H||z,D=v==="issue"?"owned_issue_assigned":h.status==="conflict"?"owned_pull_conflict":h.
-status==="checks_failing"?"owned_pull_failing":h.status==="changes_requested"?"owned_pull_changes_requested":h.status===
-"ready_to_merge"?"owned_pull_merge_ready":h.status==="checks_running"?"owned_pull_checks_running":"owned_pull_awaiting_r\
-eview",X=v==="issue"?`issue #${h.number}`:`#${h.number}`;w.set(`owned:${h.url}`,{id:`owned:${h.url}`,title:h.title||X,summary:t(
-D,{count:String(h.status==="checks_failing"?h.failing:h.pending)}),state:W?"needs-you":"running",issue:$,updatedAt:M(h.updated_at),
-provenance:t("owned_provenance",{repo:h.repo}),references:[{kind:v==="issue"?"issue":"change",id:h.url,label:`${h.repo} ${X}`,
-url:h.url,status:h.status==="awaiting_review"?void 0:h.status.replace(/_/g," ")}],action:void 0,owned:v,changeBlocked:$||
-void 0,changesRequested:E||void 0,mergeReady:H||void 0,assignedToYou:z||void 0})}}for(let[s,u]of Object.entries(r)){let g=m.
-get(s);g&&(g.state="needs-you",g.issue=!0,g.stalledFor=u.silent_secs,g.summary=u.reason?t("stalled_because",{reason:u.reason,
-duration:le(u.silent_secs)}):t("stalled_for",{duration:le(u.silent_secs)}),g.action="open")}for(let[s,u]of Object.entries(
-a)){let g=m.get(s);g&&(g.state="needs-you",g.issue=!0,g.loopRepeats=u.repeats,g.summary=t("error_loop",{tool:u.tool,repeats:String(
-u.repeats)}),g.action="open")}for(let s of e.approvals){let u=s.slot?m.get(s.slot):void 0;if(u){Io(u,s,t);continue}w.set(
-`approval:${s.id}`,{id:`approval:${s.id}`,title:ie(s.tool||s.source,t("approval_needed")),summary:s.tool_purpose||t("too\
-l_call_waiting"),state:"needs-you",issue:!1,updatedAt:M(s.ts),provenance:t("approval"),action:"review-approval",approvalKind:pn(
-s)?"subagent":"tool",permissionId:s.id,permissionTool:s.tool||s.source,permissionPurpose:s.tool_purpose,permissionInput:s.
-tool_input,references:[{kind:"approval",id:s.id,label:s.tool||s.source||t("approval")}]})}for(let s of e.agents){let u=s.
-parent?m.get(s.parent):void 0;if(u){Co(u,s,t);continue}let g=!!(s.done&&(s.error||s.outcome==="failed"));s.parent&&!g||w.
-set(`agent:${s.id}`,{id:`agent:${s.id}`,title:ie(s.task||s.agent,t("agent_work")),summary:g?s.error?.trim()||t("agent_fa\
-iled",{task:s.task}):s.done?t("agent_done"):t("work_in_progress"),state:g?"needs-you":s.done?"done":"running",issue:g,runFailed:g||
-void 0,retryPath:g&&!s.id.startsWith("native:")?`/api/spawn/${encodeURIComponent(s.id)}/retry`:void 0,updatedAt:M(s.started),
-provenance:s.agent||t("agent"),action:"discuss",references:[{kind:"agent",id:s.id,label:s.agent||t("agent")}]})}for(let s of e.
-workflows){let u=s.session_key?m.get(s.session_key):void 0;if(u){Ao(u,s,t);continue}let g=s.status==="failed";w.set(`wor\
-kflow:${s.run_id}`,{id:`workflow:${s.run_id}`,title:ie(s.name,s.run_id),summary:g?t("workflow_failed_generic"):s.status===
-"running"?t("workflow_running"):t("workflow_finished"),state:g?"needs-you":s.status==="running"?"running":"done",issue:g,
-runFailed:g||void 0,progress:gn(s,t),nextSteps:fn(s,t),retryPath:g?`/api/workflows/runs/${encodeURIComponent(s.run_id)}/\
-rerun`:void 0,updatedAt:0,provenance:t("workflow"),action:"discuss",references:[{kind:"workflow",id:s.run_id,label:s.name||
-s.run_id}]})}for(let s of e.crons){if(!s.is_running&&s.last_status!=="error")continue;let u=s.last_status==="error",g=mo(
-s,d),k=t(u?"monitor_failed":"monitor_running");w.set(`monitor:${s.id}`,{id:`monitor:${s.id}`,title:s.name,summary:g?`${k}\
- ${t("monitor_next_check",{duration:g})}`:k,state:u?"needs-you":"running",issue:u,runFailed:u||void 0,retryPath:u?`/api/\
-crons/${encodeURIComponent(s.id)}/run`:void 0,updatedAt:M(s.running_since||s.last_run_ts||s.created_ts),provenance:t("mo\
-nitor"),action:u?"discuss":void 0,references:[{kind:"monitor",id:s.id,label:s.name}]})}for(let s of e.loops||[]){if(!s.active)
-continue;let u=String(s.id||"");if(!u)continue;let g=Math.max(0,Number(s.cycle_count)||0),k=Math.max(0,Number(s.max_cycles)||
-0),x=s.slot_key&&m.has(s.slot_key)?s.slot_key:void 0;w.set(`loop:${u}`,{id:`loop:${u}`,title:ie(s.message||"",t("loop")),
-summary:k?t("loop_watching_capped",{cycles:String(g),cap:String(k)}):t("loop_watching",{cycles:String(g)}),state:"runnin\
-g",issue:!1,updatedAt:M(s.last_fire_ts||s.created_ts),sessionKey:x,parentId:x?m.get(x)?.id:void 0,provenance:t("loop"),stopPath:`\
-/api/autonudge/${encodeURIComponent(u)}`,action:x?"open":void 0,references:[{kind:"monitor",id:u,label:t("loop"),sessionKey:x},
-...x?[{kind:"session",id:x,label:m.get(x)?.title||x,sessionKey:x}]:[]]})}let R=[...e.artifacts].sort((s,u)=>M(u.updated_at)-
-M(s.updated_at)).slice(0,8);for(let s of R){let u=s.session_key&&m.has(s.session_key)?s.session_key:void 0;w.set(`artifa\
-ct:${s.slug}`,{id:`artifact:${s.slug}`,title:ie(s.name,t("artifact")),summary:s.description||t("artifact_ready",{kind:s.
-kind}),state:"done",issue:!1,updatedAt:M(s.updated_at||s.created_at),sessionKey:u,parentId:u?m.get(u)?.id:void 0,provenance:s.
-session_title||s.source||t("artifact"),action:u?"open":void 0,references:[{kind:"artifact",id:s.slug,label:s.name,sessionKey:u},
-...u?[{kind:"session",id:u,label:s.session_title||u,sessionKey:u}]:[]]})}let I=[...w.values()];return Uo(I,c),Nn(I)}function ft(e){
-return{all:e.length,"needs-you":e.filter(t=>t.state==="needs-you").length,running:e.filter(t=>t.state==="running").length,
-done:e.filter(t=>t.state==="done").length}}function Cn(e){let t=[],o=new Map;for(let r of e){let a=r.sessionKey;if(!a){t.push({key:r.id,items:[r],header:null,sessionKey:null});
-continue}let c=o.get(a);if(c){c.items.push(r);continue}let d={key:a,items:[r],header:"session",sessionKey:r.sessionKey??
-null};o.set(a,d),t.push(d)}return t}function ht(e){let t=new Set,o=new Set,r=new Set,a=0,c=0,d=0,w=0,m=0;for(let R of e){
-R.sessionKey&&t.add(R.sessionKey);for(let I of R.references)I.kind==="change"?o.add(I.id):I.kind==="issue"&&r.add(I.id);
-R.id.startsWith("workflow:")?a+=1:R.id.startsWith("monitor:")?c+=1:R.id.startsWith("agent:")&&(d+=1),R.state==="needs-yo\
-u"&&(w+=1),R.updatedAt>m&&(m=R.updatedAt)}return{sessions:t.size,prs:o.size,issues:r.size,loops:a,crons:c,agents:d,needsYou:w,
-lastActivityAt:m}}var Xo=12;function bt(e){return`${e.last_ts??e.last_activity_ts??""}:${e.messages??0}`}function Zo(e,t=Date.now()){if(e.
-running||e.subagents_running||e.orchestrating||e.pending_approval)return!0;let o=mt(e);return o===0?!0:t-o<=wt}function An(e,t,o=Date.
-now(),r=()=>!1){return e.filter(a=>a.key&&a.key!==t&&a.memory_mode!=="incognito").filter(a=>Zo(a,o)).filter(a=>!r(a)).sort(
-(a,c)=>mt(c)-mt(a)).slice(0,Xo)}function mt(e){let t=e.last_ts??e.last_activity_ts??e.created;if(typeof t=="number")return t>
-1e10?t:t*1e3;if(!t)return 0;let o=Date.parse(t);return Number.isFinite(o)?o:0}async function Wn(e,t){let o={},r="unknown";
-for(let a of e)try{let c=await t(`/api/chat/slots/${encodeURIComponent(a.key)}/summary`);if(!c||typeof c!="object"){r="u\
-nsupported";break}if(c.enabled===!1){r="disabled";break}o[a.key]=c,r="available"}catch{r="unsupported";break}return{summaries:o,
-support:r}}var Tn=String.raw`
+run_id,label:t.name||t.run_id,sessionKey:t.session_key||e.sessionKey})}function Io(e){switch(e.state){case"needs-you":return"\
+needs-you";case"done":case"dropped":return"done";case"in-progress":return"running";default:return null}}function Co(e,t,o){
+return!(t.running||t.subagents_running||t.orchestrating)?!1:e===o}function Ao(e){let t=null,o=-1;for(let s of e){let a=s.
+last_touched_turn??0;a>o&&(o=a,t=s)}return t}function Wo(e,t){let o=e.next_steps?.find(a=>a.what?.trim())?.what?.trim();if(o)return o;let s=[...e.progress??[]].reverse().
+find(a=>a.trim());return s?s.trim():e.initial_intent?.trim()||t("work_in_progress")}var To=3;function Po(e){return[e.title??
+"",e.initial_intent??"",...e.progress??[],...(e.next_steps??[]).map(t=>t.what??"")].join(" ")}function Eo(e,t){if(!t)return!1;
+let o=t.replace(/[.*+?^${}()|[\]\\]/gu,"\\$&");return new RegExp(`#\\s?${o}\\b`,"u").test(e)}function Mo(e,t){if(e.length===
+0)return[];let o=Po(t);return e.filter(s=>Eo(o,s.number)).map(s=>s.ref)}function $o(e,t,o){if(!t?.enabled)return[];let s=t.
+intents??[];if(s.length===0)return[];let a=an(e),c=[],d=Ao(s),p=!!(e.running||e.subagents_running||e.orchestrating);s.forEach(
+(y,i)=>{let g=!p&&y.state==="in-progress",h=g?"needs-you":Io(y);if(!h)return;let I=(y.next_steps??[]).filter(v=>v.what?.
+trim());c.push({id:`intent:${e.key}:${i}`,title:ve(y.title,e.title||o("untitled_work")),summary:Wo(y,o),state:h,issue:!1,
+updatedAt:D(e.last_ts||e.last_activity_ts||e.created),sessionKey:e.key,provenance:sn(e,o),queuedBehind:e.queue_depth||void 0,
+changeBlocked:Fe(e)||void 0,unverified:y.verified===!1||void 0,unattendedGoals:g?1:void 0,action:g?"resume":"open",references:[
+{kind:"session",id:e.key,label:e.title||o("untitled_work"),sessionKey:e.key},...Mo(a,y)],nextSteps:I,initialIntent:y.initial_intent?.
+trim()||void 0,progress:(y.progress??[]).filter(v=>v.trim()),stale:!!t.stale,lastTouchedTurn:y.last_touched_turn??0,sessionTurns:t.
+user_turns||void 0,sessionChanges:a.map(v=>v.ref),moving:Co(y,e,d)||void 0})});let b=c.filter(y=>y.state==="needs-you"),
+A=c.filter(y=>y.state!=="needs-you").sort((y,i)=>(i.lastTouchedTurn??0)-(y.lastTouchedTurn??0));return[...b,...A].slice(
+0,Math.max(To,b.length))}var Bo=new Set(["crew-manager-conductor","overwatch-conductor"]),Ko={approval_owed:100,subagent_gate:95,
+input_requested:80,unverified_completion:70,error_loop:60,changes_requested:58,run_failed:55,stalled:50,change_blocked:40,
+merge_ready:34,assigned_to_you:32,nobody_on_it:30,queued_behind:12,waiting_a_while:8},Do=3;function zo(e,t){return e.updatedAt?
+Math.max(0,Math.floor((t-e.updatedAt)/36e5)):0}var qe=5;function pn(e,t,o=Date.now()){let s=ft(e),a=kn(e.filter(d=>d.state===
+"needs-you"),o),c=[`Fleet: ${s["needs-you"]} waiting on the user, ${s.running} in progress, ${s.done} finished recently.`];
+return a.length===0?(c.push("Nothing is waiting on the user."),c):(c.push(`Waiting on the user, in the order the list sh\
+ows them (top ${Math.min(qe,a.length)}):`),a.slice(0,qe).forEach((d,p)=>{let b=He(ye(d,o),t),A=d.sessionKey?` [session ${d.
+sessionKey}]`:"";c.push(`${p+1}. ${d.title} \u2014 ${d.summary} (${b})${A}`)}),a.length>qe&&c.push(`\u2026and ${a.length-
+qe} more waiting.`),c)}var dt=new Set(["the","a","an","and","or","to","for","of","in","on","at","is","it","this","that",
+"with","from","into","be","do","so","as","by","fix","add","make","update","work","session","app","new","use","run","why",
+"what","how","again","still","not"]),Vt=.6,Jt=2,gn=new Set;function ct(e){return[...new Set(e.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu,
+" ").split(/\s+/).filter(t=>t.length>2&&!dt.has(t)))]}function Qt(e,t){let o=ct(e),s=ct(t);if(o.length<Jt||s.length<Jt)return 0;
+let a=o.length<=s.length?o:s,c=new Set(o.length<=s.length?s:o);return a.filter(p=>c.has(p)).length/a.length}function Xt(e){
+return e.references.filter(t=>t.kind==="change"||t.kind==="issue").map(t=>t.id)}function Zt(e){return e.references.filter(
+t=>t.kind==="artifact").map(t=>t.id)}function en(e){return(e.nextSteps??[]).map(t=>t.what).filter(Boolean)}var Oo=new Set(
+["pull request","pull requests","status update","work in progress","code review","follow up","next step","next steps","a\
+ction item","action items","kiro crew","in progress","needs you"]);function ut(e){let t=new Set,o=e.match(/\b\p{Lu}[\p{L}\p{N}]*(?:\s+\p{Lu}[\p{L}\p{N}]*)+/gu)??
+[];for(let s of o){let a=s.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu," ").split(/\s+/).filter(Boolean).map(c=>c.length>
+3&&c.endsWith("s")&&!c.endsWith("ss")?c.slice(0,-1):c);for(;a.length&&dt.has(a[0]);)a.shift();for(;a.length&&dt.has(a[a.
+length-1]);)a.pop();if(!(a.length<2))for(let c=a.length;c>=2;c-=1)for(let d=0;d+c<=a.length;d+=1){let p=a.slice(d,d+c).join(
+" ");Oo.has(p)||t.add(p)}}return[...t]}function Lo(e){let t=new Set;if(e.length<qo)return t;let o=new Map;for(let s of e)
+for(let a of ut(s.title))o.set(a,(o.get(a)??0)+1);for(let[s,a]of o)a/e.length>=Fo&&t.add(s);return t}var qo=4,Fo=.75;function wn(e,t,o=gn){
+if(Xt(e).find(d=>Xt(t).includes(d)))return"same_change";if(Zt(e).find(d=>Zt(t).includes(d)))return"same_artifact";let c=ut(
+t.title).filter(d=>!o.has(d));if(ut(e.title).some(d=>c.includes(d)))return"same_deliverable";if(Qt(e.title,t.title)>=Vt)
+return"same_topic";for(let d of en(e))for(let p of en(t))if(Qt(d,p)>=Vt)return"same_step";return null}var fn={merged:[],
+split:[]};function tn(e){return`${e.sessionKey??e.id}|${ct(e.title).join(" ")}`}function hn(e,t){return[tn(e),tn(t)].sort().
+join("")}function Ho(e,t=fn){let o=e.filter(a=>a.state!=="done"&&a.sessionKey).sort((a,c)=>(a.updatedAt||0)-(c.updatedAt||
+0)),s=Lo(o);for(let a=1;a<o.length;a+=1){let c=o[a];for(let d=0;d<a;d+=1){let p=o[d];if(p.sessionKey===c.sessionKey||t.split.
+includes(hn(c,p)))continue;let b=wn(c,p,s);if(b){c.duplicateOf={sessionKey:p.sessionKey,title:p.title,because:b};break}}}
+jo(o,t,s)}var lt=3,nn=["same_change","same_artifact","same_deliverable","same_topic","same_step"];function jo(e,t,o=gn){
+for(let s of e){let a=[],c=new Set;for(let d of e){let p=d.sessionKey;if(p===s.sessionKey||c.has(p)||t.split.includes(hn(
+s,d)))continue;let b=wn(s,d,o);b&&(c.add(p),a.push({sessionKey:p,title:d.title,because:b}))}a.length!==0&&(a.sort((d,p)=>nn.
+indexOf(d.because)-nn.indexOf(p.because)),s.relatedSessions=a.slice(0,lt),a.length>lt&&(s.relatedMore=a.length-lt))}}var Uo=3e4;
+function mn(e,t,o=Date.now()){return Object.keys(t).length===0?e:e.map(s=>{let a=t[s.id];return!a||o-a>Uo||s.state==="ru\
+nning"?s:{...s,state:"running",moving:!0,instructed:!0}})}function ye(e,t=Date.now()){let o=[],s=(c,d,p=1)=>{o.push({signal:c,
+weight:Ko[c]*p,values:d})};e.approvalKind==="subagent"?s("subagent_gate"):e.approvalKind==="tool"&&s("approval_owed"),e.
+action==="reply"&&s("input_requested"),e.unverified&&s("unverified_completion"),e.loopRepeats&&s("error_loop",{repeats:String(
+e.loopRepeats)}),e.changesRequested&&s("changes_requested"),e.runFailed&&s("run_failed"),e.stalledFor&&s("stalled",{duration:ce(
+e.stalledFor)}),e.assignedToYou&&s("assigned_to_you"),e.changeBlocked&&s("change_blocked"),e.mergeReady&&s("merge_ready"),
+e.unattendedGoals&&s("nobody_on_it",{count:String(e.unattendedGoals)}),e.queuedBehind&&s("queued_behind",{count:String(e.
+queuedBehind)},Math.min(e.queuedBehind,3));let a=zo(e,t);return a>0&&s("waiting_a_while",{hours:String(a)},Math.min(a,Do)),
+o.sort((c,d)=>d.weight-c.weight),{score:o.reduce((c,d)=>c+d.weight,0),signals:o}}var Go={approval_owed:"unblock",subagent_gate:"\
+unblock",input_requested:"unblock",unverified_completion:"unblock",error_loop:"unblock",run_failed:"unblock",stalled:"un\
+block",changes_requested:"unblock",change_blocked:"unblock",merge_ready:"unblock",assigned_to_you:"followup",nobody_on_it:"\
+followup"};function bn(e,t=Date.now()){if(e.state!=="needs-you")return null;for(let o of ye(e,t).signals){let s=Go[o.signal];
+if(s)return s}return null}var xn=14400*1e3;function vn(e,t,o,s=Date.now()){let a=0,c=[];for(let d of e){if(d.state!=="ne\
+eds-you"){c.push(d);continue}let p=t[d.id];if(p&&p>s){a+=1;continue}let b=o[d.id];if(b!==void 0&&d.updatedAt<=b){c.push(
+{...d,state:"done",issue:!1});continue}c.push(d)}return{items:c,snoozedCount:a}}var wt=4320*60*1e3;function yn(e,t=Date.
+now()){return e.state!=="done"||e.updatedAt===0?!0:t-e.updatedAt<=wt}var Yo={"needs-you":1,running:-1,done:-1};function Vo(e,t,o){
+let s=e.updatedAt>0,a=t.updatedAt>0;return!s&&!a?0:s?a?(e.updatedAt-t.updatedAt)*o:-1:1}function He(e,t){let o=e.signals.
+slice(0,2);return o.length===0?t("rank_nothing_pressing"):o.map(a=>t(`rank_${a.signal}`,a.values)).join(t("rank_join"))}
+function kn(e,t=Date.now()){let o=new Map(e.map(s=>[s.id,ye(s,t)]));return[...e].sort((s,a)=>{let c=jt[s.state]-jt[a.state];
+if(c!==0)return c;if(s.state==="needs-you"){let d=(o.get(a.id)?.score??0)-(o.get(s.id)?.score??0);if(d!==0)return d}else if(s.
+issue!==a.issue)return s.issue?-1:1;return Vo(s,a,Yo[s.state])})}function _n(e,t,o={},s={},a={},c=fn,d=Date.now()){let p=new Map,
+b=new Map;for(let i of e.slots){if(!i.key||Bo.has(i.key)||i.memory_mode==="incognito")continue;let g=$o(i,o[i.key],t);if(g.
+length>0){for(let v of g)p.set(v.id,v);let I=g.find(v=>v.state==="needs-you")??g[0];b.set(i.key,I);continue}let h=_o(i,t);
+p.set(h.id,h),b.set(i.key,h)}if(e.assigned?.length){let i=new Map;for(let f of p.values())for(let R of f.references)(R.kind===
+"change"||R.kind==="issue")&&R.url&&!i.has(R.url)&&i.set(R.url,f);let g={changes_requested:0,conflict:1,checks_failing:2,
+ready_to_merge:3,assigned:4},h=new Map;for(let f of e.assigned){if(!f?.url||i.has(f.url)||!(f.status in g))continue;let R=h.
+get(f.status);R?R.push(f):h.set(f.status,[f])}let I=[...h.entries()].sort((f,R)=>(g[f[0]]??9)-(g[R[0]]??9)).map(f=>f[1]),
+v=[];for(let f=0;v.length<Ht;f+=1){let R=!1;for(let _ of I){if(v.length>=Ht)break;let $=_[f];$&&(v.push($),R=!0)}if(!R)break}
+let k=new Set(v.map(f=>f.url));for(let f of e.assigned){if(!f?.url||!i.has(f.url)&&!k.has(f.url))continue;let R=f.kind===
+"issue"?"issue":"pull",_=f.status==="conflict"||f.status==="checks_failing",$=f.status==="changes_requested",O=f.status===
+"ready_to_merge",j=R==="issue",B=i.get(f.url);if(B){B.owned=R,_&&(B.changeBlocked=!0,B.issue=!0),$&&(B.changesRequested=
+!0),O&&(B.mergeReady=!0),(_||$||O)&&B.state==="done"&&(B.state="needs-you");continue}let P=_||$||O||j,M=R==="issue"?"own\
+ed_issue_assigned":f.status==="conflict"?"owned_pull_conflict":f.status==="checks_failing"?"owned_pull_failing":f.status===
+"changes_requested"?"owned_pull_changes_requested":f.status==="ready_to_merge"?"owned_pull_merge_ready":f.status==="chec\
+ks_running"?"owned_pull_checks_running":"owned_pull_awaiting_review",L=R==="issue"?`issue #${f.number}`:`#${f.number}`;p.
+set(`owned:${f.url}`,{id:`owned:${f.url}`,title:f.title||L,summary:t(M,{count:String(f.status==="checks_failing"?f.failing:
+f.pending)}),state:P?"needs-you":"running",issue:_,updatedAt:D(f.updated_at),provenance:t("owned_provenance",{repo:f.repo}),
+references:[{kind:R==="issue"?"issue":"change",id:f.url,label:`${f.repo} ${L}`,url:f.url,status:f.status==="awaiting_rev\
+iew"?void 0:f.status.replace(/_/g," ")}],action:void 0,owned:R,changeBlocked:_||void 0,changesRequested:$||void 0,mergeReady:O||
+void 0,assignedToYou:j||void 0})}}for(let[i,g]of Object.entries(s)){let h=b.get(i);h&&(h.state="needs-you",h.issue=!0,h.
+stalledFor=g.silent_secs,h.summary=g.reason?t("stalled_because",{reason:g.reason,duration:ce(g.silent_secs)}):t("stalled\
+_for",{duration:ce(g.silent_secs)}),h.action="open")}for(let[i,g]of Object.entries(a)){let h=b.get(i);h&&(h.state="needs\
+-you",h.issue=!0,h.loopRepeats=g.repeats,h.summary=t("error_loop",{tool:g.tool,repeats:String(g.repeats)}),h.action="ope\
+n")}for(let i of e.approvals){let g=i.slot?b.get(i.slot):void 0;if(g){So(g,i,t);continue}p.set(`approval:${i.id}`,{id:`a\
+pproval:${i.id}`,title:ve(i.tool||i.source,t("approval_needed")),summary:i.tool_purpose||t("tool_call_waiting"),state:"n\
+eeds-you",issue:!1,updatedAt:D(i.ts),provenance:t("approval"),action:"review-approval",approvalKind:ln(i)?"subagent":"to\
+ol",permissionId:i.id,permissionTool:i.tool||i.source,permissionPurpose:i.tool_purpose,permissionInput:i.tool_input,references:[
+{kind:"approval",id:i.id,label:i.tool||i.source||t("approval")}]})}for(let i of e.agents){let g=i.parent?b.get(i.parent):
+void 0;if(g){Ro(g,i,t);continue}let h=!!(i.done&&(i.error||i.outcome==="failed"));i.parent&&!h||p.set(`agent:${i.id}`,{id:`\
+agent:${i.id}`,title:ve(i.task||i.agent,t("agent_work")),summary:h?i.error?.trim()||t("agent_failed",{task:i.task}):i.done?
+t("agent_done"):t("work_in_progress"),state:h?"needs-you":i.done?"done":"running",issue:h,runFailed:h||void 0,retryPath:h&&
+!i.id.startsWith("native:")?`/api/spawn/${encodeURIComponent(i.id)}/retry`:void 0,updatedAt:D(i.started),provenance:i.agent||
+t("agent"),action:"discuss",references:[{kind:"agent",id:i.id,label:i.agent||t("agent")}]})}for(let i of e.workflows){let g=i.
+session_key?b.get(i.session_key):void 0;if(g){No(g,i,t);continue}let h=i.status==="failed";p.set(`workflow:${i.run_id}`,
+{id:`workflow:${i.run_id}`,title:ve(i.name,i.run_id),summary:h?t("workflow_failed_generic"):i.status==="running"?t("work\
+flow_running"):t("workflow_finished"),state:h?"needs-you":i.status==="running"?"running":"done",issue:h,runFailed:h||void 0,
+progress:dn(i,t),nextSteps:un(i,t),retryPath:h?`/api/workflows/runs/${encodeURIComponent(i.run_id)}/rerun`:void 0,updatedAt:0,
+provenance:t("workflow"),action:"discuss",references:[{kind:"workflow",id:i.run_id,label:i.name||i.run_id}]})}for(let i of e.
+crons){if(!i.is_running&&i.last_status!=="error")continue;let g=i.last_status==="error",h=wo(i,d),I=t(g?"monitor_failed":
+"monitor_running");p.set(`monitor:${i.id}`,{id:`monitor:${i.id}`,title:i.name,summary:h?`${I} ${t("monitor_next_check",{
+duration:h})}`:I,state:g?"needs-you":"running",issue:g,runFailed:g||void 0,retryPath:g?`/api/crons/${encodeURIComponent(
+i.id)}/run`:void 0,updatedAt:D(i.running_since||i.last_run_ts||i.created_ts),provenance:t("monitor"),action:g?"discuss":
+void 0,references:[{kind:"monitor",id:i.id,label:i.name}]})}for(let i of e.loops||[]){if(!i.active)continue;let g=String(
+i.id||"");if(!g)continue;let h=Math.max(0,Number(i.cycle_count)||0),I=Math.max(0,Number(i.max_cycles)||0),v=i.slot_key&&
+b.has(i.slot_key)?i.slot_key:void 0;p.set(`loop:${g}`,{id:`loop:${g}`,title:ve(i.message||"",t("loop")),summary:I?t("loo\
+p_watching_capped",{cycles:String(h),cap:String(I)}):t("loop_watching",{cycles:String(h)}),state:"running",issue:!1,updatedAt:D(
+i.last_fire_ts||i.created_ts),sessionKey:v,parentId:v?b.get(v)?.id:void 0,provenance:t("loop"),stopPath:`/api/autonudge/${encodeURIComponent(
+g)}`,action:v?"open":void 0,references:[{kind:"monitor",id:g,label:t("loop"),sessionKey:v},...v?[{kind:"session",id:v,label:b.
+get(v)?.title||v,sessionKey:v}]:[]]})}let A=[...e.artifacts].sort((i,g)=>D(g.updated_at)-D(i.updated_at)).slice(0,8);for(let i of A){
+let g=i.session_key&&b.has(i.session_key)?i.session_key:void 0;p.set(`artifact:${i.slug}`,{id:`artifact:${i.slug}`,title:ve(
+i.name,t("artifact")),summary:i.description||t("artifact_ready",{kind:i.kind}),state:"done",issue:!1,updatedAt:D(i.updated_at||
+i.created_at),sessionKey:g,parentId:g?b.get(g)?.id:void 0,provenance:i.session_title||i.source||t("artifact"),action:g?"\
+open":void 0,references:[{kind:"artifact",id:i.slug,label:i.name,sessionKey:g},...g?[{kind:"session",id:g,label:i.session_title||
+g,sessionKey:g}]:[]]})}let y=[...p.values()];return Ho(y,c),kn(y)}function ft(e){return{all:e.length,"needs-you":e.filter(
+t=>t.state==="needs-you").length,running:e.filter(t=>t.state==="running").length,done:e.filter(t=>t.state==="done").length}}function Sn(e){let t=[],o=new Map;for(let s of e){let a=s.sessionKey;if(!a){t.push({key:s.id,items:[s],header:null,sessionKey:null});
+continue}let c=o.get(a);if(c){c.items.push(s);continue}let d={key:a,items:[s],header:"session",sessionKey:s.sessionKey??
+null};o.set(a,d),t.push(d)}return t}function Rn(e){let t=new Set,o=new Set,s=new Set,a=0,c=0,d=0,p=0,b=0;for(let A of e){
+A.sessionKey&&t.add(A.sessionKey);for(let y of A.references)y.kind==="change"?o.add(y.id):y.kind==="issue"&&s.add(y.id);
+A.id.startsWith("workflow:")?a+=1:A.id.startsWith("monitor:")?c+=1:A.id.startsWith("agent:")&&(d+=1),A.state==="needs-yo\
+u"&&(p+=1),A.updatedAt>b&&(b=A.updatedAt)}return{sessions:t.size,prs:o.size,issues:s.size,loops:a,crons:c,agents:d,needsYou:p,
+lastActivityAt:b}}var Jo=12;function mt(e){return`${e.last_ts??e.last_activity_ts??""}:${e.messages??0}`}function Qo(e,t=Date.now()){if(e.
+running||e.subagents_running||e.orchestrating||e.pending_approval)return!0;let o=ht(e);return o===0?!0:t-o<=wt}function Nn(e,t,o=Date.
+now(),s=()=>!1){return e.filter(a=>a.key&&a.key!==t&&a.memory_mode!=="incognito").filter(a=>Qo(a,o)).filter(a=>!s(a)).sort(
+(a,c)=>ht(c)-ht(a)).slice(0,Jo)}function ht(e){let t=e.last_ts??e.last_activity_ts??e.created;if(typeof t=="number")return t>
+1e10?t:t*1e3;if(!t)return 0;let o=Date.parse(t);return Number.isFinite(o)?o:0}async function In(e,t){let o={},s="unknown";
+for(let a of e)try{let c=await t(`/api/chat/slots/${encodeURIComponent(a.key)}/summary`);if(!c||typeof c!="object"){s="u\
+nsupported";break}if(c.enabled===!1){s="disabled";break}o[a.key]=c,s="available"}catch{s="unsupported";break}return{summaries:o,
+support:s}}var Cn=String.raw`
   .ow-root {
     display: flex;
     flex: 1;
@@ -477,19 +471,19 @@ support:r}}var Tn=String.raw`
   .ow-row[data-lane='running'] { box-shadow: inset 3px 0 0 var(--accent); }
   .ow-row[data-lane='done'] { box-shadow: inset 3px 0 0 var(--ok); }
   .ow-row:hover { border-color: var(--border-strong); background: var(--bg-hover); }
-  .ow-row:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
-  .ow-row[data-selected='true'] {
-    border-color: var(--accent);
-    background: var(--aim-subtle);
-    box-shadow: inset 3px 0 0 var(--accent);
-  }
+  /* Focus ring via outline, not box-shadow, so it never replaces the lane rail.
+     Keyboard-focus only; a mouse click to select shows nothing. */
+  .ow-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* Selection recolours nothing on the row — the expanded detail and the
+     Conductor quote are the feedback, so the rail and edges never change. */
   .ow-row-layout { display: flex; align-items: flex-start; gap: 12px; }
   .ow-row-content { min-width: 0; flex: 1; }
   /* Title line. The chevron is pushed to the trailing edge by the title's own
      flex growth, so it lands in the same place on every card. */
   .ow-row-heading { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
-  .ow-row-chevron { margin-top: 3px; color: var(--muted); transition: transform 140ms ease; }
+  .ow-row-chevron { flex: none; margin-top: 3px; color: var(--muted); transition: transform 140ms ease, color 140ms ease; }
   .ow-row-chevron[data-expanded='true'] { transform: rotate(90deg); }
+  .ow-row:hover .ow-row-chevron { color: var(--text-strong); }
   /* Status line (option B): the state badge, then the one-line reason. */
   .ow-row-status { display: flex; min-width: 0; align-items: center; gap: 8px; margin-top: 6px; }
   .ow-row-statustext {
@@ -932,6 +926,65 @@ support:r}}var Tn=String.raw`
     background: var(--bg-hover);
   }
   .ow-goal-meta { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+  /* --- Session card: one session = one card (status/name/turns, PRs, latest
+     goal summary + first next step, everything else behind expand). --- */
+  .ow-sessioncard {
+    position: relative; display: flex; flex-direction: column;
+    padding: 8px 10px; margin: -8px -10px 0; border-radius: 6px;
+    cursor: pointer; outline: none;
+  }
+  /* No hover background: the enclosing .ow-block[data-grouped] is ALREADY the
+     card, so filling it on hover read as the whole session container being the
+     target. Hover only reveals the aside; selection gets a contained tint. NOTE:
+     this must NOT be named .ow-card — that is the app's generic panel card
+     (border + --card bg), which drew a second frame line inside the container. */
+  .ow-sessioncard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ow-sessioncard[data-selected='true'] { background: var(--aim-subtle); }
+  .ow-sessioncard:hover .ow-row-aside,
+  .ow-sessioncard:focus-within .ow-row-aside { opacity: 1; pointer-events: auto; }
+  .ow-card-top { display: flex; align-items: center; gap: 8px; }
+  .ow-card-meta {
+    margin-left: auto; display: flex; align-items: center; gap: 6px;
+    min-width: 0; color: var(--muted); font-size: 12px;
+  }
+  .ow-card-meta > * + *::before { content: '·'; margin-right: 6px; color: var(--border); }
+  .ow-card-name {
+    padding: 0; border: 0; background: none; font: inherit; font-size: 12px;
+    color: var(--muted); font-weight: 500; max-width: 240px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+  }
+  .ow-card-name:hover { color: var(--accent); text-decoration: underline; }
+  .ow-card-metapart { white-space: nowrap; }
+  .ow-card-title { margin: 8px 0 0; color: var(--text-strong); font-size: 16px; font-weight: 600; line-height: 1.3; }
+  .ow-card-prs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
+  .ow-card-pr {
+    display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px;
+    font-size: 12px; color: var(--text); background: var(--bg-hover);
+    border: 1px solid var(--border); text-decoration: none; white-space: nowrap;
+  }
+  .ow-card-pr:hover { border-color: var(--border-strong); }
+  .ow-card-pr-status { color: var(--muted); }
+  .ow-card-pr[data-status='merged'] { color: var(--ok); background: var(--ok-subtle, rgba(52,211,153,.12)); border-color: transparent; }
+  .ow-card-pr[data-status='merged'] .ow-card-pr-status { color: var(--ok); }
+  .ow-card-pr[data-status='checks running'] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .ow-card-pr[data-status='checks running'] .ow-card-pr-status { color: var(--accent); }
+  .ow-card-pr[data-status='checks failing'], .ow-card-pr[data-status='conflict'] { color: var(--warn); background: var(--warn-subtle, rgba(251,191,36,.12)); border-color: transparent; }
+  .ow-card-pr[data-status='checks failing'] .ow-card-pr-status, .ow-card-pr[data-status='conflict'] .ow-card-pr-status { color: var(--warn); }
+  .ow-card-pr[data-status='closed'] { color: var(--muted); }
+  .ow-card-summary { margin: 10px 0 0; color: var(--text); font-size: 13px; line-height: 1.5; }
+  /* Suggested next step: an arrow, the step, its quieter "why" underneath. Sits
+     above a hairline so it reads as a distinct call to action. */
+  .ow-card-step {
+    display: flex; gap: 8px; align-items: flex-start; width: 100%; margin: 10px 0 0;
+    padding: 10px 0 0; border: 0; border-top: 1px solid var(--border);
+    background: none; text-align: left; cursor: pointer; color: var(--text);
+  }
+  .ow-card-step:hover .ow-card-step-what { color: var(--accent); }
+  .ow-card-step-arrow { flex: none; margin-top: 1px; color: var(--warn); }
+  .ow-card-step-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ow-card-step-what { font-size: 13px; }
+  .ow-card-step-why { color: var(--muted); font-size: 12px; font-style: italic; }
+  .ow-card-expanded { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
   /* PR/issue links share the line and the muted look of the rest of the meta;
      a dot separates each piece the way the text parts are joined. */
   .ow-goal-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -1054,6 +1107,8 @@ support:r}}var Tn=String.raw`
      is clean; shown on hover OR keyboard focus so it is not mouse-only. Floated
      over the corner (not in flow) so appearing shifts no layout. A backing panel
      keeps the labels legible over whatever text sits behind them. */
+  /* Management CTAs (Later / Handled) float top-right and appear on hover/focus
+     only, so the resting row stays clean. */
   .ow-row-aside {
     position: absolute; top: 8px; right: 10px; z-index: 1;
     display: flex; gap: 2px; padding: 2px;
@@ -1152,172 +1207,182 @@ support:r}}var Tn=String.raw`
     }
     .ow-railnav .ow-railitem { width: auto; }
   }
-`;import{Fragment as Ue,jsx as i,jsxs as f}from"react/jsx-runtime";var de=["work"],Mn=["work"],Hn={work:"Sessions",loops:"\
-Loops",schedule:"Scheduled tasks"};function xt({id:e,onPromote:t}){return i(L,{className:"ow-promote","aria-label":`Move\
- ${Hn[e]} to the first column`,onClick:o=>{o.preventDefault(),o.stopPropagation(),t(e)},children:"Make primary"})}function vt({
-lastUpdated:e,refreshing:t,onRefresh:o}){let r=e?Ct(e):null;return f("span",{className:"ow-refreshbar",children:[r&&f("s\
-pan",{className:"ow-updated","aria-live":"polite",children:["updated ",r]}),i(L,{className:"ow-refresh",onClick:a=>{a.preventDefault(),
-a.stopPropagation(),o()},disabled:t,"aria-label":"Refresh",title:"Refresh",children:i(ir,{className:`ow-icon${t?" ow-spi\
-n":""}`,"aria-hidden":"true"})})]})}var yt="crew-manager.snoozed",Bn="crew-manager.handled",kt="crew-manager.stack-open-\
-v2",_t="crew-manager.primary-v1";function xe(e,t={}){try{let o=localStorage.getItem(e);return o?JSON.parse(o):t}catch{return t}}
-function ce(e,t){try{localStorage.setItem(e,JSON.stringify(t))}catch{}}function Ct(e,t=Date.now()){if(!e)return null;let o=Math.
-max(0,Math.round((t-e)/1e3));if(o<60)return"just now";let r=Math.round(o/60);if(r<60)return`${r}m ago`;let a=Math.round(
-r/60);return a<24?`${a}h ago`:`${Math.round(a/24)}d ago`}function $n(e){return e?new Date(e).toLocaleTimeString([],{hour:"\
-numeric",minute:"2-digit"}):""}function ve(e,t,o){return e<=0?null:`${e} ${e===1?t:o}`}function mr(e,t=Date.now(),o=!1,r=!1){
-let a=ht(e),c=[o?null:ve(a.sessions,"session","sessions"),r?null:ve(a.prs,"PR","PRs"),r?null:ve(a.issues,"issue","issues"),
-ve(a.loops,"loop","loops"),ve(a.crons,"cron","crons"),ve(a.agents,"agent","agents")].filter(w=>!!w),d=Ct(a.lastActivityAt,
-t);return d&&c.push(`last active ${d}`),c.join(" \xB7 ")}var ue="crew-manager-conductor",br=5e3,xr={session:"Session",approval:"\
-Approval",agent:"Agent",workflow:"Workflow",monitor:"Monitor",artifact:"Artifact",approval_waiting:"Review the pending a\
-pproval request",subagent_gate_waiting:"Allow or refuse a sub-agent held at the spawn gate",information_needed:"Answer t\
-he request in the work thread",decision_ready:"Make the decision this work is waiting on",work_in_progress:"Work is in p\
-rogress",linked_change_issue:"Open the linked change \u2014 a check is failing or it conflicts",recent_work_ready:"Pick \
-this back up, or let it go",approval_needed_for:"Review the pending {{tool}} request",approval_needed:"Approval needed",
-tool_call_waiting:"Allow or refuse a waiting tool call",agent_work:"Agent work",agent_done:"This agent run finished",agent_failed:"\
-This agent stopped before finishing \u2014 nothing to do here",workflow_failed:"This workflow stopped before finishing",
-workflow_failed_generic:"This workflow stopped before finishing",workflow_running:"Workflow is running",workflow_finished:"\
-Workflow finished",workflow_fact_last_log:"Got as far as: {{log}}",workflow_fact_phase:"It was in the {{phase}} phase",workflow_fact_error:"\
-It stopped with: {{error}}",workflow_fact_agent_errors:"{{count}} of its agents reported an error",workflow_fact_partials:"\
-{{count}} agents finished first, so their output survived",workflow_step_diagnose:"Find out why {{name}} stopped, then r\
-e-run it",workflow_step_why_error:"it failed with {{error}}, so re-running it as-is repeats that",workflow_step_why_generic:"\
-it has not been re-run, and nothing says the cause is fixed",workflow_step_expect_partials:"a diagnosis, and {{count}} f\
-inished agents worth reusing",workflow_step_expect_generic:"a diagnosis you can act on before spending another run",monitor_failed:"\
-The latest check stopped before finishing",monitor_running:"Monitor is checking now",monitor_next_check:"Checks again in\
- {{duration}}.",loop:"Monitor loop",loop_watching:"Re-prompting its own session \u2014 {{cycles}} cycles so far, no limit set",
-loop_watching_capped:"Re-prompting its own session \u2014 cycle {{cycles}} of {{cap}}",artifact_ready:"{{kind}} output i\
-s ready",stalled_for:"Check on it \u2014 no activity for {{duration}}, still marked running",stalled_because:"{{reason}}\
- Silent for {{duration}}.",duplicate_same_change:"Also being worked in \u201C{{title}}\u201D \u2014 same linked change",
-duplicate_same_artifact:"Also being worked in \u201C{{title}}\u201D \u2014 same artifact",duplicate_same_deliverable:"Al\
-so being worked in \u201C{{title}}\u201D \u2014 same deliverable",duplicate_same_topic:"Looks like the same work as \u201C{{t\
-itle}}\u201D",duplicate_same_step:"Next step matches \u201C{{title}}\u201D \u2014 may be the same work",related_sessions:"\
-{{count}} other session(s) on this same work",related_same_change:"same change",related_same_artifact:"same artifact",related_same_deliverable:"\
-same deliverable",related_same_topic:"similar goal",related_same_step:"same next step",related_more:"and {{count}} more",
-rank_approval_owed:"only you can clear this approval",rank_subagent_gate:"a sub-agent is held at the spawn gate",rank_input_requested:"\
-the agent asked you a question",rank_unverified_completion:"finished but never verified",rank_error_loop:"the same failu\
-re has repeated {{repeats}} times",rank_run_failed:"the run failed and has not been retried",rank_stalled:"silent for {{\
-duration}}",rank_change_blocked:"a linked change is failing or conflicting",rank_changes_requested:"a reviewer asked you\
- for changes",rank_assigned_to_you:"assigned to you and nobody has started it",rank_merge_ready:"approved and green \u2014 on\
-ly you can merge it",rank_nobody_on_it:"nobody is on {{count}} unfinished goal(s) in this session",no_next_step:"No next\
- step recorded \u2014 nobody is on this",rank_queued_behind:"{{count}} more prompt(s) queued in this session",rank_waiting_a_while:"\
+`;import{Fragment as Ke,jsx as r,jsxs as w}from"react/jsx-runtime";var ue=["work"],Tn=["work"],Ln={work:"Sessions",loops:"\
+Loops",schedule:"Scheduled tasks"};function bt({id:e,onPromote:t}){return r(G,{className:"ow-promote","aria-label":`Move\
+ ${Ln[e]} to the first column`,onClick:o=>{o.preventDefault(),o.stopPropagation(),t(e)},children:"Make primary"})}function xt({
+lastUpdated:e,refreshing:t,onRefresh:o}){let s=e?Rt(e):null;return w("span",{className:"ow-refreshbar",children:[s&&w("s\
+pan",{className:"ow-updated","aria-live":"polite",children:["updated ",s]}),r(G,{className:"ow-refresh",onClick:a=>{a.preventDefault(),
+a.stopPropagation(),o()},disabled:t,"aria-label":"Refresh",title:"Refresh",children:r(ar,{className:`ow-icon${t?" ow-spi\
+n":""}`,"aria-hidden":"true"})})]})}var vt="crew-manager.snoozed",Pn="crew-manager.handled",yt="crew-manager.stack-open-\
+v2",kt="crew-manager.primary-v1";function ke(e,t={}){try{let o=localStorage.getItem(e);return o?JSON.parse(o):t}catch{return t}}
+function pe(e,t){try{localStorage.setItem(e,JSON.stringify(t))}catch{}}function Rt(e,t=Date.now()){if(!e)return null;let o=Math.
+max(0,Math.round((t-e)/1e3));if(o<60)return"just now";let s=Math.round(o/60);if(s<60)return`${s}m ago`;let a=Math.round(
+s/60);return a<24?`${a}h ago`:`${Math.round(a/24)}d ago`}function En(e){return e?new Date(e).toLocaleTimeString([],{hour:"\
+numeric",minute:"2-digit"}):""}var ge="crew-manager-conductor",hr=5e3,mr={session:"Session",approval:"Approval",agent:"Agent",workflow:"Workflow",monitor:"\
+Monitor",artifact:"Artifact",approval_waiting:"Review the pending approval request",subagent_gate_waiting:"Allow or refu\
+se a sub-agent held at the spawn gate",information_needed:"Answer the request in the work thread",decision_ready:"Make t\
+he decision this work is waiting on",work_in_progress:"Work is in progress",linked_change_issue:"Open the linked change \
+\u2014 a check is failing or it conflicts",recent_work_ready:"Pick this back up, or let it go",approval_needed_for:"Revi\
+ew the pending {{tool}} request",approval_needed:"Approval needed",tool_call_waiting:"Allow or refuse a waiting tool cal\
+l",agent_work:"Agent work",agent_done:"This agent run finished",agent_failed:"This agent stopped before finishing \u2014 noth\
+ing to do here",workflow_failed:"This workflow stopped before finishing",workflow_failed_generic:"This workflow stopped \
+before finishing",workflow_running:"Workflow is running",workflow_finished:"Workflow finished",workflow_fact_last_log:"G\
+ot as far as: {{log}}",workflow_fact_phase:"It was in the {{phase}} phase",workflow_fact_error:"It stopped with: {{error\
+}}",workflow_fact_agent_errors:"{{count}} of its agents reported an error",workflow_fact_partials:"{{count}} agents fini\
+shed first, so their output survived",workflow_step_diagnose:"Find out why {{name}} stopped, then re-run it",workflow_step_why_error:"\
+it failed with {{error}}, so re-running it as-is repeats that",workflow_step_why_generic:"it has not been re-run, and no\
+thing says the cause is fixed",workflow_step_expect_partials:"a diagnosis, and {{count}} finished agents worth reusing",
+workflow_step_expect_generic:"a diagnosis you can act on before spending another run",monitor_failed:"The latest check s\
+topped before finishing",monitor_running:"Monitor is checking now",monitor_next_check:"Checks again in {{duration}}.",loop:"\
+Monitor loop",loop_watching:"Re-prompting its own session \u2014 {{cycles}} cycles so far, no limit set",loop_watching_capped:"\
+Re-prompting its own session \u2014 cycle {{cycles}} of {{cap}}",artifact_ready:"{{kind}} output is ready",stalled_for:"\
+Check on it \u2014 no activity for {{duration}}, still marked running",stalled_because:"{{reason}} Silent for {{duration\
+}}.",duplicate_same_change:"Also being worked in \u201C{{title}}\u201D \u2014 same linked change",duplicate_same_artifact:"\
+Also being worked in \u201C{{title}}\u201D \u2014 same artifact",duplicate_same_deliverable:"Also being worked in \u201C{{tit\
+le}}\u201D \u2014 same deliverable",duplicate_same_topic:"Looks like the same work as \u201C{{title}}\u201D",duplicate_same_step:"\
+Next step matches \u201C{{title}}\u201D \u2014 may be the same work",related_sessions:"{{count}} other session(s) on thi\
+s same work",related_same_change:"same change",related_same_artifact:"same artifact",related_same_deliverable:"same deli\
+verable",related_same_topic:"similar goal",related_same_step:"same next step",related_more:"and {{count}} more",rank_approval_owed:"\
+only you can clear this approval",rank_subagent_gate:"a sub-agent is held at the spawn gate",rank_input_requested:"the a\
+gent asked you a question",rank_unverified_completion:"finished but never verified",rank_error_loop:"the same failure ha\
+s repeated {{repeats}} times",rank_run_failed:"the run failed and has not been retried",rank_stalled:"silent for {{durat\
+ion}}",rank_change_blocked:"a linked change is failing or conflicting",rank_changes_requested:"a reviewer asked you for \
+changes",rank_assigned_to_you:"assigned to you and nobody has started it",rank_merge_ready:"approved and green \u2014 only yo\
+u can merge it",rank_nobody_on_it:"nobody is on {{count}} unfinished goal(s) in this session",no_next_step:"No next step\
+ recorded \u2014 nobody is on this",rank_queued_behind:"{{count}} more prompt(s) queued in this session",rank_waiting_a_while:"\
 waiting {{hours}}h",owned_pull_conflict:"Your pull request has a conflict to resolve.",owned_pull_failing:"Your pull req\
 uest has {{count}} failing check(s).",owned_pull_changes_requested:"A reviewer has requested changes on your pull reques\
 t.",owned_pull_merge_ready:"Approved with nothing red. Only you can merge it.",owned_pull_awaiting_review:"Waiting on re\
 viewers, not on you.",owned_pull_checks_running:"{{count}} check(s) still running.",owned_issue_assigned:"Assigned to yo\
 u.",owned_provenance:"{{repo}}",rank_nothing_pressing:"nothing pressing \u2014 ordered by recency",rank_join:", and ",error_loop:"\
 {{tool}} has failed the same way {{repeats}} times in a row",untitled_work:"Untitled work",card_asked_for:"You asked for",
-card_where_it_stands:"Where it stands",card_suggested_next:"Suggested next",card_turn:"turn {{turn}}"};function O(e,t={}){
-return xr[e].replace(/\{\{(\w+)\}\}/g,(o,r)=>t[r]??"")}var jn={"needs-you":"Needs you",running:"Running",done:"Done"},St={
-all:"All","needs-you":"Needs you","follow-up":"Follow up",running:"Running",done:"Done"},vr={session:ar,approval:zn,agent:tr,
-workflow:ur,monitor:Fn,artifact:rr,change:sr,issue:cr};function Be({children:e,onActivate:t,...o}){return i("div",{...o,
-role:"button",tabIndex:0,onClick:t,onKeyDown:r=>{(r.key==="Enter"||r.key===" ")&&(r.preventDefault(),t())},children:e})}
-function Kn({label:e,count:t,subtitle:o}){return f("div",{className:"ow-section-header",children:[f("div",{className:"ow\
--section-heading",children:[i("h2",{className:"ow-section-title",children:e}),i("span",{className:"ow-section-count",children:t})]}),
-o&&i("p",{className:"ow-section-subtitle",children:o})]})}function yr(e){let t=ne(e);return t==="unblock"?f("span",{className:"\
-ow-rowstate ow-rowstate--need",children:[i("span",{className:"ow-rowstate-dot","aria-hidden":"true"}),"Needs you"]}):t===
-"followup"?f("span",{className:"ow-rowstate ow-rowstate--follow",children:[i("span",{className:"ow-rowstate-dot","aria-h\
-idden":"true"}),"Follow up"]}):t==="running"?e.moving?f("span",{className:"ow-rowstate ow-rowstate--run",children:[i("sp\
-an",{className:"ow-rowstate-spin","aria-hidden":"true"}),"Running"]}):i("span",{className:"ow-rowstate ow-rowstate--queu\
-ed",children:"Queued"}):f("span",{className:"ow-rowstate ow-rowstate--done",children:[i(qn,{className:"ow-icon","aria-hi\
-dden":"true"}),"Done"]})}function kr({tool:e,purpose:t,busy:o,onAnswer:r,where:a}){return f("div",{className:"ow-permiss\
-ion",children:[f("div",{className:"ow-permission-body",children:[f("div",{className:"ow-permission-head",children:[i(lr,
-{className:"ow-icon","aria-hidden":"true"}),i("span",{className:"ow-permission-title",children:"Waiting for your permiss\
-ion"})]}),f("p",{className:"ow-permission-what",children:[a&&f("span",{className:"ow-truncate",children:[a," "]}),a?"wan\
-ts to run ":"Wants to run ",i("code",{children:e})]}),t&&i("p",{className:"ow-permission-why",children:t})]}),f("div",{className:"\
-ow-permission-actions",children:[i(L,{onClick:()=>r(!0),disabled:o,children:"Approve"}),i(L,{onClick:()=>r(!1),disabled:o,
-children:"Reject"})]})]})}function Ee({children:e}){return i("div",{className:"ow-expand",children:i("div",{className:"o\
-w-expand-inner",children:e})})}function Rt({label:e,children:t}){let o=er();return f("div",{className:"ow-detail",role:"\
-group","aria-labelledby":o,children:[i("div",{className:"ow-detail-label",id:o,children:e}),t]})}var Nt=3;function Dn(e){
-let t=e.provenance.trim().toLowerCase();return e.references.filter(o=>o.label.trim().toLowerCase()!==t)}function _r({item:e,
-busy:t,onDecide:o}){let[r,a]=S(!1),c=e.permissionInput||"",d=c.trim().split(/\s+/)[0]||e.permissionTool||"";return f("di\
-v",{className:"ow-formal-approval",role:"presentation",onClick:w=>w.stopPropagation(),onKeyDown:w=>w.stopPropagation(),children:[
-i("div",{className:"ow-formal-badge",children:"Waiting for approval"}),f("div",{className:"ow-formal-detail",children:[e.
-permissionPurpose&&f("div",{className:"ow-formal-kv",children:[i("span",{className:"ow-formal-key",children:"__tool_use_\
-purpose"}),i("span",{className:"ow-formal-val",children:e.permissionPurpose})]}),f("div",{className:"ow-formal-kv",children:[
-i("span",{className:"ow-formal-key",children:e.permissionTool||"tool"}),i("span",{className:"ow-formal-val ow-formal-mon\
-o",children:c||"(no input details)"})]})]}),f("div",{className:"ow-formal-actions",children:[i(L,{disabled:t,onClick:()=>o(
-"approved"),children:"Allow once"}),f("span",{className:"ow-trust-wrap",children:[f(L,{disabled:t,onClick:()=>a(w=>!w),"\
-aria-expanded":r,children:["Trust ",i(pe,{className:"ow-icon ow-trust-caret","data-open":r?"true":void 0,"aria-hidden":"\
-true"})]}),r&&f("span",{className:"ow-trust-menu",role:"menu",children:[c&&i("button",{type:"button",role:"menuitem",className:"\
-ow-trust-item",disabled:t,onClick:()=>{a(!1),o("trust_command")},children:"Trust this exact command"}),d&&f("button",{type:"\
+card_where_it_stands:"Where it stands",card_suggested_next:"Suggested next",card_turn:"turn {{turn}}"};function H(e,t={}){
+return mr[e].replace(/\{\{(\w+)\}\}/g,(o,s)=>t[s]??"")}var br={"needs-you":"Needs you",running:"Running",done:"Done"},_t={
+all:"All","needs-you":"Needs you","follow-up":"Follow up",running:"Running",done:"Done"},xr={session:sr,approval:Dn,agent:er,
+workflow:cr,monitor:On,artifact:or,change:rr,issue:dr};function Se({children:e,onActivate:t,...o}){return r("div",{...o,
+role:"button",tabIndex:0,onClick:t,onKeyDown:s=>{(s.key==="Enter"||s.key===" ")&&(s.preventDefault(),t())},children:e})}
+function Mn({label:e,count:t,subtitle:o}){return w("div",{className:"ow-section-header",children:[w("div",{className:"ow\
+-section-heading",children:[r("h2",{className:"ow-section-title",children:e}),r("span",{className:"ow-section-count",children:t})]}),
+o&&r("p",{className:"ow-section-subtitle",children:o})]})}function qn(e){let t=we(e);return t==="unblock"?w("span",{className:"\
+ow-rowstate ow-rowstate--need",children:[r("span",{className:"ow-rowstate-dot","aria-hidden":"true"}),"Needs you"]}):t===
+"followup"?w("span",{className:"ow-rowstate ow-rowstate--follow",children:[r("span",{className:"ow-rowstate-dot","aria-h\
+idden":"true"}),"Follow up"]}):t==="running"?e.moving?w("span",{className:"ow-rowstate ow-rowstate--run",children:[r("sp\
+an",{className:"ow-rowstate-spin","aria-hidden":"true"}),"Running"]}):r("span",{className:"ow-rowstate ow-rowstate--queu\
+ed",children:"Queued"}):w("span",{className:"ow-rowstate ow-rowstate--done",children:[r(zn,{className:"ow-icon","aria-hi\
+dden":"true"}),"Done"]})}function vr({tool:e,purpose:t,busy:o,onAnswer:s,where:a}){return w("div",{className:"ow-permiss\
+ion",children:[w("div",{className:"ow-permission-body",children:[w("div",{className:"ow-permission-head",children:[r(ir,
+{className:"ow-icon","aria-hidden":"true"}),r("span",{className:"ow-permission-title",children:"Waiting for your permiss\
+ion"})]}),w("p",{className:"ow-permission-what",children:[a&&w("span",{className:"ow-truncate",children:[a," "]}),a?"wan\
+ts to run ":"Wants to run ",r("code",{children:e})]}),t&&r("p",{className:"ow-permission-why",children:t})]}),w("div",{className:"\
+ow-permission-actions",children:[r(G,{onClick:()=>s(!0),disabled:o,children:"Approve"}),r(G,{onClick:()=>s(!1),disabled:o,
+children:"Reject"})]})]})}function _e({children:e}){return r("div",{className:"ow-expand",children:r("div",{className:"o\
+w-expand-inner",children:e})})}function je({label:e,children:t}){let o=Xo();return w("div",{className:"ow-detail",role:"\
+group","aria-labelledby":o,children:[r("div",{className:"ow-detail-label",id:o,children:e}),t]})}function $n(e){let t=e.provenance.trim().toLowerCase();return e.references.filter(o=>o.label.trim().toLowerCase()!==t)}function Fn({
+item:e,busy:t,onDecide:o}){let[s,a]=N(!1),c=e.permissionInput||"",d=c.trim().split(/\s+/)[0]||e.permissionTool||"";return w(
+"div",{className:"ow-formal-approval",role:"presentation",onClick:p=>p.stopPropagation(),onKeyDown:p=>p.stopPropagation(),
+children:[r("div",{className:"ow-formal-badge",children:"Waiting for approval"}),w("div",{className:"ow-formal-detail",children:[
+e.permissionPurpose&&w("div",{className:"ow-formal-kv",children:[r("span",{className:"ow-formal-key",children:"__tool_us\
+e_purpose"}),r("span",{className:"ow-formal-val",children:e.permissionPurpose})]}),w("div",{className:"ow-formal-kv",children:[
+r("span",{className:"ow-formal-key",children:e.permissionTool||"tool"}),r("span",{className:"ow-formal-val ow-formal-mon\
+o",children:c||"(no input details)"})]})]}),w("div",{className:"ow-formal-actions",children:[r(G,{disabled:t,onClick:()=>o(
+"approved"),children:"Allow once"}),w("span",{className:"ow-trust-wrap",children:[w(G,{disabled:t,onClick:()=>a(p=>!p),"\
+aria-expanded":s,children:["Trust ",r(le,{className:"ow-icon ow-trust-caret","data-open":s?"true":void 0,"aria-hidden":"\
+true"})]}),s&&w("span",{className:"ow-trust-menu",role:"menu",children:[c&&r("button",{type:"button",role:"menuitem",className:"\
+ow-trust-item",disabled:t,onClick:()=>{a(!1),o("trust_command")},children:"Trust this exact command"}),d&&w("button",{type:"\
 button",role:"menuitem",className:"ow-trust-item",disabled:t,onClick:()=>{a(!1),o("trust_base")},children:["Trust \u201C",
-d,"\u201D commands"]}),i("button",{type:"button",role:"menuitem",className:"ow-trust-item",disabled:t,onClick:()=>{a(!1),
-o("trust")},children:"Trust everything in this session"})]})]}),i(L,{className:"ow-formal-reject",disabled:t,onClick:()=>o(
-"rejected"),children:"Reject"})]})]})}function Sr({item:e,items:t,onOpen:o}){let a=e.references.find(g=>g.kind==="sessio\
-n")?.label??e.provenance,c=ht(t),d=c.needsYou>0?"needs-you":t.some(g=>g.state==="running")?"running":"done",w=c.needsYou>
-0?null:jn[d],m=[],R=new Set;for(let g of t.flatMap(k=>k.references))(g.kind==="change"||g.kind==="issue")&&g.url&&!R.has(
-g.url)&&(R.add(g.url),m.push(g));let I=t.reduce((g,k)=>Math.max(g,k.queuedBehind??0),0),s=I>0?O("rank_queued_behind",{count:String(
-I)}):null,u=mr(t,Date.now(),!0,m.length>0);return f("div",{className:"ow-goalcard-head",children:[f("div",{className:"ow\
--goalcard-summary",children:[i("span",{className:"ow-goalcard-header ow-goalcard-static",children:i("span",{className:"o\
-w-truncate ow-block-name ow-goalcard-title",children:a})}),i(L,{className:"ow-block-open",onClick:o,"aria-label":`Open ${a}`,
-children:"Open"}),w&&i("span",{className:`ow-goal-flag${c.needsYou>0?" ow-goal-flag-warn":""}`,children:w})]}),(m.length>
-0||u||s)&&f("div",{className:"ow-goal-meta ow-goal-meta-row",children:[u&&i("span",{children:u}),m.map(g=>i(Un,{reference:g,
-onOpenSession:()=>o()},`${g.kind}:${g.id}`)),s&&i("span",{children:s})]})]})}function Un({reference:e,onOpenSession:t}){
-let o=vr[e.kind],r=f(Ue,{children:[i(o,{className:"ow-icon"}),i("span",{className:"ow-truncate",children:e.label})]});return e.
-url?i("a",{className:"ow-reference ow-reference-link",href:e.url,target:"_blank",rel:"noopener noreferrer",onClick:a=>a.
-stopPropagation(),children:r}):e.sessionKey?i(Be,{className:"ow-reference ow-reference-link",onActivate:()=>t(e.sessionKey),
-children:r}):i("span",{className:"ow-reference",children:r})}function Gn({item:e,selected:t,continuation:o,whyRanked:r,onSelect:a,
-onOpenSession:c,onAnswerPermission:d,permissionBusy:w,onRetry:m,retryBusy:R,onStop:I,stopBusy:s,onPickStep:u,onSnooze:g,
-onHandled:k,compact:x,headless:N,onDecideApproval:h}){let[v,$]=S(!1),E=(e.nextSteps??[]).filter(y=>y.what?.trim()),H=(e.
-progress??[]).filter(y=>y.trim()),z=e.initialIntent?.trim(),B=!!u&&E.length>0,W=!!z||H.length>0||B,D=v?E:E.slice(0,Nt),X=yr(
-e),ye=e.lastTouchedTurn?O("card_turn",{turn:String(e.lastTouchedTurn)}):null,$e=!!e.summary&&(E.some(y=>y.what?.trim()===
-e.summary)||t&&z===e.summary?.trim()),Ke=!!e.summary&&(x&&!t?!r:!$e),ke=r||(Ke?e.summary:null);return f(Be,{onActivate:a,
-className:"ow-row","aria-label":e.title,"aria-pressed":t,"aria-expanded":W?t:void 0,"data-selected":t,"data-lane":ne(e),
+d,"\u201D commands"]}),r("button",{type:"button",role:"menuitem",className:"ow-trust-item",disabled:t,onClick:()=>{a(!1),
+o("trust")},children:"Trust everything in this session"})]})]}),r(G,{className:"ow-formal-reject",disabled:t,onClick:()=>o(
+"rejected"),children:"Reject"})]})]})}function yr({reference:e,onOpenSession:t}){let o=xr[e.kind],s=w(Ke,{children:[r(o,{className:"ow-icon"}),r("span",{className:"\
+ow-truncate",children:e.label})]});return e.url?r("a",{className:"ow-reference ow-reference-link",href:e.url,target:"_bl\
+ank",rel:"noopener noreferrer",onClick:a=>a.stopPropagation(),children:s}):e.sessionKey?r(Se,{className:"ow-reference ow\
+-reference-link",onActivate:()=>t(e.sessionKey),children:s}):r("span",{className:"ow-reference",children:s})}function Hn({
+item:e,selected:t,continuation:o,whyRanked:s,onSelect:a,onOpenSession:c,onAnswerPermission:d,permissionBusy:p,onRetry:b,
+retryBusy:A,onStop:y,stopBusy:i,onPickStep:g,onSnooze:h,onHandled:I,compact:v,headless:k,showBadge:f=!0,onDecideApproval:R}){
+let _=(e.nextSteps??[]).filter(C=>C.what?.trim()),$=(e.progress??[]).filter(C=>C.trim()),O=e.initialIntent?.trim(),j=!!O||
+$.length>0,B=qn(e),P=e.lastTouchedTurn?H("card_turn",{turn:String(e.lastTouchedTurn)}):null,M=!!e.summary&&(_.some(C=>C.
+what?.trim()===e.summary)||t&&O===e.summary?.trim()),L=!!e.summary&&(v&&!t?!s:!M),Z=s||(L?e.summary:null);return w(Se,{onActivate:a,
+className:"ow-row","aria-label":e.title,"aria-pressed":t,"aria-expanded":j?t:void 0,"data-selected":t,"data-lane":we(e),
 "data-instructed":e.instructed?"true":void 0,"data-continuation":o?"true":void 0,"data-testid":`work-item-${e.id}`,children:[
-i("div",{className:"ow-row-layout",children:f("div",{className:"ow-row-content",children:[!N&&f(Ue,{children:[f("div",{className:"\
-ow-row-heading",children:[i("span",{className:"ow-row-title",children:e.title}),ye&&i("span",{className:"ow-row-turn",children:ye}),
-i(pe,{className:"ow-icon ow-row-chevron","data-expanded":t?"true":void 0,"aria-hidden":"true"})]}),(X||ke)&&f("div",{className:"\
-ow-row-status",children:[X,ke&&i("span",{className:"ow-row-statustext",children:ke})]})]}),e.duplicateOf&&f(Be,{className:"\
-ow-row-duplicate",onActivate:()=>c(e.duplicateOf.sessionKey),children:[i(It,{className:"ow-icon","aria-hidden":"true"}),
-i("span",{className:"ow-truncate",children:O(`duplicate_${e.duplicateOf.because}`,{title:e.duplicateOf.title})})]}),t&&e.
-relatedSessions&&e.relatedSessions.length>0&&i(Ee,{children:f("div",{className:"ow-related",children:[i("span",{className:"\
-ow-related-label",children:O("related_sessions",{count:String(e.relatedSessions.length)})}),e.relatedSessions.map(y=>f(Be,
-{className:"ow-related-row",onActivate:()=>c(y.sessionKey),children:[i(It,{className:"ow-icon","aria-hidden":"true"}),i(
-"span",{className:"ow-truncate",children:y.title}),i("span",{className:"ow-related-why",children:O(`related_${y.because}`)})]},
-y.sessionKey)),e.relatedMore?i("span",{className:"ow-related-more",children:O("related_more",{count:String(e.relatedMore)})}):
-null]})}),!o&&f("div",{className:"ow-row-meta",children:[i("span",{className:"ow-truncate",children:e.provenance}),Dn(e).
-length>0&&i("span",{"aria-hidden":"true",children:"\xB7"}),i("span",{className:"ow-references",children:Dn(e).slice(0,3).
-map(y=>i(Un,{reference:y,onOpenSession:c},`${y.kind}:${y.id}`))})]})]})}),t&&W&&i(Ee,{children:f("div",{className:"ow-ro\
-w-detail",children:[z&&i(Rt,{label:O("card_asked_for"),children:i("blockquote",{className:"ow-detail-quote",children:z})}),
-H.length>0&&i(Rt,{label:O("card_where_it_stands"),children:i("ul",{className:"ow-detail-facts",children:H.map((y,oe)=>i(
-"li",{children:y},`${oe}:${y}`))})}),B&&f(Rt,{label:O("card_suggested_next"),children:[D.map((y,oe)=>f("button",{type:"b\
-utton",className:"ow-quote-step ow-detail-step",title:y.why??y.what,onClick:q=>{q.stopPropagation(),u?.(y.what)},children:[
-i("span",{className:"ow-detail-step-what",children:y.what}),y.why&&i("span",{className:"ow-detail-step-why",children:y.why}),
-y.expect&&i("span",{className:"ow-detail-step-expect",children:y.expect})]},`${oe}:${y.what}`)),E.length>Nt&&i("button",
-{type:"button",className:"ow-steps-more",onClick:y=>{y.stopPropagation(),$(oe=>!oe)},children:v?"Show fewer":`+${E.length-
-Nt} more`})]})]})}),e.retryPath&&m&&i(Ee,{children:i("div",{className:"ow-retry",children:i(L,{onClick:()=>m(e.retryPath),
-disabled:!!R,children:"Retry"})})}),e.stopPath&&I&&i(Ee,{children:i("div",{className:"ow-retry",children:i(L,{onClick:()=>I(
-e.stopPath),disabled:!!s,children:s?"Stopping\u2026":"Stop this loop"})})}),e.permissionId&&h&&i(Ee,{children:i(_r,{item:e,
-busy:!!w,onDecide:y=>h(e,y)})}),e.state==="needs-you"&&g&&k&&f("div",{className:"ow-row-aside",children:[i("button",{type:"\
-button",className:"ow-aside-btn",onClick:y=>{y.stopPropagation(),g(e.id)},children:"Later"}),i("button",{type:"button",className:"\
-ow-aside-btn",onClick:y=>{y.stopPropagation(),k(e.id,e.updatedAt)},children:"Handled"})]})]})}var Rr=["unblock","followu\
-p","running","done"];function ne(e){return e.state==="done"?"done":e.state==="running"?"running":kn(e)??"unblock"}function Nr({
-items:e,selectedId:t,onSelect:o,onOpenSession:r,onAnswerPermission:a,onDecideApproval:c,permissionBusy:d,onRetry:w,retryBusy:m,
-onPickStep:R,onSnooze:I,onHandled:s,doneTitles:u}){let[g,k]=S(!1),x=new Map;for(let N of e){let h=ne(N),v=x.get(h);v?v.push(
-N):x.set(h,[N])}return f(Ue,{children:[Rr.filter(N=>x.has(N)).map(N=>{let h=x.get(N);return i("div",{className:"ow-lane",
-children:h.map(v=>i(Gn,{item:v,compact:!0,selected:t===v.id,continuation:!0,whyRanked:v.state==="needs-you"&&v.action!==
-"resume"?He(be(v),O):void 0,onSelect:()=>o(v),onOpenSession:r,onAnswerPermission:a,onDecideApproval:c,permissionBusy:d,onRetry:w,
-retryBusy:m,onPickStep:R,onSnooze:I,onHandled:s},v.id))},N)}),!x.has("done")&&u&&u.length>0&&f("div",{className:"ow-lane\
- ow-lane-done",children:[f("button",{type:"button",className:"ow-goals-toggle","aria-expanded":g,onClick:()=>k(N=>!N),children:[
-i(pe,{className:"ow-icon","data-open":g?"true":void 0,"aria-hidden":"true"}),u.length," done"]}),g&&i("ul",{className:"o\
-w-done-list",children:u.map(N=>f("li",{className:"ow-row-goal-done",children:[i(nr,{className:"ow-icon","aria-hidden":"t\
-rue"}),i("span",{className:"ow-truncate",children:N})]},N))})]})]})}function Me({title:e,items:t,selectedId:o,onSelect:r,
-onOpenSession:a,onAnswerPermission:c,onDecideApproval:d,permissionBusy:w,onRetry:m,retryBusy:R,onStop:I,stopBusy:s,onPickStep:u,
-onSnooze:g,onHandled:k,footer:x,collapsed:N,onToggleCollapsed:h,doneBySession:v,subtitle:$,hideHeader:E,emptyLabel:H}){let z=Cn(
-t),B=W=>f("div",{className:`ow-block${W.header==="session"?" ow-goalcard":""}`,"data-grouped":W.header?"true":void 0,"da\
-ta-open":W.header==="session"?"true":void 0,children:[W.header==="session"&&W.sessionKey&&i(Sr,{item:W.items[0],items:W.
-items,onOpen:()=>a(W.sessionKey)}),W.header==="session"?i(Nr,{items:W.items,doneTitles:W.sessionKey?v?.[W.sessionKey]:void 0,
-selectedId:o,onSelect:r,onOpenSession:a,onAnswerPermission:c,onDecideApproval:d,permissionBusy:w,onRetry:m,retryBusy:R,onPickStep:u,
-onSnooze:g,onHandled:k}):W.items.map(D=>i(Gn,{item:D,selected:o===D.id,whyRanked:D.state==="needs-you"&&D.action!=="resu\
-me"?He(be(D),O):void 0,onSelect:()=>r(D),onOpenSession:a,onAnswerPermission:c,onDecideApproval:d,permissionBusy:w,onRetry:m,
-retryBusy:R,onStop:I,stopBusy:s,onPickStep:u,onSnooze:g,onHandled:k},D.id))]},W.key);return f("section",{className:"ow-s\
-ection","aria-label":e,children:[E?null:h?f(Be,{onActivate:h,className:"ow-section-toggle",children:[i(Kn,{label:e,count:t.
-length,subtitle:$}),i(pe,{className:"ow-icon ow-section-chevron","data-open":N?void 0:"true","aria-hidden":"true"})]}):i(
-Kn,{label:e,count:t.length,subtitle:$}),N?null:i("div",{className:"ow-section-list",children:z.length===0?i("p",{className:"\
-ow-section-empty",children:H}):z.map(B)}),x]})}function Ir(e,t,o=[]){let r=hn(t,O),a=o.length?[`Noticed since you last s\
-poke (${o.length}):`,...o.map(w=>`- ${w}`),"Mention these only if they matter to what the user asked."]:[];if(!e)return[
-"Crew Manager context: workspace overview.",...r,...a,"Answer the user about the state of their work. This is a conversa\
-tion, not an action channel."].join(`
-`);let c=e.references.map(w=>`${w.kind}: ${w.label} (${w.id})`).join(`
-`),d=[e.stalledFor?`Silent for ${le(e.stalledFor)} while still marked running.`:void 0,e.loopRepeats?`The same failure h\
+r("div",{className:"ow-row-layout",children:w("div",{className:"ow-row-content",children:[!k&&w(Ke,{children:[w("div",{className:"\
+ow-row-heading",children:[r("span",{className:"ow-row-title",children:e.title}),P&&r("span",{className:"ow-row-turn",children:P}),
+r(le,{className:"ow-icon ow-row-chevron","data-expanded":t?"true":void 0,"aria-hidden":"true"})]}),(f&&B||Z)&&w("div",{className:"\
+ow-row-status",children:[f&&B,Z&&r("span",{className:"ow-row-statustext",children:Z})]})]}),e.duplicateOf&&w(Se,{className:"\
+ow-row-duplicate",onActivate:()=>c(e.duplicateOf.sessionKey),children:[r(St,{className:"ow-icon","aria-hidden":"true"}),
+r("span",{className:"ow-truncate",children:H(`duplicate_${e.duplicateOf.because}`,{title:e.duplicateOf.title})})]}),t&&e.
+relatedSessions&&e.relatedSessions.length>0&&r(_e,{children:w("div",{className:"ow-related",children:[r("span",{className:"\
+ow-related-label",children:H("related_sessions",{count:String(e.relatedSessions.length)})}),e.relatedSessions.map(C=>w(Se,
+{className:"ow-related-row",onActivate:()=>c(C.sessionKey),children:[r(St,{className:"ow-icon","aria-hidden":"true"}),r(
+"span",{className:"ow-truncate",children:C.title}),r("span",{className:"ow-related-why",children:H(`related_${C.because}`)})]},
+C.sessionKey)),e.relatedMore?r("span",{className:"ow-related-more",children:H("related_more",{count:String(e.relatedMore)})}):
+null]})}),!o&&w("div",{className:"ow-row-meta",children:[r("span",{className:"ow-truncate",children:e.provenance}),$n(e).
+length>0&&r("span",{"aria-hidden":"true",children:"\xB7"}),r("span",{className:"ow-references",children:$n(e).slice(0,3).
+map(C=>r(yr,{reference:C,onOpenSession:c},`${C.kind}:${C.id}`))})]})]})}),t&&j&&r(_e,{children:w("div",{className:"ow-ro\
+w-detail",children:[O&&r(je,{label:H("card_asked_for"),children:r("blockquote",{className:"ow-detail-quote",children:O})}),
+$.length>0&&r(je,{label:H("card_where_it_stands"),children:r("ul",{className:"ow-detail-facts",children:$.map((C,Y)=>r("\
+li",{children:C},`${Y}:${C}`))})})]})}),e.retryPath&&b&&r(_e,{children:r("div",{className:"ow-retry",children:r(G,{onClick:()=>b(
+e.retryPath),disabled:!!A,children:"Retry"})})}),e.stopPath&&y&&r(_e,{children:r("div",{className:"ow-retry",children:r(
+G,{onClick:()=>y(e.stopPath),disabled:!!i,children:i?"Stopping\u2026":"Stop this loop"})})}),e.permissionId&&R&&r(_e,{children:r(
+Fn,{item:e,busy:!!p,onDecide:C=>R(e,C)})}),e.state==="needs-you"&&h&&I&&w("div",{className:"ow-row-aside",children:[r("b\
+utton",{type:"button",className:"ow-aside-btn",onClick:C=>{C.stopPropagation(),h(e.id)},children:"Later"}),r("button",{type:"\
+button",className:"ow-aside-btn",onClick:C=>{C.stopPropagation(),I(e.id,e.updatedAt)},children:"Handled"})]})]})}function we(e){
+return e.state==="done"?"done":e.state==="running"?"running":bn(e)??"unblock"}function kr({items:e,selectedId:t,onSelect:o,
+onOpenSession:s,onAnswerPermission:a,onDecideApproval:c,permissionBusy:d,onRetry:p,retryBusy:b,onPickStep:A,onSnooze:y,onHandled:i,
+doneTitles:g}){let[h,I]=N(!1),v=[...e].filter(_=>_.state==="needs-you").sort((_,$)=>($.lastTouchedTurn??0)-(_.lastTouchedTurn??
+0)),k=e.filter(_=>_.state==="running"),f=e.filter(_=>_.state==="done"),R=_=>r(Hn,{item:_,compact:!0,showBadge:!1,selected:t===
+_.id,continuation:!0,whyRanked:_.state==="needs-you"&&_.action!=="resume"?He(ye(_),H):void 0,onSelect:()=>o(_),onOpenSession:s,
+onAnswerPermission:a,onDecideApproval:c,permissionBusy:d,onRetry:p,retryBusy:b,onPickStep:A,onSnooze:y,onHandled:i},_.id);
+return w(Ke,{children:[v.length>0&&r("div",{className:"ow-lane",children:v.map(R)}),k.length>0&&r("div",{className:"ow-l\
+ane",children:k.map(R)}),f.length>0&&r("div",{className:"ow-lane",children:f.map(R)}),f.length===0&&g&&g.length>0&&w("di\
+v",{className:"ow-lane ow-lane-done",children:[w("button",{type:"button",className:"ow-goals-toggle","aria-expanded":h,onClick:()=>I(
+_=>!_),children:[r(le,{className:"ow-icon","data-open":h?"true":void 0,"aria-hidden":"true"}),g.length," done"]}),h&&r("\
+ul",{className:"ow-done-list",children:g.map(_=>w("li",{className:"ow-row-goal-done",children:[r(tr,{className:"ow-icon",
+"aria-hidden":"true"}),r("span",{className:"ow-truncate",children:_})]},_))})]})]})}function _r({items:e,doneTitles:t,selectedId:o,
+onSelect:s,onOpenSession:a,onAnswerPermission:c,onDecideApproval:d,permissionBusy:p,onRetry:b,retryBusy:A,onPickStep:y,onSnooze:i,
+onHandled:g}){let[h,I]=N(!1),v=[...e].sort((m,q)=>(q.lastTouchedTurn??0)-(m.lastTouchedTurn??0)),k=v[0],f=v.slice(1),R=k.
+sessionKey,_=e.find(m=>m.state==="needs-you")??e.find(m=>m.state==="running")??k,$=Rn(e),O=k.references.find(m=>m.kind===
+"session")?.label??k.provenance,j=Rt($.lastActivityAt),B=k.sessionTurns?`${k.sessionTurns} ${k.sessionTurns===1?"turn":"\
+turns"}`:null,P=[j,B].filter(Boolean),M=[],L=new Set;for(let m of k.sessionChanges??[])m.url&&!L.has(m.url)&&(L.add(m.url),
+M.push(m));let Z=(k.progress??[]).map(m=>m.trim()).filter(Boolean).map(m=>/[.!?]$/.test(m)?m:`${m}.`).join(" "),C=Z?Z.split(
+/(?<=[.!?])\s+/).filter(m=>m.trim()).slice(0,2).join(" "):"",Y=(k.nextSteps??[]).filter(m=>m.what?.trim()),Re=k.initialIntent?.
+trim(),fe=(k.progress??[]).filter(m=>m.trim()),Ge=Y.length>1||!!Re||fe.length>0||f.length>0,F=(m,q)=>w("button",{type:"b\
+utton",className:"ow-card-step",title:m.why??m.what,onClick:ee=>{ee.stopPropagation(),y?.(m.what)},children:[r(Zo,{className:"\
+ow-icon ow-card-step-arrow","aria-hidden":"true"}),w("span",{className:"ow-card-step-body",children:[r("span",{className:"\
+ow-card-step-what",children:m.what}),m.why&&r("span",{className:"ow-card-step-why",children:m.why})]})]},q),re=o===k.id;
+return w(Ke,{children:[w(Se,{className:"ow-sessioncard",onActivate:()=>s(k),"aria-label":k.title,"aria-pressed":re,"data\
+-selected":re?"true":void 0,"data-testid":`work-item-${k.id}`,children:[w("div",{className:"ow-card-top",children:[qn(_),
+w("span",{className:"ow-card-meta",children:[r("button",{type:"button",className:"ow-card-name",onClick:m=>{m.stopPropagation(),
+a(R)},children:O}),P.map(m=>r("span",{className:"ow-card-metapart",children:m},m))]})]}),r("h3",{className:"ow-card-titl\
+e",children:k.title}),M.length>0&&r("div",{className:"ow-card-prs",children:M.map(m=>w("a",{className:"ow-card-pr","data\
+-status":m.status||void 0,href:m.url,target:"_blank",rel:"noopener noreferrer",onClick:q=>q.stopPropagation(),children:[
+m.label,m.status&&w("span",{className:"ow-card-pr-status",children:[" \xB7 ",m.status]})]},m.id))}),C&&r("p",{className:"\
+ow-card-summary",children:C}),Y[0]&&F(Y[0],`0:${Y[0].what}`),re&&k.permissionId&&d&&r(_e,{children:r(Fn,{item:k,busy:!!p,
+onDecide:m=>d(k,m)})}),Ge&&w("button",{type:"button",className:"ow-goals-toggle","aria-expanded":h,onClick:m=>{m.stopPropagation(),
+I(q=>!q)},children:[r(le,{className:"ow-icon","data-open":h?"true":void 0,"aria-hidden":"true"}),h?"Show less":"Show mor\
+e"]}),k.state==="needs-you"&&i&&g&&w("div",{className:"ow-row-aside",children:[r("button",{type:"button",className:"ow-a\
+side-btn",onClick:m=>{m.stopPropagation(),i(k.id)},children:"Later"}),r("button",{type:"button",className:"ow-aside-btn",
+onClick:m=>{m.stopPropagation(),g(k.id,k.updatedAt)},children:"Already done"})]})]}),h&&w("div",{className:"ow-card-expa\
+nded",children:[Y.slice(1).map((m,q)=>F(m,`${q+1}:${m.what}`)),Re&&r(je,{label:H("card_asked_for"),children:r("blockquot\
+e",{className:"ow-detail-quote",children:Re})}),fe.length>0&&r(je,{label:H("card_where_it_stands"),children:r("ul",{className:"\
+ow-detail-facts",children:fe.map((m,q)=>r("li",{children:m},`${q}:${m}`))})}),f.length>0&&r(kr,{items:f,doneTitles:t,selectedId:o,
+onSelect:s,onOpenSession:a,onAnswerPermission:c,onDecideApproval:d,permissionBusy:p,onRetry:b,retryBusy:A,onPickStep:y,onSnooze:i,
+onHandled:g})]})]})}function Be({title:e,items:t,selectedId:o,onSelect:s,onOpenSession:a,onAnswerPermission:c,onDecideApproval:d,
+permissionBusy:p,onRetry:b,retryBusy:A,onStop:y,stopBusy:i,onPickStep:g,onSnooze:h,onHandled:I,footer:v,collapsed:k,onToggleCollapsed:f,
+doneBySession:R,subtitle:_,hideHeader:$,emptyLabel:O}){let j=Sn(t).sort((P,M)=>Math.max(...M.items.map(L=>L.updatedAt))-
+Math.max(...P.items.map(L=>L.updatedAt))),B=P=>r("div",{className:`ow-block${P.header==="session"?" ow-goalcard":""}`,"d\
+ata-grouped":P.header?"true":void 0,"data-open":P.header==="session"?"true":void 0,children:P.header==="session"&&P.sessionKey?
+r(_r,{items:P.items,doneTitles:R?.[P.sessionKey],selectedId:o,onSelect:s,onOpenSession:a,onAnswerPermission:c,onDecideApproval:d,
+permissionBusy:p,onRetry:b,retryBusy:A,onPickStep:g,onSnooze:h,onHandled:I}):P.items.map(M=>r(Hn,{item:M,selected:o===M.
+id,whyRanked:M.state==="needs-you"&&M.action!=="resume"?He(ye(M),H):void 0,onSelect:()=>s(M),onOpenSession:a,onAnswerPermission:c,
+onDecideApproval:d,permissionBusy:p,onRetry:b,retryBusy:A,onStop:y,stopBusy:i,onPickStep:g,onSnooze:h,onHandled:I},M.id))},
+P.key);return w("section",{className:"ow-section","aria-label":e,children:[$?null:f?w(Se,{onActivate:f,className:"ow-sec\
+tion-toggle",children:[r(Mn,{label:e,count:t.length,subtitle:_}),r(le,{className:"ow-icon ow-section-chevron","data-open":k?
+void 0:"true","aria-hidden":"true"})]}):r(Mn,{label:e,count:t.length,subtitle:_}),k?null:r("div",{className:"ow-section-\
+list",children:j.length===0?r("p",{className:"ow-section-empty",children:O}):j.map(B)}),v]})}function Sr(e,t,o=[]){let s=pn(
+t,H),a=o.length?[`Noticed since you last spoke (${o.length}):`,...o.map(p=>`- ${p}`),"Mention these only if they matter \
+to what the user asked."]:[];if(!e)return["Crew Manager context: workspace overview.",...s,...a,"Answer the user about t\
+he state of their work. This is a conversation, not an action channel."].join(`
+`);let c=e.references.map(p=>`${p.kind}: ${p.label} (${p.id})`).join(`
+`),d=[e.stalledFor?`Silent for ${ce(e.stalledFor)} while still marked running.`:void 0,e.loopRepeats?`The same failure h\
 as repeated ${e.loopRepeats} times.`:void 0,e.unverified?"Reported finished but never verified.":void 0,e.changeBlocked?
 "A linked change is failing or conflicting.":void 0,e.queuedBehind?`${e.queuedBehind} further prompt(s) are queued in th\
 is same session.`:void 0,e.approvalKind?`An approval is owed (${e.approvalKind}). Only the user can answer it; recommend\
@@ -1325,178 +1390,179 @@ is same session.`:void 0,e.approvalKind?`An approval is owed (${e.approvalKind})
 un failed and the platform cannot re-run it, so there is no retry to recommend.":void 0,e.stopPath?"This is a live monit\
 or loop: it re-prompts its own session unattended. The user has a Stop button on the card. You cannot stop it yourself.":
 void 0,e.sessionKey?void 0:"This is background work with no session to instruct, so any recommendation must be something\
- the user does on the card."].filter(w=>!!w);return[`Crew Manager context: ${e.title}`,...r,`Selected item: ${e.title}`,
-`State: ${jn[e.state]}`,e.issue?"Issue detected.":void 0,`Latest meaningful update: ${e.summary}`,`Provenance: ${e.provenance}`,
+ the user does on the card."].filter(p=>!!p);return[`Crew Manager context: ${e.title}`,...s,`Selected item: ${e.title}`,
+`State: ${br[e.state]}`,e.issue?"Issue detected.":void 0,`Latest meaningful update: ${e.summary}`,`Provenance: ${e.provenance}`,
 e.sessionKey?`Referenced session: ${e.sessionKey}`:"Referenced session: none",...d.length>0?[`Why it is on the board:
 ${d.join(`
 `)}`]:[],`References:
 ${c}`,...a,"This context was selected silently. Answer the user about it; the user sends any instruction to a session th\
-emselves."].filter(w=>!!w).join(`
-`)}var On="crew-manager.panel-widths";function Cr(e,t){let o=e?.first_seen;if(!o)return[];let r=typeof t=="number"?t<=1e10?
-t*1e3:t:t?Date.parse(t):NaN;if(!Number.isFinite(r))return[];let a=[];for(let d of e?.stalls??[]){let w=o[d.key];typeof w==
-"number"&&(w*1e3<=r||a.push(d.reason?`${d.label} went quiet \u2014 ${d.reason}`:`${d.label} went quiet after ${le(d.silent_secs)}`))}
-for(let d of e?.error_loops??[]){let w=o[d.key];typeof w=="number"&&(w*1e3<=r||a.push(`${d.label} repeated the same ${d.
-tool} failure ${d.repeats} times`))}let c=5;return a.length>c?[...a.slice(0,c),`and ${a.length-c} more`]:a}var Y={workMin:300,
-railReserve:370,conductorMin:300,conductorMax:620,mainReserve:676};function je(e,t,o,r,a){let c=Math.min(a,Math.max(o,t-
-r));return Math.max(o,Math.min(c,e))}function Ln({side:e,containerRef:t,min:o,reserve:r,max:a,value:c,onChange:d,label:w}){
-let m=(s,u)=>{let g=u.getBoundingClientRect(),k=e==="start"?s-g.left:g.right-s;return je(k,u.clientWidth,o,r,a)};return i(
-"div",{className:"ow-resizer",role:"separator","aria-orientation":"vertical","aria-label":w,tabIndex:0,onPointerDown:s=>{
-let u=t.current;if(!u)return;s.preventDefault(),document.body.style.cursor="col-resize",document.body.style.userSelect="\
-none";let g=x=>d(m(x.clientX,u)),k=()=>{window.removeEventListener("pointermove",g),window.removeEventListener("pointeru\
-p",k),document.body.style.cursor="",document.body.style.userSelect=""};window.addEventListener("pointermove",g),window.addEventListener(
-"pointerup",k)},onKeyDown:s=>{if(s.key!=="ArrowLeft"&&s.key!=="ArrowRight")return;let u=t.current;if(!u)return;s.preventDefault();
-let g=(s.shiftKey?48:16)*(s.key==="ArrowRight"?1:-1),k=c??(e==="start"?u.clientWidth/2:Math.round(u.clientWidth*.3));d(je(
-k+(e==="start"?g:-g),u.clientWidth,o,r,a))}})}function Ar(){let e=pr(),t=G(e);t.current=e;let o=gr(),r=wr(),[a,c]=S("all"),
-[d,w]=S(()=>{let n=xe(_t,null);return n&&de.includes(n)?n:"work"}),[m,R]=S(()=>{let n=xe(kt,null),l=n&&de.includes(n)?n:
-null,p=xe(_t,null),b=p&&de.includes(p)?p:"work";return l&&l!==b?l:Mn.find(_=>_!==b)??null}),I=K(n=>{R(l=>{let p=l===n?null:
-n;return ce(kt,p),p})},[]),[s,u]=S(null),[g,k]=S("session"),[x,N]=S(null),[h,v]=S(null),[$,E]=S({}),[H,z]=S("unknown"),B=G(
-"unknown"),W=G(new Map),[D,X]=S({}),[ye,$e]=S(null),[Ke,ke]=S({}),[y,oe]=S([]),[q,De]=S(null),[re,At]=S(null),[se,Wt]=S(
-null),[Tt,Pt]=S(()=>xe(yt)),[Et,Yn]=S(()=>xe(Bn)),Ge=G(null),Ye=G(null),[Z,Ve]=S(()=>xe(On,{work:null,conductor:null}));
-U(()=>{ce(On,Z)},[Z]),U(()=>{let n=()=>Ve(l=>{let p=Ye.current?.clientWidth??0,b=Ge.current?.clientWidth??0;return{work:l.
-work==null||p===0?l.work:je(l.work,p,Y.workMin,Y.railReserve,1/0),conductor:l.conductor==null||b===0?l.conductor:je(l.conductor,
-b,Y.conductorMin,Y.mainReserve,Y.conductorMax)}});return n(),window.addEventListener("resize",n),()=>window.removeEventListener(
-"resize",n)},[]);let[Vn,Jn]=S(!0),[Mt,Bt]=S({}),[$t,Je]=S([]),[Qe,Qn]=S([]),[Xn,Xe]=S(!1),_e=K(n=>{if(n===d)return;let l=m===
-n?Mn.find(p=>p!==n)??null:m;ce(_t,n),ce(kt,l),w(n),R(l)},[d,m]),Zn=K((n,l)=>{n.dataTransfer.setData("text/x-crew-panel",
-l),n.dataTransfer.effectAllowed="move";let p=n.currentTarget.querySelector("summary");if(!p)return;let b=p.getBoundingClientRect();
-n.dataTransfer.setDragImage(p,Math.min(Math.max(n.clientX-b.left,0),b.width),Math.min(Math.max(n.clientY-b.top,0),b.height))},
-[]),eo=K(n=>{n.preventDefault(),Xe(!1);let l=n.dataTransfer.getData("text/x-crew-panel");!l||!de.includes(l)||_e(l)},[_e]),
-Ze=F(()=>de.filter(n=>n!==d),[d]),to=m&&m!==d?String(Ze.indexOf(m)):"none",et=n=>{let l=n===d;return{className:"ow-card \
-ow-stack-card",open:l||m===n,draggable:!0,"data-panel":n,"data-primary":l?"true":"false","data-rail-index":l?void 0:Ze.indexOf(
-n),"data-dragover":l&&Xn?"true":void 0,onDragStart:p=>Zn(p,n),onDragOver:l?p=>{p.preventDefault(),Xe(!0)}:void 0,onDragLeave:l?
-()=>Xe(!1):void 0,onDrop:l?eo:void 0}},Kt=G(!0),[no,Dt]=S(!0),[Ot,tt]=S(null),[nt,oo]=S(null),[Se,Lt]=S(!1),[ro,so]=S(!1),
-[zt,V]=S(null),P=G(!0),Re=G(0),ot=G(!1);U(()=>(P.current=!0,()=>{P.current=!1,Re.current+=1}),[]);let C=K(async()=>{let n=++Re.
-current,l=t.current;try{let[p,b,_,j,ze,qe,A,te]=await Promise.all([l.get("/api/chat/slots"),l.get("/api/approvals"),l.get(
+emselves."].filter(p=>!!p).join(`
+`)}var Bn="crew-manager.panel-widths";function Rr(e,t){let o=e?.first_seen;if(!o)return[];let s=typeof t=="number"?t<=1e10?
+t*1e3:t:t?Date.parse(t):NaN;if(!Number.isFinite(s))return[];let a=[];for(let d of e?.stalls??[]){let p=o[d.key];typeof p==
+"number"&&(p*1e3<=s||a.push(d.reason?`${d.label} went quiet \u2014 ${d.reason}`:`${d.label} went quiet after ${ce(d.silent_secs)}`))}
+for(let d of e?.error_loops??[]){let p=o[d.key];typeof p=="number"&&(p*1e3<=s||a.push(`${d.label} repeated the same ${d.
+tool} failure ${d.repeats} times`))}let c=5;return a.length>c?[...a.slice(0,c),`and ${a.length-c} more`]:a}var X={workMin:300,
+railReserve:370,conductorMin:300,conductorMax:620,mainReserve:676};function Ue(e,t,o,s,a){let c=Math.min(a,Math.max(o,t-
+s));return Math.max(o,Math.min(c,e))}function Kn({side:e,containerRef:t,min:o,reserve:s,max:a,value:c,onChange:d,label:p}){
+let b=(i,g)=>{let h=g.getBoundingClientRect(),I=e==="start"?i-h.left:h.right-i;return Ue(I,g.clientWidth,o,s,a)};return r(
+"div",{className:"ow-resizer",role:"separator","aria-orientation":"vertical","aria-label":p,tabIndex:0,onPointerDown:i=>{
+let g=t.current;if(!g)return;i.preventDefault(),document.body.style.cursor="col-resize",document.body.style.userSelect="\
+none";let h=v=>d(b(v.clientX,g)),I=()=>{window.removeEventListener("pointermove",h),window.removeEventListener("pointeru\
+p",I),document.body.style.cursor="",document.body.style.userSelect=""};window.addEventListener("pointermove",h),window.addEventListener(
+"pointerup",I)},onKeyDown:i=>{if(i.key!=="ArrowLeft"&&i.key!=="ArrowRight")return;let g=t.current;if(!g)return;i.preventDefault();
+let h=(i.shiftKey?48:16)*(i.key==="ArrowRight"?1:-1),I=c??(e==="start"?g.clientWidth/2:Math.round(g.clientWidth*.3));d(Ue(
+I+(e==="start"?h:-h),g.clientWidth,o,s,a))}})}function Nr(){let e=ur(),t=Q(e);t.current=e;let o=pr(),s=gr(),[a,c]=N("all"),
+[d,p]=N(()=>{let n=ke(kt,null);return n&&ue.includes(n)?n:"work"}),[b,A]=N(()=>{let n=ke(yt,null),l=n&&ue.includes(n)?n:
+null,u=ke(kt,null),x=u&&ue.includes(u)?u:"work";return l&&l!==x?l:Tn.find(S=>S!==x)??null}),y=z(n=>{A(l=>{let u=l===n?null:
+n;return pe(yt,u),u})},[]),[i,g]=N(null),[h,I]=N("session"),[v,k]=N(null),[f,R]=N(null),[_,$]=N({}),[O,j]=N("unknown"),B=Q(
+"unknown"),P=Q(new Map),[M,L]=N({}),[Z,C]=N(null),[Y,Re]=N({}),[fe,Ge]=N([]),[F,re]=N(null),[m,q]=N(null),[ee,Nt]=N(null),
+[It,Ct]=N(()=>ke(vt)),[At,jn]=N(()=>ke(Pn)),Ye=Q(null),Ve=Q(null),[se,Je]=N(()=>ke(Bn,{work:null,conductor:null}));J(()=>{
+pe(Bn,se)},[se]),J(()=>{let n=()=>Je(l=>{let u=Ve.current?.clientWidth??0,x=Ye.current?.clientWidth??0;return{work:l.work==
+null||u===0?l.work:Ue(l.work,u,X.workMin,X.railReserve,1/0),conductor:l.conductor==null||x===0?l.conductor:Ue(l.conductor,
+x,X.conductorMin,X.mainReserve,X.conductorMax)}});return n(),window.addEventListener("resize",n),()=>window.removeEventListener(
+"resize",n)},[]);let[Un,Gn]=N(!0),[Wt,Tt]=N({}),[Pt,Qe]=N([]),[Xe,Yn]=N([]),[Vn,Ze]=N(!1),Ne=z(n=>{if(n===d)return;let l=b===
+n?Tn.find(u=>u!==n)??null:b;pe(kt,n),pe(yt,l),p(n),A(l)},[d,b]),Jn=z((n,l)=>{n.dataTransfer.setData("text/x-crew-panel",
+l),n.dataTransfer.effectAllowed="move";let u=n.currentTarget.querySelector("summary");if(!u)return;let x=u.getBoundingClientRect();
+n.dataTransfer.setDragImage(u,Math.min(Math.max(n.clientX-x.left,0),x.width),Math.min(Math.max(n.clientY-x.top,0),x.height))},
+[]),Qn=z(n=>{n.preventDefault(),Ze(!1);let l=n.dataTransfer.getData("text/x-crew-panel");!l||!ue.includes(l)||Ne(l)},[Ne]),
+et=U(()=>ue.filter(n=>n!==d),[d]),Xn=b&&b!==d?String(et.indexOf(b)):"none",tt=n=>{let l=n===d;return{className:"ow-card \
+ow-stack-card",open:l||b===n,draggable:!0,"data-panel":n,"data-primary":l?"true":"false","data-rail-index":l?void 0:et.indexOf(
+n),"data-dragover":l&&Vn?"true":void 0,onDragStart:u=>Jn(u,n),onDragOver:l?u=>{u.preventDefault(),Ze(!0)}:void 0,onDragLeave:l?
+()=>Ze(!1):void 0,onDrop:l?Qn:void 0}},Et=Q(!0),[Zn,Mt]=N(!0),[$t,nt]=N(null),[ot,eo]=N(null),[Ie,Bt]=N(!1),[to,no]=N(!1),
+[Kt,te]=N(null),K=Q(!0),Ce=Q(0),rt=Q(!1);J(()=>(K.current=!0,()=>{K.current=!1,Ce.current+=1}),[]);let W=z(async()=>{let n=++Ce.
+current,l=t.current;try{let[u,x,S,V,Oe,Le,T,ie]=await Promise.all([l.get("/api/chat/slots"),l.get("/api/approvals"),l.get(
 "/api/spawn"),l.get("/api/workflows/runs"),l.get("/api/crons"),l.get("/api/artifacts"),l.get("/api/autonudge").catch(()=>({
-loops:[]})),l.get("/api/crons/history?limit=200").catch(()=>({runs:[]}))]);if(!P.current||n!==Re.current)return;v({slots:Array.
-isArray(p)?p:[],approvals:Array.isArray(b)?b:[],agents:Array.isArray(_.agents)?_.agents:[],workflows:Array.isArray(j.runs)?
-j.runs:[],crons:Array.isArray(ze.jobs)?ze.jobs:[],artifacts:Array.isArray(qe.artifacts)?qe.artifacts:[],loops:Array.isArray(
-A?.loops)?A.loops:[]}),Qn(Array.isArray(te?.runs)?te.runs:[]),tt(null),oo(Date.now())}catch(p){P.current&&n===Re.current&&
-tt(p instanceof Error?p:new Error("Unable to load Crew Manager sources"))}finally{P.current&&n===Re.current&&Dt(!1)}},[]);
-U(()=>{C();let n=window.setInterval(()=>{C()},br);return()=>window.clearInterval(n)},[C]);let ao=()=>{Dt(!0),tt(null),C()},
-rt=K(()=>{Se||(Lt(!0),C().finally(()=>{P.current&&Lt(!1)}))},[C,Se]);U(()=>{if(!h||B.current==="unsupported"||B.current===
-"disabled")return;let n=An(h.slots,ue,Date.now(),p=>W.current.get(p.key)===bt(p));if(n.length===0)return;let l=!1;return(async()=>{
-let{summaries:p,support:b}=await Wn(n,_=>t.current.get(_));if(!(l||!P.current)&&(B.current=b,z(b),b==="available")){for(let _ of n)
-p[_.key]&&W.current.set(_.key,bt(_));E(_=>({..._,...p}))}})(),()=>{l=!0}},[h]),U(()=>{if(!h||!Kt.current)return;let n=!1;
-return(async()=>{try{let l=await t.current.get("/api/apps/crew-manager/stalls");if(n||!P.current)return;let p={};for(let _ of l?.
-stalls??[])_?.key&&(p[_.key]=_);X(p);let b={};for(let _ of l?.error_loops??[])_?.key&&(b[_.key]=_);Bt(b),$e(l??null);try{
-let _=await t.current.get("/api/apps/crew-manager/assigned");!n&&P.current&&Je(_?.available&&Array.isArray(_.rows)?_.rows:
-[])}catch{P.current&&Je([])}}catch{Kt.current=!1,P.current&&(X({}),Bt({}),$e(null),Je([]))}})(),()=>{n=!0}},[h]);let qt=F(
-()=>yn(In({...h??{slots:[],approvals:[],agents:[],workflows:[],crons:[],artifacts:[],loops:[]},assigned:$t},O,$,D,Mt),Ke),
-[h,$,D,Mt,Ke,$t]),Oe=F(()=>Sn(qt,Tt,Et),[qt,Tt,Et]),T=F(()=>Oe.items.filter(n=>Rn(n)),[Oe]),Ne=F(()=>ft(T),[T]),Ft=F(()=>T.
-filter(n=>n.state==="needs-you"&&ne(n)==="followup").length,[T]),io={...Ne,"needs-you":Math.max(0,(Ne["needs-you"]??0)-Ft),
-"follow-up":Ft},st=F(()=>{let n={};for(let l of T){if(l.state!=="done"||!l.sessionKey)continue;let p=n[l.sessionKey];p?p.
-push(l.title):n[l.sessionKey]=[l.title]}return n},[T]),ee=F(()=>T.find(n=>n.id===s)??null,[T,s]),Ie=F(()=>a==="all"?T:a===
-"follow-up"?T.filter(n=>n.state==="needs-you"&&ne(n)==="followup"):a==="needs-you"?T.filter(n=>n.state==="needs-you"&&ne(
-n)!=="followup"):T.filter(n=>n.state===a),[a,T]);U(()=>r(Ne["needs-you"]),[Ne,r]),U(()=>{s&&!T.some(n=>n.id===s)&&u(null)},
-[T,s]);let ae=h?.slots.find(n=>n.key===ue),lo=!!(ae||ro),Ht=G(!1);U(()=>{let n=ae;if(!n||Ht.current||n.agent)return;Ht.current=
-!0;let l=t.current;l.get("/api/apps/crew-manager/conductor-agent").then(p=>p?.available&&p.agent?p.agent:null).catch(()=>null).
-then(p=>{if(!(!p||!P.current))return l.post(`/api/chat/slots/${encodeURIComponent(ue)}/agent`,{agent:p}).then(()=>{C()})}).
-catch(()=>{})},[ae,C]),U(()=>{!h||ae||ot.current||(ot.current=!0,e.get("/api/apps/crew-manager/conductor-agent").then(n=>n?.
-available&&n.agent?n.agent:null).catch(()=>null).then(n=>e.post("/api/chat/slots",{name:ue,title:"Conductor",...n?{agent:n}:
-{}})).then(()=>{P.current&&(so(!0),C())}).catch(n=>{P.current&&(ot.current=!1,V(n instanceof Error?`Conductor session co\
-uld not be created: ${n.message}`:"Conductor session could not be created"))}))},[e,ae,C,h]);let jt=F(()=>dn(h?.approvals??
-[],y,n=>T.find(l=>l.sessionKey===n)?.title??h?.slots?.find(l=>l.key===n)?.title??n),[T,h,y]),ge=ee&&!ee.permissionId?ee:
-null,at=F(()=>{let n=(h?.loops??[]).filter(p=>p&&p.active!==!1&&p.slot_key);if(n.length===0)return[];let l=new Map;for(let p of T)
-for(let b of p.references)b.kind!=="session"||!b.id||b.label&&!l.has(b.id)&&l.set(b.id,b.label);return n.map(p=>{let b=Number(
-p.cycle_count)||0,_=Number(p.max_cycles)||0;return{key:p.slot_key,title:l.get(p.slot_key)??p.slot_key,progress:_>0?`${b}\
-/${_}`:`${b} ${b===1?"cycle":"cycles"}`,remaining:_>0?Math.max(0,_-b):null,instruction:(p.message??"").replace(/\s+/g," ").
-trim(),lastFire:M(p.last_fire_ts)}})},[h,T]),we=F(()=>{let n=new Date;n.setHours(0,0,0,0);let l=n.getTime(),p=l+864e5,b=h?.
-crons??[],_=new Map;for(let A of Qe){let te=M(A.started_at);if(!A.job_id||te<l||te>=p)continue;let J=_.get(A.job_id)??{count:0,
-failed:0,last:0};J.count+=1,A.status&&A.status!=="success"&&(J.failed+=1),J.last=Math.max(J.last,te),_.set(A.job_id,J)}let j=b.
-map(A=>{let te=_.get(A.id),J=M(A.next_run_ts),fo=J>=l&&J<p;return{job:A,ran:te,next:J,dueToday:fo}}).filter(A=>A.ran||A.
-dueToday||A.job.is_running),ze=j.filter(A=>A.ran&&A.ran.failed===0).length,qe=j.filter(A=>A.ran&&A.ran.failed>0).length;
-return{rows:j,done:ze,failed:qe,total:j.length,historyKnown:Qe.length>0}},[h,Qe]),fe=K(async(n,l)=>{if(!q){De(n),V(null);
-try{await t.current.post(`/api/approvals/${encodeURIComponent(n)}/${l?"approve":"reject"}`,{}),C()}catch(p){V(p instanceof
-Error?`Could not answer that request: ${p.message}`:"Could not answer that request"),C()}finally{P.current&&De(null)}}},
-[C,q]),Ce=K(async(n,l)=>{if(!(q||!n.permissionId||!n.sessionKey)){De(n.permissionId),V(null);try{await t.current.post(`/\
-api/chat/slots/${encodeURIComponent(n.sessionKey)}/approve`,{action:l,request_id:n.permissionId}),C()}catch(p){V(p instanceof
-Error?`Could not answer that request: ${p.message}`:"Could not answer that request"),C()}finally{P.current&&De(null)}}},
-[C,q]),Ut=K(n=>{Pt(l=>{let p=Object.fromEntries(Object.entries(l).filter(([,b])=>b>Date.now()));return p[n]=Date.now()+_n,
-ce(yt,p),p}),u(null)},[]),Gt=K((n,l)=>{Yn(p=>{let b={...p,[n]:l};return ce(Bn,b),b}),u(null)},[]),co=K(()=>{Pt({}),ce(yt,
-{})},[]),uo=K(()=>{Jn(n=>!n)},[]),Ae=K(async n=>{if(!re){At(n),V(null);try{await t.current.post(n,{}),C()}catch(l){V(l instanceof
-Error?`Could not re-run it: ${l.message}`:"Could not re-run it"),C()}finally{P.current&&At(null)}}},[C,re]),We=K(async n=>{
-if(!se){Wt(n),V(null);try{await t.current.del(n),N("Stopped the monitor loop. Re-arming it is done from the session itse\
-lf."),C()}catch(l){let p=l instanceof Error?l.message:"";/404|not found/i.test(p)?N("That loop had already stopped."):V(
-p?`Could not stop it: ${p}`:"Could not stop it"),C()}finally{P.current&&Wt(null)}}},[C,se]),he=K(async n=>{let l=ee&&!ee.
-permissionId?ee:null;if(g==="session"&&l?.sessionKey){let p=l.sessionKey;if(await t.current.post("/api/chat",{message:n,
-slot:p}).catch(b=>{if(!(b instanceof SyntaxError))throw b}),!P.current)return;ke(b=>({...b,[l.id]:Date.now()})),oe(b=>b.
-includes(p)?b:[...b,p]),N(`Sent new instructions to ${l.title}`),u(null),C();return}await t.current.post(`/api/chat/slot\
-s/${encodeURIComponent(ue)}/context`,{content:Ir(ee,T,Cr(ye,ae?.last_ts)),source:"crew-manager",ephemeral:!0}).catch(()=>{}),
-await t.current.post("/api/chat",{message:n,slot:ue}).catch(p=>{if(!(p instanceof SyntaxError))throw p})},[ee,T,C,g,ye,ae]),
-Le={"needs-you":Ie.filter(n=>n.state==="needs-you"),running:Ie.filter(n=>n.state==="running"),done:Ie.filter(n=>n.state===
-"done")},po=Le["needs-you"].filter(n=>ne(n)!=="followup"),go=Le["needs-you"].filter(n=>ne(n)==="followup"),Te=n=>o(`/cha\
-t?sid=${encodeURIComponent(n)}`),Pe=n=>{u(l=>l===n.id?null:n.id),N(null),k("session")},wo=ge?f("div",{className:"ow-quot\
-e ow-quote-docked",children:[f("div",{className:"ow-quote-body",children:[ge.sessionKey?i("button",{type:"button",className:"\
-ow-scope-toggle","aria-pressed":g==="conductor","aria-label":g==="session"?"Sending to this session. Activate to send to\
- the Conductor instead.":"Sending to the Conductor. Activate to send to this session instead.",onClick:()=>k(n=>n==="ses\
-sion"?"conductor":"session"),children:g==="session"?"Instructing":"To Conductor"}):i("span",{className:"ow-eyebrow",children:"\
-Quoted"}),i("span",{className:"ow-quote-title",title:ge.title,children:ge.title})]}),i(L,{className:"ow-quote-clear","ar\
-ia-label":"Remove the quoted work item",onClick:()=>{u(null),N(null)},children:"Clear"})]}):null;return f("div",{className:"\
-ow-root","data-crew-manager-shell":"quiet-split",children:[i("style",{children:Tn}),i("div",{className:"ow-titlebar",children:i(
-hr,{title:f("span",{className:"ow-title-line",children:["Crew Manager",i("span",{className:"ow-beta","aria-label":"Beta \
-preview",children:"Beta"})]}),subtitle:"See what needs your input, what is still running, and what finished recently."})}),
-i("div",{className:"ow-body",children:f("div",{className:"ow-layout",ref:Ge,style:Z.conductor!=null?{"--ow-conductor-w":`${Z.
-conductor}px`}:void 0,children:[f("div",{className:"ow-main","data-open-row":to,ref:Ye,style:Z.work!=null?{"--ow-work-w":`${Z.
-work}px`}:void 0,children:[f("details",{...et("work"),"aria-label":"Work",children:[f("summary",{onClick:n=>{n.preventDefault(),
-d!=="work"&&I("work")},children:[f("span",{className:"ow-stack-title",children:[i(pe,{className:"ow-icon ow-stack-chevro\
-n"}),i(It,{className:"ow-icon"}),Hn.work,i(Q,{variant:"muted",children:Ne.all})]}),i("span",{className:"ow-stack-actions",
-children:d==="work"?i(vt,{lastUpdated:nt,refreshing:Se,onRefresh:rt}):i(xt,{id:"work",onPromote:_e})})]}),f("div",{className:"\
-ow-worksplit",children:[i("nav",{className:"ow-railnav",role:"group","aria-label":"Filter by state",children:Object.keys(
-St).map(n=>f(L,{onClick:()=>c(n),"aria-pressed":a===n,"data-selected":a===n,className:"ow-filter ow-railitem",children:[
-i("span",{className:"ow-railitem-label",children:St[n]}),i("span",{className:"ow-count",children:io[n]})]},n))}),i("main",
-{className:"ow-work",children:i("div",{className:"ow-work-inner",children:no?i(Pn,{rows:7}):Ot&&!h?i(En,{icon:i(zn,{className:"\
-ow-icon"}),title:"Crew Manager could not load the work view",subtitle:Ot.message,action:i(L,{onClick:ao,children:"Try ag\
-ain"})}):Ie.length===0?i(En,{icon:i(dr,{className:"ow-icon"}),title:"No matching work",subtitle:"Change the filter to se\
-e sessions in another state."}):a==="all"?f(Ue,{children:[i(Me,{title:"Needs you",subtitle:"Waiting on a decision or rep\
-ly from you",items:po,doneBySession:st,selectedId:s,onSelect:Pe,onSnooze:Ut,onHandled:Gt,footer:Oe.snoozedCount>0?f("but\
-ton",{type:"button",className:"ow-aside-note",onClick:co,children:[Oe.snoozedCount," set aside for later \u2014 bring back"]}):
-void 0,onOpenSession:Te,onAnswerPermission:(n,l)=>{fe(n,l)},onDecideApproval:(n,l)=>{Ce(n,l)},permissionBusy:q!==null,onRetry:n=>{
-Ae(n)},retryBusy:re!==null,onStop:n=>{We(n)},stopBusy:se!==null,onPickStep:n=>{he(n)},emptyLabel:"Nothing needs your inp\
-ut right now."}),i(Me,{title:"Follow up",subtitle:"Pick back up where a session left off",items:go,doneBySession:st,selectedId:s,
-onSelect:Pe,onSnooze:Ut,onHandled:Gt,onOpenSession:Te,onAnswerPermission:(n,l)=>{fe(n,l)},onDecideApproval:(n,l)=>{Ce(n,
-l)},permissionBusy:q!==null,onRetry:n=>{Ae(n)},retryBusy:re!==null,onStop:n=>{We(n)},stopBusy:se!==null,onPickStep:n=>{he(
-n)},emptyLabel:"Nothing to follow up on."}),i(Me,{title:"In progress",subtitle:"Being worked on right now",items:Le.running,
-doneBySession:st,selectedId:s,onSelect:Pe,onOpenSession:Te,onAnswerPermission:(n,l)=>{fe(n,l)},onDecideApproval:(n,l)=>{
-Ce(n,l)},permissionBusy:q!==null,onRetry:n=>{Ae(n)},retryBusy:re!==null,onStop:n=>{We(n)},stopBusy:se!==null,onPickStep:n=>{
-he(n)},emptyLabel:"Nothing is in progress right now."}),i(Me,{title:"Done recently",subtitle:"Finished in the last few d\
-ays",items:Le.done,selectedId:s,onSelect:Pe,collapsed:Vn,onToggleCollapsed:uo,onOpenSession:Te,onAnswerPermission:(n,l)=>{
-fe(n,l)},onDecideApproval:(n,l)=>{Ce(n,l)},permissionBusy:q!==null,onRetry:n=>{Ae(n)},retryBusy:re!==null,onStop:n=>{We(
-n)},stopBusy:se!==null,onPickStep:n=>{he(n)},emptyLabel:"No recent completed work."})]}):i(Me,{title:St[a],items:Ie,selectedId:s,
-onSelect:Pe,onOpenSession:Te,onAnswerPermission:(n,l)=>{fe(n,l)},onDecideApproval:(n,l)=>{Ce(n,l)},permissionBusy:q!==null,
-onRetry:n=>{Ae(n)},retryBusy:re!==null,onStop:n=>{We(n)},stopBusy:se!==null,onPickStep:n=>{he(n)},emptyLabel:"No matchin\
-g work"})})})]})]}),de.includes("loops")&&f("details",{...et("loops"),children:[f("summary",{onClick:n=>{n.preventDefault(),
-d!=="loops"&&I("loops")},children:[f("span",{className:"ow-stack-title",children:[i(pe,{className:"ow-icon ow-stack-chev\
-ron"}),i(Fn,{className:"ow-icon"}),"Loops"]}),f("span",{className:"ow-stack-actions",children:[i(Q,{variant:"muted",children:at.
-length}),d==="loops"?i(vt,{lastUpdated:nt,refreshing:Se,onRefresh:rt}):i(xt,{id:"loops",onPromote:_e})]})]}),i("p",{className:"\
-ow-stack-sub",children:"Sessions repeating a goal until it is done"}),i("div",{className:"ow-stack-body",children:at.length===
-0?i("p",{className:"ow-stack-empty",children:"No loop is running right now."}):at.map(n=>{let l=Ct(n.lastFire),p=[l&&`la\
-st tick ${l}`,n.remaining!==null&&`${n.remaining} remaining`].filter(Boolean).join(" \xB7 ");return f("div",{className:"\
-ow-mini",children:[i("span",{className:"ow-mini-rail",style:{background:"var(--warn)"}}),f("div",{children:[f("div",{className:"\
-ow-mini-title",children:[n.title,i("span",{className:"ow-mini-chip",children:n.progress})]}),n.instruction&&i("div",{className:"\
-ow-mini-desc",title:n.instruction,children:n.instruction}),p&&i("div",{className:"ow-mini-when",children:p})]}),i(Q,{variant:"\
-ok",children:"Active"})]},n.key)})})]}),de.includes("schedule")&&f("details",{...et("schedule"),children:[f("summary",{onClick:n=>{
-n.preventDefault(),d!=="schedule"&&I("schedule")},children:[f("span",{className:"ow-stack-title",children:[i(pe,{className:"\
-ow-icon ow-stack-chevron"}),i(or,{className:"ow-icon"}),"Scheduled tasks"]}),f("span",{className:"ow-stack-actions",children:[
-f(Q,{variant:we.failed>0?"err":"muted",children:[we.done,"/",we.total," today"]}),d==="schedule"?i(vt,{lastUpdated:nt,refreshing:Se,
-onRefresh:rt}):i(xt,{id:"schedule",onPromote:_e})]})]}),i("p",{className:"ow-stack-sub",children:we.historyKnown?"Today'\
-s runs only \u2014 jobs with nothing scheduled today are hidden":"Run history is unavailable, so completed counts may be\
- low"}),i("div",{className:"ow-stack-body",children:we.rows.length===0?i("p",{className:"ow-stack-empty",children:"Nothi\
-ng is scheduled for today."}):we.rows.map(({job:n,ran:l,next:p,dueToday:b})=>{let _=!!(l&&l.failed>0),j=[l&&`ran today ${$n(
-l.last)}${l.count>1?` (${l.count}x)`:""}`,b&&p?`next ${$n(p)}`:null].filter(Boolean).join(" \xB7 ");return f("div",{className:"\
-ow-mini",children:[i("span",{className:"ow-mini-rail",style:{background:_?"var(--danger)":n.enabled===!1?"var(--muted)":
-"var(--warn)"}}),f("div",{children:[i("div",{className:"ow-mini-title",children:n.name}),n.schedule&&f("div",{className:"\
-ow-mini-desc",children:[n.schedule,n.cron_expr&&i("span",{className:"ow-mini-chip",children:n.cron_expr})]}),j&&i("div",
-{className:"ow-mini-when",children:j})]}),n.is_running?i(Q,{variant:"aim",children:"Running"}):_?i(Q,{variant:"err",children:"\
-Failed"}):n.enabled===!1?i(Q,{variant:"muted",children:"Paused"}):l?i(Q,{variant:"ok",children:"Success"}):i(Q,{variant:"\
-warn",children:"Pending"})]},n.id)})})]}),Ze.length>0&&i(Ln,{side:"start",containerRef:Ye,min:Y.workMin,reserve:Y.railReserve,
-max:1/0,value:Z.work,onChange:n=>Ve(l=>({...l,work:n})),label:"Resize the work column"})]}),i(Ln,{side:"end",containerRef:Ge,
-min:Y.conductorMin,reserve:Y.mainReserve,max:Y.conductorMax,value:Z.conductor,onChange:n=>Ve(l=>({...l,conductor:n})),label:"\
-Resize the Conductor panel"}),f("aside",{className:"ow-conductor","aria-label":"Conductor",children:[i("div",{className:"\
-ow-conductor-header",children:f("div",{className:"ow-conductor-title",children:[i("h2",{children:"Conductor"}),!ge&&i("s\
-pan",{className:"ow-conductor-sub",children:"select work, or ask across all"})]})}),i("div",{className:"ow-chat",children:lo?
-f("div",{className:"ow-chat-panel",children:[jt.length>0&&i("div",{className:"ow-permissions",role:"alert",children:jt.map(
-n=>i(kr,{tool:n.tool,purpose:n.purpose,where:n.sessionLabel,busy:q!==null,onAnswer:l=>{fe(n.id,l)}},n.id))}),x&&f("div",
-{className:"ow-conductor-receipt",role:"status",children:[i(qn,{className:"ow-icon"}),x]}),zt&&i("div",{className:"ow-ch\
-at-error",role:"alert",children:zt}),i("div",{className:"ow-embed",children:i(fr,{slotKey:ue,frameless:!0,startAtBottom:!0,
-slotControls:!0,placeholder:ge?.sessionKey&&g==="session"?"New instructions for this session\u2026":"Ask across your wor\
-k\u2026",onSend:he,aboveComposer:wo})})]}):i("div",{className:"ow-chat-loading",children:i(Pn,{rows:4})})})]})]})})]})}export{Ar as default,Cr as noticedSinceLastTurn};
+loops:[]})),l.get("/api/crons/history?limit=200").catch(()=>({runs:[]}))]);if(!K.current||n!==Ce.current)return;R({slots:Array.
+isArray(u)?u:[],approvals:Array.isArray(x)?x:[],agents:Array.isArray(S.agents)?S.agents:[],workflows:Array.isArray(V.runs)?
+V.runs:[],crons:Array.isArray(Oe.jobs)?Oe.jobs:[],artifacts:Array.isArray(Le.artifacts)?Le.artifacts:[],loops:Array.isArray(
+T?.loops)?T.loops:[]}),Yn(Array.isArray(ie?.runs)?ie.runs:[]),nt(null),eo(Date.now())}catch(u){K.current&&n===Ce.current&&
+nt(u instanceof Error?u:new Error("Unable to load Crew Manager sources"))}finally{K.current&&n===Ce.current&&Mt(!1)}},[]);
+J(()=>{W();let n=window.setInterval(()=>{W()},hr);return()=>window.clearInterval(n)},[W]);let oo=()=>{Mt(!0),nt(null),W()},
+st=z(()=>{Ie||(Bt(!0),W().finally(()=>{K.current&&Bt(!1)}))},[W,Ie]);J(()=>{if(!f||B.current==="unsupported"||B.current===
+"disabled")return;let n=Nn(f.slots,ge,Date.now(),u=>P.current.get(u.key)===mt(u));if(n.length===0)return;let l=!1;return(async()=>{
+let{summaries:u,support:x}=await In(n,S=>t.current.get(S));if(!(l||!K.current)&&(B.current=x,j(x),x==="available")){for(let S of n)
+u[S.key]&&P.current.set(S.key,mt(S));$(S=>({...S,...u}))}})(),()=>{l=!0}},[f]),J(()=>{if(!f||!Et.current)return;let n=!1;
+return(async()=>{try{let l=await t.current.get("/api/apps/crew-manager/stalls");if(n||!K.current)return;let u={};for(let S of l?.
+stalls??[])S?.key&&(u[S.key]=S);L(u);let x={};for(let S of l?.error_loops??[])S?.key&&(x[S.key]=S);Tt(x),C(l??null);try{
+let S=await t.current.get("/api/apps/crew-manager/assigned");!n&&K.current&&Qe(S?.available&&Array.isArray(S.rows)?S.rows:
+[])}catch{K.current&&Qe([])}}catch{Et.current=!1,K.current&&(L({}),Tt({}),C(null),Qe([]))}})(),()=>{n=!0}},[f]);let Dt=U(
+()=>mn(_n({...f??{slots:[],approvals:[],agents:[],workflows:[],crons:[],artifacts:[],loops:[]},assigned:Pt},H,_,M,Wt),Y),
+[f,_,M,Wt,Y,Pt]),De=U(()=>vn(Dt,It,At),[Dt,It,At]),E=U(()=>De.items.filter(n=>yn(n)),[De]),Ae=U(()=>ft(E),[E]),zt=U(()=>E.
+filter(n=>n.state==="needs-you"&&we(n)==="followup").length,[E]),ro={...Ae,"needs-you":Math.max(0,(Ae["needs-you"]??0)-zt),
+"follow-up":zt},at=U(()=>{let n={};for(let l of E){if(l.state!=="done"||!l.sessionKey)continue;let u=n[l.sessionKey];u?u.
+push(l.title):n[l.sessionKey]=[l.title]}return n},[E]),ae=U(()=>E.find(n=>n.id===i)??null,[E,i]),We=U(()=>a==="all"?E:a===
+"follow-up"?E.filter(n=>n.state==="needs-you"&&we(n)==="followup"):a==="needs-you"?E.filter(n=>n.state==="needs-you"&&we(
+n)!=="followup"):E.filter(n=>n.state===a),[a,E]);J(()=>s(Ae["needs-you"]),[Ae,s]),J(()=>{i&&!E.some(n=>n.id===i)&&g(null)},
+[E,i]);let de=f?.slots.find(n=>n.key===ge),so=!!(de||to),Ot=Q(!1);J(()=>{let n=de;if(!n||Ot.current||n.agent)return;Ot.current=
+!0;let l=t.current;l.get("/api/apps/crew-manager/conductor-agent").then(u=>u?.available&&u.agent?u.agent:null).catch(()=>null).
+then(u=>{if(!(!u||!K.current))return l.post(`/api/chat/slots/${encodeURIComponent(ge)}/agent`,{agent:u}).then(()=>{W()})}).
+catch(()=>{})},[de,W]),J(()=>{!f||de||rt.current||(rt.current=!0,e.get("/api/apps/crew-manager/conductor-agent").then(n=>n?.
+available&&n.agent?n.agent:null).catch(()=>null).then(n=>e.post("/api/chat/slots",{name:ge,title:"Conductor",...n?{agent:n}:
+{}})).then(()=>{K.current&&(no(!0),W())}).catch(n=>{K.current&&(rt.current=!1,te(n instanceof Error?`Conductor session c\
+ould not be created: ${n.message}`:"Conductor session could not be created"))}))},[e,de,W,f]);let Lt=U(()=>on(f?.approvals??
+[],fe,n=>E.find(l=>l.sessionKey===n)?.title??f?.slots?.find(l=>l.key===n)?.title??n),[E,f,fe]),he=ae&&!ae.permissionId?ae:
+null,it=U(()=>{let n=(f?.loops??[]).filter(u=>u&&u.active!==!1&&u.slot_key);if(n.length===0)return[];let l=new Map;for(let u of E)
+for(let x of u.references)x.kind!=="session"||!x.id||x.label&&!l.has(x.id)&&l.set(x.id,x.label);return n.map(u=>{let x=Number(
+u.cycle_count)||0,S=Number(u.max_cycles)||0;return{key:u.slot_key,title:l.get(u.slot_key)??u.slot_key,progress:S>0?`${x}\
+/${S}`:`${x} ${x===1?"cycle":"cycles"}`,remaining:S>0?Math.max(0,S-x):null,instruction:(u.message??"").replace(/\s+/g," ").
+trim(),lastFire:D(u.last_fire_ts)}})},[f,E]),me=U(()=>{let n=new Date;n.setHours(0,0,0,0);let l=n.getTime(),u=l+864e5,x=f?.
+crons??[],S=new Map;for(let T of Xe){let ie=D(T.started_at);if(!T.job_id||ie<l||ie>=u)continue;let ne=S.get(T.job_id)??{
+count:0,failed:0,last:0};ne.count+=1,T.status&&T.status!=="success"&&(ne.failed+=1),ne.last=Math.max(ne.last,ie),S.set(T.
+job_id,ne)}let V=x.map(T=>{let ie=S.get(T.id),ne=D(T.next_run_ts),po=ne>=l&&ne<u;return{job:T,ran:ie,next:ne,dueToday:po}}).
+filter(T=>T.ran||T.dueToday||T.job.is_running),Oe=V.filter(T=>T.ran&&T.ran.failed===0).length,Le=V.filter(T=>T.ran&&T.ran.
+failed>0).length;return{rows:V,done:Oe,failed:Le,total:V.length,historyKnown:Xe.length>0}},[f,Xe]),be=z(async(n,l)=>{if(!F){
+re(n),te(null);try{await t.current.post(`/api/approvals/${encodeURIComponent(n)}/${l?"approve":"reject"}`,{}),W()}catch(u){
+te(u instanceof Error?`Could not answer that request: ${u.message}`:"Could not answer that request"),W()}finally{K.current&&
+re(null)}}},[W,F]),Te=z(async(n,l)=>{if(!(F||!n.permissionId||!n.sessionKey)){re(n.permissionId),te(null);try{await t.current.
+post(`/api/chat/slots/${encodeURIComponent(n.sessionKey)}/approve`,{action:l,request_id:n.permissionId}),W()}catch(u){te(
+u instanceof Error?`Could not answer that request: ${u.message}`:"Could not answer that request"),W()}finally{K.current&&
+re(null)}}},[W,F]),qt=z(n=>{Ct(l=>{let u=Object.fromEntries(Object.entries(l).filter(([,x])=>x>Date.now()));return u[n]=
+Date.now()+xn,pe(vt,u),u}),g(null)},[]),Ft=z((n,l)=>{jn(u=>{let x={...u,[n]:l};return pe(Pn,x),x}),g(null)},[]),ao=z(()=>{
+Ct({}),pe(vt,{})},[]),io=z(()=>{Gn(n=>!n)},[]),Pe=z(async n=>{if(!m){q(n),te(null);try{await t.current.post(n,{}),W()}catch(l){
+te(l instanceof Error?`Could not re-run it: ${l.message}`:"Could not re-run it"),W()}finally{K.current&&q(null)}}},[W,m]),
+Ee=z(async n=>{if(!ee){Nt(n),te(null);try{await t.current.del(n),k("Stopped the monitor loop. Re-arming it is done from \
+the session itself."),W()}catch(l){let u=l instanceof Error?l.message:"";/404|not found/i.test(u)?k("That loop had alrea\
+dy stopped."):te(u?`Could not stop it: ${u}`:"Could not stop it"),W()}finally{K.current&&Nt(null)}}},[W,ee]),xe=z(async n=>{
+let l=ae&&!ae.permissionId?ae:null;if(h==="session"&&l?.sessionKey){let u=l.sessionKey;if(await t.current.post("/api/cha\
+t",{message:n,slot:u}).catch(x=>{if(!(x instanceof SyntaxError))throw x}),!K.current)return;Re(x=>({...x,[l.id]:Date.now()})),
+Ge(x=>x.includes(u)?x:[...x,u]),k(`Sent new instructions to ${l.title}`),g(null),W();return}await t.current.post(`/api/c\
+hat/slots/${encodeURIComponent(ge)}/context`,{content:Sr(ae,E,Rr(Z,de?.last_ts)),source:"crew-manager",ephemeral:!0}).catch(
+()=>{}),await t.current.post("/api/chat",{message:n,slot:ge}).catch(u=>{if(!(u instanceof SyntaxError))throw u})},[ae,E,
+W,h,Z,de]),ze={"needs-you":We.filter(n=>n.state==="needs-you"),running:We.filter(n=>n.state==="running"),done:We.filter(
+n=>n.state==="done")},lo=ze["needs-you"].filter(n=>we(n)!=="followup"),co=ze["needs-you"].filter(n=>we(n)==="followup"),
+Me=n=>o(`/chat?sid=${encodeURIComponent(n)}`),$e=n=>{g(l=>l===n.id?null:n.id),k(null),I("session")},uo=he?w("div",{className:"\
+ow-quote ow-quote-docked",children:[w("div",{className:"ow-quote-body",children:[he.sessionKey?r("button",{type:"button",
+className:"ow-scope-toggle","aria-pressed":h==="conductor","aria-label":h==="session"?"Sending to this session. Activate\
+ to send to the Conductor instead.":"Sending to the Conductor. Activate to send to this session instead.",onClick:()=>I(
+n=>n==="session"?"conductor":"session"),children:h==="session"?"Instructing":"To Conductor"}):r("span",{className:"ow-ey\
+ebrow",children:"Quoted"}),r("span",{className:"ow-quote-title",title:he.title,children:he.title})]}),r(G,{className:"ow\
+-quote-clear","aria-label":"Remove the quoted work item",onClick:()=>{g(null),k(null)},children:"Clear"})]}):null;return w(
+"div",{className:"ow-root","data-crew-manager-shell":"quiet-split",children:[r("style",{children:Cn}),r("div",{className:"\
+ow-titlebar",children:r(fr,{title:w("span",{className:"ow-title-line",children:["Crew Manager",r("span",{className:"ow-b\
+eta","aria-label":"Beta preview",children:"Beta"})]}),subtitle:"See what needs your input, what is still running, and wh\
+at finished recently."})}),r("div",{className:"ow-body",children:w("div",{className:"ow-layout",ref:Ye,style:se.conductor!=
+null?{"--ow-conductor-w":`${se.conductor}px`}:void 0,children:[w("div",{className:"ow-main","data-open-row":Xn,ref:Ve,style:se.
+work!=null?{"--ow-work-w":`${se.work}px`}:void 0,children:[w("details",{...tt("work"),"aria-label":"Work",children:[w("s\
+ummary",{onClick:n=>{n.preventDefault(),d!=="work"&&y("work")},children:[w("span",{className:"ow-stack-title",children:[
+r(le,{className:"ow-icon ow-stack-chevron"}),r(St,{className:"ow-icon"}),Ln.work,r(oe,{variant:"muted",children:Ae.all})]}),
+r("span",{className:"ow-stack-actions",children:d==="work"?r(xt,{lastUpdated:ot,refreshing:Ie,onRefresh:st}):r(bt,{id:"w\
+ork",onPromote:Ne})})]}),w("div",{className:"ow-worksplit",children:[r("nav",{className:"ow-railnav",role:"group","aria-\
+label":"Filter by state",children:Object.keys(_t).map(n=>w(G,{onClick:()=>c(n),"aria-pressed":a===n,"data-selected":a===
+n,className:"ow-filter ow-railitem",children:[r("span",{className:"ow-railitem-label",children:_t[n]}),r("span",{className:"\
+ow-count",children:ro[n]})]},n))}),r("main",{className:"ow-work",children:r("div",{className:"ow-work-inner",children:Zn?
+r(An,{rows:7}):$t&&!f?r(Wn,{icon:r(Dn,{className:"ow-icon"}),title:"Crew Manager could not load the work view",subtitle:$t.
+message,action:r(G,{onClick:oo,children:"Try again"})}):We.length===0?r(Wn,{icon:r(lr,{className:"ow-icon"}),title:"No m\
+atching work",subtitle:"Change the filter to see sessions in another state."}):a==="all"?w(Ke,{children:[r(Be,{title:"Ne\
+eds you",subtitle:"Waiting on a decision or reply from you",items:lo,doneBySession:at,selectedId:i,onSelect:$e,onSnooze:qt,
+onHandled:Ft,footer:De.snoozedCount>0?w("button",{type:"button",className:"ow-aside-note",onClick:ao,children:[De.snoozedCount,
+" set aside for later \u2014 bring back"]}):void 0,onOpenSession:Me,onAnswerPermission:(n,l)=>{be(n,l)},onDecideApproval:(n,l)=>{
+Te(n,l)},permissionBusy:F!==null,onRetry:n=>{Pe(n)},retryBusy:m!==null,onStop:n=>{Ee(n)},stopBusy:ee!==null,onPickStep:n=>{
+xe(n)},emptyLabel:"Nothing needs your input right now."}),r(Be,{title:"Follow up",subtitle:"Pick back up where a session\
+ left off",items:co,doneBySession:at,selectedId:i,onSelect:$e,onSnooze:qt,onHandled:Ft,onOpenSession:Me,onAnswerPermission:(n,l)=>{
+be(n,l)},onDecideApproval:(n,l)=>{Te(n,l)},permissionBusy:F!==null,onRetry:n=>{Pe(n)},retryBusy:m!==null,onStop:n=>{Ee(n)},
+stopBusy:ee!==null,onPickStep:n=>{xe(n)},emptyLabel:"Nothing to follow up on."}),r(Be,{title:"In progress",subtitle:"Bei\
+ng worked on right now",items:ze.running,doneBySession:at,selectedId:i,onSelect:$e,onOpenSession:Me,onAnswerPermission:(n,l)=>{
+be(n,l)},onDecideApproval:(n,l)=>{Te(n,l)},permissionBusy:F!==null,onRetry:n=>{Pe(n)},retryBusy:m!==null,onStop:n=>{Ee(n)},
+stopBusy:ee!==null,onPickStep:n=>{xe(n)},emptyLabel:"Nothing is in progress right now."}),r(Be,{title:"Done recently",subtitle:"\
+Finished in the last few days",items:ze.done,selectedId:i,onSelect:$e,collapsed:Un,onToggleCollapsed:io,onOpenSession:Me,
+onAnswerPermission:(n,l)=>{be(n,l)},onDecideApproval:(n,l)=>{Te(n,l)},permissionBusy:F!==null,onRetry:n=>{Pe(n)},retryBusy:m!==
+null,onStop:n=>{Ee(n)},stopBusy:ee!==null,onPickStep:n=>{xe(n)},emptyLabel:"No recent completed work."})]}):r(Be,{title:_t[a],
+items:We,selectedId:i,onSelect:$e,onOpenSession:Me,onAnswerPermission:(n,l)=>{be(n,l)},onDecideApproval:(n,l)=>{Te(n,l)},
+permissionBusy:F!==null,onRetry:n=>{Pe(n)},retryBusy:m!==null,onStop:n=>{Ee(n)},stopBusy:ee!==null,onPickStep:n=>{xe(n)},
+emptyLabel:"No matching work"})})})]})]}),ue.includes("loops")&&w("details",{...tt("loops"),children:[w("summary",{onClick:n=>{
+n.preventDefault(),d!=="loops"&&y("loops")},children:[w("span",{className:"ow-stack-title",children:[r(le,{className:"ow\
+-icon ow-stack-chevron"}),r(On,{className:"ow-icon"}),"Loops"]}),w("span",{className:"ow-stack-actions",children:[r(oe,{
+variant:"muted",children:it.length}),d==="loops"?r(xt,{lastUpdated:ot,refreshing:Ie,onRefresh:st}):r(bt,{id:"loops",onPromote:Ne})]})]}),
+r("p",{className:"ow-stack-sub",children:"Sessions repeating a goal until it is done"}),r("div",{className:"ow-stack-bod\
+y",children:it.length===0?r("p",{className:"ow-stack-empty",children:"No loop is running right now."}):it.map(n=>{let l=Rt(
+n.lastFire),u=[l&&`last tick ${l}`,n.remaining!==null&&`${n.remaining} remaining`].filter(Boolean).join(" \xB7 ");return w(
+"div",{className:"ow-mini",children:[r("span",{className:"ow-mini-rail",style:{background:"var(--warn)"}}),w("div",{children:[
+w("div",{className:"ow-mini-title",children:[n.title,r("span",{className:"ow-mini-chip",children:n.progress})]}),n.instruction&&
+r("div",{className:"ow-mini-desc",title:n.instruction,children:n.instruction}),u&&r("div",{className:"ow-mini-when",children:u})]}),
+r(oe,{variant:"ok",children:"Active"})]},n.key)})})]}),ue.includes("schedule")&&w("details",{...tt("schedule"),children:[
+w("summary",{onClick:n=>{n.preventDefault(),d!=="schedule"&&y("schedule")},children:[w("span",{className:"ow-stack-title",
+children:[r(le,{className:"ow-icon ow-stack-chevron"}),r(nr,{className:"ow-icon"}),"Scheduled tasks"]}),w("span",{className:"\
+ow-stack-actions",children:[w(oe,{variant:me.failed>0?"err":"muted",children:[me.done,"/",me.total," today"]}),d==="sche\
+dule"?r(xt,{lastUpdated:ot,refreshing:Ie,onRefresh:st}):r(bt,{id:"schedule",onPromote:Ne})]})]}),r("p",{className:"ow-st\
+ack-sub",children:me.historyKnown?"Today's runs only \u2014 jobs with nothing scheduled today are hidden":"Run history i\
+s unavailable, so completed counts may be low"}),r("div",{className:"ow-stack-body",children:me.rows.length===0?r("p",{className:"\
+ow-stack-empty",children:"Nothing is scheduled for today."}):me.rows.map(({job:n,ran:l,next:u,dueToday:x})=>{let S=!!(l&&
+l.failed>0),V=[l&&`ran today ${En(l.last)}${l.count>1?` (${l.count}x)`:""}`,x&&u?`next ${En(u)}`:null].filter(Boolean).join(
+" \xB7 ");return w("div",{className:"ow-mini",children:[r("span",{className:"ow-mini-rail",style:{background:S?"var(--da\
+nger)":n.enabled===!1?"var(--muted)":"var(--warn)"}}),w("div",{children:[r("div",{className:"ow-mini-title",children:n.name}),
+n.schedule&&w("div",{className:"ow-mini-desc",children:[n.schedule,n.cron_expr&&r("span",{className:"ow-mini-chip",children:n.
+cron_expr})]}),V&&r("div",{className:"ow-mini-when",children:V})]}),n.is_running?r(oe,{variant:"aim",children:"Running"}):
+S?r(oe,{variant:"err",children:"Failed"}):n.enabled===!1?r(oe,{variant:"muted",children:"Paused"}):l?r(oe,{variant:"ok",
+children:"Success"}):r(oe,{variant:"warn",children:"Pending"})]},n.id)})})]}),et.length>0&&r(Kn,{side:"start",containerRef:Ve,
+min:X.workMin,reserve:X.railReserve,max:1/0,value:se.work,onChange:n=>Je(l=>({...l,work:n})),label:"Resize the work colu\
+mn"})]}),r(Kn,{side:"end",containerRef:Ye,min:X.conductorMin,reserve:X.mainReserve,max:X.conductorMax,value:se.conductor,
+onChange:n=>Je(l=>({...l,conductor:n})),label:"Resize the Conductor panel"}),w("aside",{className:"ow-conductor","aria-l\
+abel":"Conductor",children:[r("div",{className:"ow-conductor-header",children:w("div",{className:"ow-conductor-title",children:[
+r("h2",{children:"Conductor"}),!he&&r("span",{className:"ow-conductor-sub",children:"select work, or ask across all"})]})}),
+r("div",{className:"ow-chat",children:so?w("div",{className:"ow-chat-panel",children:[Lt.length>0&&r("div",{className:"o\
+w-permissions",role:"alert",children:Lt.map(n=>r(vr,{tool:n.tool,purpose:n.purpose,where:n.sessionLabel,busy:F!==null,onAnswer:l=>{
+be(n.id,l)}},n.id))}),v&&w("div",{className:"ow-conductor-receipt",role:"status",children:[r(zn,{className:"ow-icon"}),v]}),
+Kt&&r("div",{className:"ow-chat-error",role:"alert",children:Kt}),r("div",{className:"ow-embed",children:r(wr,{slotKey:ge,
+frameless:!0,startAtBottom:!0,slotControls:!0,placeholder:he?.sessionKey&&h==="session"?"New instructions for this sessi\
+on\u2026":"Ask across your work\u2026",onSend:xe,aboveComposer:uo})})]}):r("div",{className:"ow-chat-loading",children:r(
+An,{rows:4})})})]})]})})]})}export{Nr as default,Rr as noticedSinceLastTurn};

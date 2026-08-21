@@ -182,6 +182,11 @@ export interface WorkItem {
   stale?: boolean
   /** Highest user turn this intent covers; orders goals within one session. */
   lastTouchedTurn?: number
+  /** Total user turns in this item's session, for the card's "N turns" meta. */
+  sessionTurns?: number
+  /** Every PR/issue the SESSION touches — for the card's PR line, which is not
+   *  limited to the changes this one intent's text happens to name. */
+  sessionChanges?: WorkReference[]
   /**
    * True only when work is genuinely in motion right now. A `running` item that
    * is NOT moving is open work nobody is currently on.
@@ -784,15 +789,15 @@ function mergeWorkflow(item: WorkItem, workflow: WorkflowRow, copy: WorkCopy): v
 /**
  * Map one summarized intent onto a work item.
  *
- * The platform already decided the hard part, and Crew Manager trusts it rather
- * than second-guessing: `needs-you` means the goal was completed but never
- * verified ("merged but never run"). An intent that is merely still in progress
- * is open work, NOT a demand — a real session carries up to 8 of them at once,
- * so promoting them would bury the genuine handoffs.
+ * The platform already decided the hard part, and Crew Manager trusts its
+ * per-intent `state` rather than second-guessing: `needs-you` means the goal was
+ * completed but never verified ("merged but never run"). An intent that is merely
+ * still in progress is open work, NOT a demand. A pending tool approval is NOT
+ * folded in here — it is surfaced precisely, on the one item it belongs to, by
+ * mergeApproval; stamping every intent needs-you off the session-level flag
+ * inflated the count (one approval read as "3 need your input").
  */
-function intentState(intent: SummaryIntent, slot: ChatSlot): WorkState | null {
-  if (slot.pending_approval) return 'needs-you'
-
+function intentState(intent: SummaryIntent): WorkState | null {
   switch (intent.state) {
     case 'needs-you':
       return 'needs-you'
@@ -920,67 +925,13 @@ function intentWorkItems(
   const leadingIntent = leadingIntentOf(intents)
   const executing = Boolean(slot.running || slot.subagents_running || slot.orchestrating)
 
-  /*
-   * An IDLE session's unfinished goals belong to the user, not to the agent.
-   *
-   * While a session executes, responsibility sits with the agent and its goals
-   * are Running. The moment it stops, nobody is on them — and the only actor who
-   * can move them is the user, which is exactly what Needs you means. They used
-   * to sit in Running wearing an invented "Idle" badge: a label for a bucket
-   * they should never have been in.
-   *
-   * They collapse into ONE card because a stopped session poses ONE decision —
-   * resume it, or let it go. Three cards would be three demands for one
-   * decision, which is the flooding this deliberately avoids.
-   */
-  const unattended = executing
-    ? []
-    : intents.filter(intent => intent.state === 'in-progress')
-
-  /*
-   * ONE ITEM PER UNFINISHED GOAL.
-   *
-   * These used to collapse into a single Resume card, on the theory that a
-   * stopped session poses one decision. It does not: two goals in one session
-   * are routinely unrelated work ("redesign the cards" and "fix the bugs"), so a
-   * shared row claimed they were parts of one thing, gave them one badge, and let
-   * a blocker belonging to one of them label both. Each goal is its own item —
-   * separately selectable, separately quotable, separately explained.
-   */
-  unattended.forEach(intent => {
-    const index = intents.indexOf(intent)
-    const nextSteps = (intent.next_steps ?? []).filter(step => step.what?.trim())
-    built.push({
-      id: `unattended:${slot.key}:${index}`,
-      title: deriveWorkTitle(intent.title, slot.title || copy('untitled_work')),
-      summary: nextSteps[0]?.what?.trim() || copy('no_next_step'),
-      state: 'needs-you',
-      issue: sessionIssue(slot),
-      updatedAt: epoch(slot.last_ts || slot.last_activity_ts || slot.created),
-      sessionKey: slot.key,
-      provenance: provenanceLabel(slot, copy),
-      queuedBehind: slot.queue_depth || undefined,
-      changeBlocked: sessionIssue(slot) || undefined,
-      // Still the nobody_on_it signal — this goal is idle and only the user can
-      // move it — but now scoped to THIS goal rather than the whole session.
-      unattendedGoals: 1,
-      action: 'resume',
-      references: [
-        { kind: 'session', id: slot.key, label: slot.title || copy('untitled_work'), sessionKey: slot.key },
-        ...intentSourceRefs(sources, intent),
-      ],
-      nextSteps,
-      initialIntent: intent.initial_intent?.trim() || undefined,
-      progress: (intent.progress ?? []).filter(entry => entry.trim()),
-      stale: Boolean(summary.stale),
-      lastTouchedTurn: intent.last_touched_turn ?? 0,
-    })
-  })
-
   intents.forEach((intent, index) => {
-    // Already its own item above.
-    if (unattended.includes(intent)) return
-    const state = intentState(intent, slot)
+    // An IDLE session's unfinished goal belongs to the user: nobody is on it and
+    // only they can carry it forward. That is the Follow-up case ("pick back up
+    // where a session left off") — mark it so it ranks as `nobody_on_it` and
+    // routes to the Follow-up lane, rather than sitting in In-progress as Queued.
+    const idleUnfinished = !executing && intent.state === 'in-progress'
+    const state = idleUnfinished ? 'needs-you' : intentState(intent)
     // A summary Crew Manager cannot place honestly is skipped, and the
     // session-level fallback describes the session instead.
     if (!state) return
@@ -1001,7 +952,10 @@ function intentWorkItems(
       queuedBehind: slot.queue_depth || undefined,
       changeBlocked: sessionIssue(slot) || undefined,
       unverified: intent.verified === false || undefined,
-      action: 'open',
+      // The idle-left-off marker: raises `nobody_on_it` so the item ranks into
+      // the Follow-up lane, and offers Resume rather than a bare Open.
+      unattendedGoals: idleUnfinished ? 1 : undefined,
+      action: idleUnfinished ? 'resume' : 'open',
       references: [
         { kind: 'session', id: slot.key, label: slot.title || copy('untitled_work'), sessionKey: slot.key },
         ...intentSourceRefs(sources, intent),
@@ -1011,6 +965,8 @@ function intentWorkItems(
       progress: (intent.progress ?? []).filter(entry => entry.trim()),
       stale: Boolean(summary.stale),
       lastTouchedTurn: intent.last_touched_turn ?? 0,
+      sessionTurns: summary.user_turns || undefined,
+      sessionChanges: sources.map(entry => entry.ref),
       moving: intentMoving(intent, slot, leadingIntent) || undefined,
     })
   })
