@@ -59,9 +59,9 @@ describe('Crew Manager Conductor boundaries', () => {
     renderApp()
 
     const row = await screen.findByTestId('work-item-session:session-2')
-    fireEvent.click(row)
+    fireEvent.click(within(row).getByRole('button', { name: 'Reference in chat' }))
 
-    expect(row).toHaveAttribute('aria-pressed', 'true')
+    expect(row).toHaveAttribute('data-selected', 'true')
     // The quote bar sits above the embedded chat as a reference to the target.
     const quote = document.querySelector('.ow-chat-panel .ow-quote')
     expect(quote).not.toBeNull()
@@ -102,7 +102,8 @@ describe('Crew Manager Conductor boundaries', () => {
 
   it('sends the instruction to the quoted item\'s session, then acknowledges it', async () => {
     renderApp()
-    fireEvent.click(await screen.findByTestId('work-item-session:session-2'))
+    const row = await screen.findByTestId('work-item-session:session-2')
+    fireEvent.click(within(row).getByRole('button', { name: 'Reference in chat' }))
 
     const input = await screen.findByLabelText('Message to Conductor')
     fireEvent.change(input, { target: { value: 'Apply the approved copy.' } })
@@ -126,7 +127,8 @@ describe('Crew Manager Conductor boundaries', () => {
 
   it('routes to the Conductor, not the session, when the scope toggle is switched', async () => {
     renderApp()
-    fireEvent.click(await screen.findByTestId('work-item-session:session-2'))
+    const row = await screen.findByTestId('work-item-session:session-2')
+    fireEvent.click(within(row).getByRole('button', { name: 'Reference in chat' }))
 
     // The quote bar names the session by default; switching the toggle changes
     // the destination explicitly before anything is typed.
@@ -156,7 +158,7 @@ describe('Crew Manager Conductor boundaries', () => {
     // session-1 is blocked on an approval. Selecting it must expand the SAME
     // approval UI as the session view — details, Allow once, Trust, Reject —
     // INSIDE the card, never a stripped-down pair, never a quote for a yes/no.
-    fireEvent.click(await screen.findByTestId('work-item-session:session-1'))
+    fireEvent.click(within(await screen.findByTestId('work-item-session:session-1')).getByRole('button', { name: 'Reference in chat' }))
 
     await waitFor(() => {
       expect(document.querySelector('.ow-sessioncard .ow-formal-approval')).not.toBeNull()
@@ -179,13 +181,13 @@ describe('Crew Manager Conductor boundaries', () => {
     })
     // The click must not bubble into the row's select toggle: the card stays
     // selected and expanded instead of collapsing out from under the decision.
-    expect(screen.getByTestId('work-item-session:session-1')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('work-item-session:session-1')).toHaveAttribute('data-selected', 'true')
     expect(document.querySelector('.ow-sessioncard .ow-formal-approval')).not.toBeNull()
   })
 
   it('the approval is asked in one place: the expanded card', async () => {
     renderApp()
-    fireEvent.click(await screen.findByTestId('work-item-session:session-1'))
+    fireEvent.click(within(await screen.findByTestId('work-item-session:session-1')).getByRole('button', { name: 'Reference in chat' }))
 
     await waitFor(() => {
       expect(document.querySelectorAll('.ow-formal-approval')).toHaveLength(1)
@@ -990,9 +992,8 @@ describe('a work card accounts for the goal it stands for', () => {
     // The first suggested step leads the card, clickable.
     expect(within(card).getByText(STEP.what)).toBeInTheDocument()
 
-    // The card is a labelled, focusable, selectable control.
-    expect(card).toHaveAttribute('aria-label', 'Restyle the work cards')
-    expect(card).toHaveAttribute('tabindex', '0')
+    // Referencing is a deliberate hover action, not a whole-card click.
+    expect(within(card).getByRole('button', { name: 'Reference in chat' })).toBeInTheDocument()
   })
 
   it('opens nothing when the first card has no account to give', async () => {
