@@ -61,7 +61,6 @@ import {
   type WorkCopyKey,
   type InstructedItems,
   type PendingPermission,
-  type ResponseVerb,
   type WorkBlock,
   type WorkItem,
   type WorkReference,
@@ -83,10 +82,10 @@ type PanelId = 'work' | 'loops' | 'schedule'
 /* Fixed DOM order. Panels are placed by grid coordinates, never by reordering
  * this array in JSX — reordering nodes remounts ChatEmbed and loses the
  * transcript's scroll position and any in-flight stream. */
-const PANEL_ORDER: PanelId[] = ['work', 'loops', 'schedule']
+const PANEL_ORDER: PanelId[] = ['work']
 
 /* Which card inherits the rail's open slot when the open one is promoted. */
-const PANEL_PICK_ORDER: PanelId[] = ['loops', 'schedule', 'work']
+const PANEL_PICK_ORDER: PanelId[] = ['work']
 
 const PANEL_LABELS: Record<PanelId, string> = {
   work: 'Sessions',
@@ -154,7 +153,7 @@ function BoardFreshness({ lastUpdated, refreshing, onRefresh }: {
   )
 }
 
-type FilterKey = 'all' | WorkState
+type FilterKey = 'all' | WorkState | 'follow-up'
 
 interface SourcesResponse {
   slots: ChatSlot[]
@@ -168,9 +167,6 @@ interface SourcesResponse {
 
 const SNOOZE_KEY = 'crew-manager.snoozed'
 const HANDLED_KEY = 'crew-manager.handled'
-const DONE_COLLAPSED_KEY = 'crew-manager.done-collapsed'
-/* Which session cards the user has folded, keyed by block key. */
-const CARD_COLLAPSED_KEY = 'crew-manager.card-collapsed'
 const OPEN_STACK_KEY = 'crew-manager.stack-open-v2'
 /* Which panel holds column 1. A new key: the retired swap flag was a boolean
  * under a different name, so no old value can be misread as a PanelId. */
@@ -226,14 +222,14 @@ function countPart(n: number, one: string, many: string): string | null {
  * members that actually exist — no start date is invented (the model has no
  * per-card creation stamp), so it reports last activity instead.
  */
-function goalMetaLine(items: WorkItem[], now: number = Date.now(), omitSessions = false): string {
+function goalMetaLine(items: WorkItem[], now: number = Date.now(), omitSessions = false, omitRefs = false): string {
   const c = goalComposition(items)
   const parts = [
     // A session card's meta would always open with "1 session" — say nothing
     // there instead of stating the card's own subject back at the reader.
     omitSessions ? null : countPart(c.sessions, 'session', 'sessions'),
-    countPart(c.prs, 'PR', 'PRs'),
-    countPart(c.issues, 'issue', 'issues'),
+    omitRefs ? null : countPart(c.prs, 'PR', 'PRs'),
+    omitRefs ? null : countPart(c.issues, 'issue', 'issues'),
     countPart(c.loops, 'loop', 'loops'),
     countPart(c.crons, 'cron', 'crons'),
     countPart(c.agents, 'agent', 'agents'),
@@ -335,16 +331,6 @@ function workCopy(key: WorkCopyKey, values: Record<string, string> = {}): string
   return WORK_COPY[key].replace(/\{\{(\w+)\}\}/g, (_, name: string) => values[name] ?? '')
 }
 
-/**
- * Sentence case so the lane label reads as one family with the "N need you"
- * count pill instead of shouting over it.
- */
-const verbLabels: Record<ResponseVerb, string> = {
-  followup: 'Follow up',
-  unblock: 'Unblock',
-}
-
-
 const stateLabels: Record<WorkState, string> = {
   'needs-you': 'Needs you',
   running: 'Running',
@@ -354,6 +340,7 @@ const stateLabels: Record<WorkState, string> = {
 const filterLabels: Record<FilterKey, string> = {
   all: 'All',
   'needs-you': 'Needs you',
+  'follow-up': 'Follow up',
   running: 'Running',
   done: 'Done',
 }
@@ -405,42 +392,24 @@ function PanelSectionHeader({ label, count, subtitle }: { label: string; count: 
 }
 
 function stateBadge(item: WorkItem) {
-  // Needs you is judged BEFORE issue, and the order is the whole point. `issue`
-  // and `changeBlocked` are set from the same sessionIssue(slot) call, so with
-  // issue first the one item that should read UNBLOCK was the one item guaranteed
-  // to read "Issue" — a state, in the place reserved for the action.
-  //
-  // An issue is a REASON something needs you, not a category beside it. In this
-  // queue the reason is already on the summary line and the why line; the badge's
-  // one job is naming the response.
-  if (item.state === 'needs-you') {
-    // Inside a section titled "Needs you", a badge reading "Needs you" says
-    // nothing. The verb takes its place rather than joining it, so naming the
-    // response costs no extra room on the card.
-    const verb = responseVerb(item)
-    // Every needs-you item gets one. A missing badge left a hole in the column
-    // and pulled that card's title out of line with its neighbours.
-    return verb
-      ? <Badge variant="warn" className="ow-verb">{verbLabels[verb]}</Badge>
-      : null
+  // Custom pills (not the SDK Badge) so the four states share one shape and read
+  // as a family: a leading dot for the two you-owe states, a spinner for live
+  // work, a check for done. Follow up is a lighter amber of Needs you.
+  const lane = laneKeyOf(item)
+  if (lane === 'unblock') {
+    return <span className="ow-rowstate ow-rowstate--need"><span className="ow-rowstate-dot" aria-hidden="true" />Needs you</span>
   }
-  // No Issue badge. Nothing reaches Done with an issue any more: a failed run is
-  // unfinished work and now sits in the queue with a Retry, a dropped goal is a
-  // decision rather than a fault, and a failing linked change belongs to the
-  // change. "Done" and "Issue" on one card claimed the outcome both happened and
-  // failed.
-  if (item.state === 'running') {
+  if (lane === 'followup') {
+    return <span className="ow-rowstate ow-rowstate--follow"><span className="ow-rowstate-dot" aria-hidden="true" />Follow up</span>
+  }
+  if (lane === 'running') {
     // Only claim motion when there is motion. An open goal nobody is on gets a
-    // quieter, truthful label instead of a spinning clock.
+    // quieter, truthful label instead of a spinner.
     return item.moving
-      ? <Badge variant="aim"><Clock3 className="ow-icon" />{stateLabels[item.state]}</Badge>
-      // Reachable only inside an EXECUTING session: the agent holds this
-      // session but is on a different goal. Not "Idle" (an idle session's goals
-      // now go to Needs you) and not "Open" (already the action label on the
-      // button beside it).
-      : <Badge variant="muted">Queued</Badge>
+      ? <span className="ow-rowstate ow-rowstate--run"><span className="ow-rowstate-spin" aria-hidden="true" />Running</span>
+      : <span className="ow-rowstate ow-rowstate--queued">Queued</span>
   }
-  return <Badge variant="ok"><CircleCheck className="ow-icon" />{stateLabels[item.state]}</Badge>
+  return <span className="ow-rowstate ow-rowstate--done"><CircleCheck className="ow-icon" aria-hidden="true" />Done</span>
 }
 
 /**
@@ -609,14 +578,10 @@ function FormalApproval({ item, busy, onDecide }: {
 function SessionBlockHeader({
   item,
   items,
-  folded,
-  onToggle,
   onOpen,
 }: {
   item: WorkItem
   items: WorkItem[]
-  folded?: boolean
-  onToggle?: () => void
   onOpen: () => void
 }) {
   const sessionRef = item.references.find(ref => ref.kind === 'session')
@@ -625,35 +590,33 @@ function SessionBlockHeader({
   const state: WorkState = comp.needsYou > 0
     ? 'needs-you'
     : items.some(row => row.state === 'running') ? 'running' : 'done'
-  // The header flag would double-label an expanded card: its needs-you rows sit
-  // in an UNBLOCK / FOLLOW UP lane whose badge already says the same thing. So
-  // show the "N need you" count only while the card is COLLAPSED (the lanes are
-  // hidden then, and it is the only signal); once expanded, the lanes speak.
-  // The Running / Done state has no lane badge, so that flag always shows.
-  const flag = comp.needsYou > 0
-    ? (folded ? `${comp.needsYou} need you` : null)
-    : stateLabels[state]
+  // A needs-you card lets its rows speak, so the header shows no redundant count;
+  // running / done cards have no per-row state, so the header names it.
+  const flag = comp.needsYou > 0 ? null : stateLabels[state]
   // The session IS the card's subject, so its own count is not restated — and
   // provenance here is the bare word "Session", which the icon already says.
-  const meta = goalMetaLine(items, Date.now(), true)
+  // Forge links and the same-session queue, surfaced on the card itself rather
+  // than only inside an expanded row: the PR is where the work lands, and the
+  // queue depth says more prompts are already lined up for this session.
+  const changeRefs: WorkReference[] = []
+  const seenRefUrls = new Set<string>()
+  for (const ref of items.flatMap(row => row.references)) {
+    if ((ref.kind === 'change' || ref.kind === 'issue') && ref.url && !seenRefUrls.has(ref.url)) {
+      seenRefUrls.add(ref.url)
+      changeRefs.push(ref)
+    }
+  }
+  const queued = items.reduce((max, row) => Math.max(max, row.queuedBehind ?? 0), 0)
+  const queuedText = queued > 0 ? workCopy('rank_queued_behind', { count: String(queued) }) : null
+  // Activity leads the line; the forge link and queue depth follow it. The
+  // "N PR/issue" counts drop out once real links render.
+  const activityText = goalMetaLine(items, Date.now(), true, changeRefs.length > 0)
   return (
-    <>
+    <div className="ow-goalcard-head">
       <div className="ow-goalcard-summary">
-        {onToggle && (
-          <button
-            type="button"
-            className="ow-goalcard-chevron"
-            aria-expanded={!folded}
-            aria-label={`${folded ? 'Expand' : 'Collapse'} ${label}`}
-            onClick={onToggle}
-          >
-            <ChevronRight className="ow-icon ow-init-chevron" data-open={folded ? undefined : 'true'} aria-hidden="true" />
-          </button>
-        )}
         {/* Static, not a hit area: one visible Open button stays the only way in,
             so the title must not hint at an action it does not carry. */}
         <span className="ow-goalcard-header ow-goalcard-static">
-          <MessageSquare className="ow-icon" aria-hidden="true" />
           <span className="ow-truncate ow-block-name ow-goalcard-title">{label}</span>
         </span>
         <Btn className="ow-block-open" onClick={onOpen} aria-label={`Open ${label}`}>
@@ -661,8 +624,16 @@ function SessionBlockHeader({
         </Btn>
         {flag && <span className={`ow-goal-flag${comp.needsYou > 0 ? ' ow-goal-flag-warn' : ''}`}>{flag}</span>}
       </div>
-      {meta && <div className="ow-goal-meta">{meta}</div>}
-    </>
+      {(changeRefs.length > 0 || activityText || queuedText) && (
+        <div className="ow-goal-meta ow-goal-meta-row">
+          {activityText && <span>{activityText}</span>}
+          {changeRefs.map(ref => (
+            <ReferenceChip key={`${ref.kind}:${ref.id}`} reference={ref} onOpenSession={() => onOpen()} />
+          ))}
+          {queuedText && <span>{queuedText}</span>}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -727,14 +698,12 @@ function WorkRow({
   onPickStep,
   onSnooze,
   onHandled,
-  hideBadge,
   compact,
   headless,
   onDecideApproval,
 }: {
   item: WorkItem
   selected: boolean
-  hideBadge?: boolean
   compact?: boolean
   /** The card header already states this row's badge+title — do not repeat. */
   headless?: boolean
@@ -781,9 +750,7 @@ function WorkRow({
   const hasSteps = Boolean(onPickStep) && detailSteps.length > 0
   const hasDetail = Boolean(askedFor) || progressFacts.length > 0 || hasSteps
   const shownSteps = showAllSteps ? detailSteps : detailSteps.slice(0, MAX_QUOTE_STEPS)
-  const badge = hideBadge
-    ? (item.state === 'done' ? <Check className="ow-icon ow-row-check" aria-hidden="true" /> : null)
-    : stateBadge(item)
+  const badge = stateBadge(item)
   /*
    * ONE number, never a span. The platform records `last_touched_turn` per goal
    * and nothing that could bound the other end, so this reads "turn 7". A range
@@ -792,6 +759,20 @@ function WorkRow({
   const turnLabel = item.lastTouchedTurn
     ? workCopy('card_turn', { turn: String(item.lastTouchedTurn) })
     : null
+  // Every row carries a one-line plain-language summary at rest, not only the
+  // needs-you rows that also get a why line. In a lane the why line wins when
+  // present; otherwise the goal summary fills the row, so running and done items
+  // read the same way. Expanded, the summary is dropped when the expansion
+  // already quotes it (as a next step or the original ask).
+  const summaryEchoesDetail = Boolean(item.summary) && (
+    detailSteps.some(step => step.what?.trim() === item.summary)
+    || (selected && askedFor === item.summary?.trim())
+  )
+  const showSummary = Boolean(item.summary)
+    && (compact && !selected ? !whyRanked : !summaryEchoesDetail)
+  // The line-2 status text: the why-you-must-act reason on needs-you rows,
+  // otherwise the goal summary. Sits beside the state badge on one line.
+  const statusText = whyRanked || (showSummary ? item.summary : null)
   return (
     <Clickable
       onActivate={onSelect}
@@ -811,6 +792,7 @@ function WorkRow({
        */
       aria-expanded={hasDetail ? selected : undefined}
       data-selected={selected}
+      data-lane={laneKeyOf(item)}
       data-instructed={item.instructed ? 'true' : undefined}
       data-continuation={continuation ? 'true' : undefined}
       data-testid={`work-item-${item.id}`}
@@ -821,6 +803,8 @@ function WorkRow({
           <>
           <div className="ow-row-heading">
             <span className="ow-row-title">{item.title}</span>
+            {/* Turn rides with the title as its recency metadata, right-aligned. */}
+            {turnLabel && <span className="ow-row-turn">{turnLabel}</span>}
             {/*
               The chevron belongs with the title because the title is what it
               opens. Decorative: the row itself carries role=button and
@@ -833,24 +817,15 @@ function WorkRow({
               aria-hidden="true"
             />
           </div>
-          {/* State, then which turn this goal was last touched on. */}
-          {(badge || turnLabel) && (
-            <div className="ow-row-metaline">
+          {/* Status line: the state badge, then the one-line reason — the
+              why-you-must-act line on needs-you rows, otherwise the goal summary. */}
+          {(badge || statusText) && (
+            <div className="ow-row-status">
               {badge}
-              {turnLabel && <span className="ow-row-turn">{turnLabel}</span>}
+              {statusText && <span className="ow-row-statustext">{statusText}</span>}
             </div>
           )}
           </>
-          )}
-          {/* Compact rows show the title only at rest; selecting one expands its
-              summary here, so a click always reveals content (every item has a
-              summary) rather than only the ones that happen to carry next-steps.
-              Suppressed when it merely repeats a next step, or the original ask
-              that the expanded card now quotes in full under its own label. */}
-          {(!compact || selected) && item.summary
-            && !(item.nextSteps ?? []).some(step => step.what?.trim() === item.summary)
-            && !(selected && askedFor === item.summary.trim()) && (
-            <p className="ow-row-summary">{item.summary}</p>
           )}
           {/*
             Advice, not a verdict. It sits above the goals because "someone is
@@ -902,14 +877,6 @@ function WorkRow({
               ) : null}
             </div></Expand>
           )}
-          {/*
-            Only in Needs you. That is the one group ordered by score rather than
-            time, so it is the only group whose order needs explaining — and the
-            only place the user has to judge "which of these first". Running and
-            Done are plain recency, where this line would cost a row and say
-            nothing.
-          */}
-          {whyRanked && <div className="ow-row-why">{whyRanked}</div>}
           {/*
             Inside a session block the header already carries the session, the
             project and the linked changes, so repeating them per row is noise.
@@ -1020,7 +987,7 @@ function WorkRow({
         this is the response. Retry spawns a fresh run, so a success removes this
         card on the next poll without anyone having to dismiss anything.
       */}
-      {selected && item.retryPath && onRetry && (
+      {item.retryPath && onRetry && (
         <Expand><div className="ow-retry">
           <Btn onClick={() => onRetry(item.retryPath as string)} disabled={Boolean(retryBusy)}>
             Retry
@@ -1033,7 +1000,7 @@ function WorkRow({
         and worded as the consequence rather than as "Stop": the remaining cycles
         are discarded and this app cannot put them back.
       */}
-      {selected && item.stopPath && onStop && (
+      {item.stopPath && onStop && (
         <Expand><div className="ow-retry">
           <Btn onClick={() => onStop(item.stopPath as string)} disabled={Boolean(stopBusy)}>
             {stopBusy ? 'Stopping…' : 'Stop this loop'}
@@ -1045,7 +1012,7 @@ function WorkRow({
         anatomy as the session view (details, Trust options, formatted input) —
         expanded inside the selected card, where the decision belongs.
       */}
-      {selected && item.permissionId && onDecideApproval && (
+      {item.permissionId && onDecideApproval && (
         <Expand><FormalApproval
           item={item}
           busy={Boolean(permissionBusy)}
@@ -1071,10 +1038,6 @@ function WorkRow({
 
 type LaneKey = 'unblock' | 'followup' | 'running' | 'done'
 const LANE_ORDER: LaneKey[] = ['unblock', 'followup', 'running', 'done']
-const LANE_BADGE: Record<'unblock' | 'followup', { label: string; cls: string }> = {
-  unblock: { label: 'Unblock', cls: 'ow-lane-unblock' },
-  followup: { label: 'Follow up', cls: 'ow-lane-followup' },
-}
 
 function laneKeyOf(item: WorkItem): LaneKey {
   if (item.state === 'done') return 'done'
@@ -1130,36 +1093,18 @@ function SessionLanes({
     <>
       {LANE_ORDER.filter(key => byLane.has(key)).map(laneKey => {
         const laneItems = byLane.get(laneKey) as WorkItem[]
-        const badge = laneKey === 'unblock' || laneKey === 'followup' ? LANE_BADGE[laneKey] : null
-        // One shared reason on the head only when every item gives the same one;
-        // otherwise keep each row's own reason so nothing is flattened away.
-        const reasons = badge
-          ? laneItems.map(it => (it.action !== 'resume' ? explainRank(rankWorkItem(it), workCopy) : ''))
-          : []
-        const laneReason = badge && reasons.length > 0 && reasons.every(r => r && r === reasons[0])
-          ? reasons[0]
-          : undefined
         return (
           <div className="ow-lane" key={laneKey}>
-            {badge && (
-              <div className="ow-lane-head">
-                <span className={`ow-lane-badge ${badge.cls}`}>{badge.label}</span>
-                {laneReason && <span className="ow-lane-reason">{laneReason}</span>}
-              </div>
-            )}
             {laneItems.map(item => (
               <WorkRow
                 key={item.id}
                 item={item}
-                hideBadge
                 compact
                 selected={selectedId === item.id}
                 continuation
-                whyRanked={laneReason
-                  ? undefined
-                  : (item.state === 'needs-you' && item.action !== 'resume'
-                    ? explainRank(rankWorkItem(item), workCopy)
-                    : undefined)}
+                whyRanked={item.state === 'needs-you' && item.action !== 'resume'
+                  ? explainRank(rankWorkItem(item), workCopy)
+                  : undefined}
                 onSelect={() => onSelect(item)}
                 onOpenSession={onOpenSession}
                 onAnswerPermission={onAnswerPermission}
@@ -1225,8 +1170,6 @@ function WorkSection({
   collapsed,
   onToggleCollapsed,
   doneBySession,
-  collapsedCards,
-  onToggleCard,
   subtitle,
   hideHeader,
   emptyLabel,
@@ -1254,9 +1197,7 @@ function WorkSection({
   onToggleCollapsed?: () => void
   /** Per-session finished-goal titles, for the collapsed ledger on a card. */
   doneBySession?: Record<string, string[]>
-  /** Which session cards are folded, keyed by block key. */
-  collapsedCards?: Record<string, boolean>
-  onToggleCard?: (key: string, next: boolean) => void
+  /** An optional line under the section title. */
   subtitle?: string
   /**
    * Drop the visible title/count/subtitle band, for a section that is the whole
@@ -1270,7 +1211,6 @@ function WorkSection({
   const blocks = clusterBy(items)
 
   const renderBlock = (block: WorkBlock) => {
-    const folded = block.header === 'session' ? Boolean(collapsedCards?.[block.key]) : false
     return (
       <div
         key={block.key}
@@ -1278,35 +1218,31 @@ function WorkSection({
         // Every card that belongs to a session gets the header, whether it holds
         // one row or five. One row is not a different KIND of thing.
         data-grouped={block.header ? 'true' : undefined}
-        data-open={block.header === 'session' && !folded ? 'true' : undefined}
+        data-open={block.header === 'session' ? 'true' : undefined}
       >
         {block.header === 'session' && block.sessionKey && (
           <SessionBlockHeader
             item={block.items[0]}
             items={block.items}
-            folded={folded}
-            onToggle={onToggleCard ? () => onToggleCard(block.key, !folded) : undefined}
             onOpen={() => onOpenSession(block.sessionKey as string)}
           />
         )}
         {block.header === 'session' ? (
-          !folded && (
-            <SessionLanes
-              items={block.items}
-              doneTitles={block.sessionKey ? doneBySession?.[block.sessionKey] : undefined}
-              selectedId={selectedId}
-              onSelect={onSelect}
-              onOpenSession={onOpenSession}
-              onAnswerPermission={onAnswerPermission}
-              onDecideApproval={onDecideApproval}
-              permissionBusy={permissionBusy}
-              onRetry={onRetry}
-              retryBusy={retryBusy}
-              onPickStep={onPickStep}
-              onSnooze={onSnooze}
-              onHandled={onHandled}
-            />
-          )
+          <SessionLanes
+            items={block.items}
+            doneTitles={block.sessionKey ? doneBySession?.[block.sessionKey] : undefined}
+            selectedId={selectedId}
+            onSelect={onSelect}
+            onOpenSession={onOpenSession}
+            onAnswerPermission={onAnswerPermission}
+            onDecideApproval={onDecideApproval}
+            permissionBusy={permissionBusy}
+            onRetry={onRetry}
+            retryBusy={retryBusy}
+            onPickStep={onPickStep}
+            onSnooze={onSnooze}
+            onHandled={onHandled}
+          />
         ) : (
           block.items.map(item => (
             <WorkRow
@@ -1592,13 +1528,13 @@ export default function CrewOverviewApp() {
     return stored && PANEL_ORDER.includes(stored) ? stored : 'work'
   })
   const [openStack, setOpenStack] = useState<PanelId | null>(() => {
-    const stored = readStore<PanelId | null>(OPEN_STACK_KEY, null) ?? 'loops'
-    const valid = PANEL_ORDER.includes(stored) ? stored : 'loops'
+    const stored = readStore<PanelId | null>(OPEN_STACK_KEY, null)
+    const valid = stored && PANEL_ORDER.includes(stored) ? stored : null
     // openStack may never name the primary — that card is expanded in column 1,
     // so pointing the rail's open slot at it would leave the rail with none.
     const seed = readStore<PanelId | null>(PRIMARY_KEY, null)
     const current = seed && PANEL_ORDER.includes(seed) ? seed : 'work'
-    return valid === current ? PANEL_PICK_ORDER.find(id => id !== current) ?? null : valid
+    return valid && valid !== current ? valid : (PANEL_PICK_ORDER.find(id => id !== current) ?? null)
   })
   // One open at a time: opening a card closes the others, and clicking the open
   // card closes it, so "collapse everything" stays reachable.
@@ -1655,8 +1591,9 @@ export default function CrewOverviewApp() {
     window.addEventListener('resize', reclamp)
     return () => window.removeEventListener('resize', reclamp)
   }, [])
-  const [collapsedCards, setCollapsedCards] = useState<Record<string, boolean>>(() => readStore(CARD_COLLAPSED_KEY))
-  const [doneCollapsed, setDoneCollapsed] = useState<boolean>(() => readStore<boolean | null>(DONE_COLLAPSED_KEY, null) ?? true)
+  // Done recently always starts collapsed on load, so the panel opens focused on
+  // live work. Expanding it lasts only for the current view, not across reloads.
+  const [doneCollapsed, setDoneCollapsed] = useState<boolean>(true)
   const [loops, setLoops] = useState<Record<string, ErrorLoopFinding>>({})
   // Work the developer owns in the forge. Kept separate from `sources` because it
   // comes from this app's own backend rather than the platform, and must degrade
@@ -1914,6 +1851,17 @@ export default function CrewOverviewApp() {
     [setAside],
   )
   const counts = useMemo(() => workCounts(items), [items])
+  // Follow-up is a slice of needs-you (a pick-back-up, not a block on you), shown
+  // as its own rail chip; Needs you then counts only the blocking items.
+  const followUpCount = useMemo(
+    () => items.filter(item => item.state === 'needs-you' && laneKeyOf(item) === 'followup').length,
+    [items],
+  )
+  const railCounts: Record<FilterKey, number> = {
+    ...counts,
+    'needs-you': Math.max(0, (counts['needs-you'] ?? 0) - followUpCount),
+    'follow-up': followUpCount,
+  }
   // Finished goals per session, so a card in Needs you / In progress can offer
   // that session's ledger without the Done section having to be open.
   const doneBySession = useMemo(() => {
@@ -1938,9 +1886,12 @@ export default function CrewOverviewApp() {
    * separately is the point: one shared "visibleItems" is what let a list pill
    * quietly reshape the companion cards.
    */
-  const sessionItems = useMemo(() => (
-    filter === 'all' ? items : items.filter(item => item.state === filter)
-  ), [filter, items])
+  const sessionItems = useMemo(() => {
+    if (filter === 'all') return items
+    if (filter === 'follow-up') return items.filter(item => item.state === 'needs-you' && laneKeyOf(item) === 'followup')
+    if (filter === 'needs-you') return items.filter(item => item.state === 'needs-you' && laneKeyOf(item) !== 'followup')
+    return items.filter(item => item.state === filter)
+  }, [filter, items])
 
   useEffect(() => setNavBadge(counts['needs-you']), [counts, setNavBadge])
   useEffect(() => {
@@ -2209,10 +2160,7 @@ export default function CrewOverviewApp() {
   }, [])
 
   const toggleDone = useCallback(() => {
-    setDoneCollapsed(current => {
-      writeStore(DONE_COLLAPSED_KEY, !current)
-      return !current
-    })
+    setDoneCollapsed(current => !current)
   }, [])
 
   const retryRun = useCallback(async (path: string) => {
@@ -2301,14 +2249,9 @@ export default function CrewOverviewApp() {
     running: sessionItems.filter(item => item.state === 'running'),
     done: sessionItems.filter(item => item.state === 'done'),
   }
-
-  const toggleCard = useCallback((key: string, next: boolean) => {
-    setCollapsedCards(current => {
-      const updated = { ...current, [key]: next }
-      writeStore(CARD_COLLAPSED_KEY, updated)
-      return updated
-    })
-  }, [])
+  // Blocking = waiting on you now; follow-up = pick back up where it left off.
+  const blockingItems = grouped['needs-you'].filter(item => laneKeyOf(item) !== 'followup')
+  const followUpItems = grouped['needs-you'].filter(item => laneKeyOf(item) === 'followup')
 
   const openSession = (slot: string) => navigate(`/chat?sid=${encodeURIComponent(slot)}`)
   const selectItem = (item: WorkItem) => {
@@ -2387,32 +2330,29 @@ export default function CrewOverviewApp() {
                   <ChevronRight className="ow-icon ow-stack-chevron" />
                   <Users className="ow-icon" />
                   {PANEL_LABELS.work}
+                  <Badge variant="muted">{counts.all}</Badge>
                 </span>
                 <span className="ow-stack-actions">
-                  <Badge variant="muted">{counts.all}</Badge>
                   {primary === 'work' ? <BoardFreshness lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={refreshSources} /> : <MakePrimary id="work" onPromote={promote} />}
                 </span>
               </summary>
-                <div className="ow-listcard-tools">
-                  <p className="ow-listcard-sub">
-                    Grouped by what each session needs from you
-                  </p>
-                  <div className="ow-filters" role="group" aria-label="Filter by state">
-                    {(Object.keys(filterLabels) as FilterKey[]).map(key => (
-                      <Btn
-                        key={key}
-                        onClick={() => setFilter(key)}
-                        aria-pressed={filter === key}
-                        data-selected={filter === key}
-                        className="ow-filter"
-                      >
-                        {filterLabels[key]}
-                        <span className="ow-count">{counts[key]}</span>
-                      </Btn>
-                    ))}
-                  </div>
-                </div>
-
+              {/* Left rail (layout C): the state filter as a vertical nav beside
+                  the list, so the filters hold still while the list scrolls. */}
+              <div className="ow-worksplit">
+                <nav className="ow-railnav" role="group" aria-label="Filter by state">
+                  {(Object.keys(filterLabels) as FilterKey[]).map(key => (
+                    <Btn
+                      key={key}
+                      onClick={() => setFilter(key)}
+                      aria-pressed={filter === key}
+                      data-selected={filter === key}
+                      className="ow-filter ow-railitem"
+                    >
+                      <span className="ow-railitem-label">{filterLabels[key]}</span>
+                      <span className="ow-count">{railCounts[key]}</span>
+                    </Btn>
+                  ))}
+                </nav>
               <main className="ow-work">
                 <div className="ow-work-inner">
               {sourcesLoading
@@ -2440,7 +2380,7 @@ export default function CrewOverviewApp() {
                           <WorkSection
                             title="Needs you"
                             subtitle="Waiting on a decision or reply from you"
-                            items={grouped['needs-you']}
+                            items={blockingItems}
                             doneBySession={doneBySession}
                             selectedId={selectedId}
                             onSelect={selectItem}
@@ -2462,9 +2402,27 @@ export default function CrewOverviewApp() {
                 onStop={path => { void stopLoop(path) }}
                 stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
-                            collapsedCards={collapsedCards}
-                            onToggleCard={toggleCard}
                             emptyLabel="Nothing needs your input right now."
+                          />
+                          <WorkSection
+                            title="Follow up"
+                            subtitle="Pick back up where a session left off"
+                            items={followUpItems}
+                            doneBySession={doneBySession}
+                            selectedId={selectedId}
+                            onSelect={selectItem}
+                            onSnooze={snoozeItem}
+                            onHandled={markHandled}
+                            onOpenSession={openSession}
+                onAnswerPermission={(id, approve) => { void resolvePermission(id, approve) }}
+                onDecideApproval={(item, action) => { void decideApproval(item, action) }}
+                permissionBusy={resolvingApproval !== null}
+                onRetry={path => { void retryRun(path) }}
+                retryBusy={retrying !== null}
+                onStop={path => { void stopLoop(path) }}
+                stopBusy={stopping !== null}
+                onPickStep={what => { void handleConductorSend(what) }}
+                            emptyLabel="Nothing to follow up on."
                           />
                           <WorkSection
                             title="In progress"
@@ -2482,8 +2440,6 @@ export default function CrewOverviewApp() {
                 onStop={path => { void stopLoop(path) }}
                 stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
-                            collapsedCards={collapsedCards}
-                            onToggleCard={toggleCard}
                             emptyLabel="Nothing is in progress right now."
                           />
                           <WorkSection
@@ -2503,8 +2459,6 @@ export default function CrewOverviewApp() {
                 onStop={path => { void stopLoop(path) }}
                 stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
-                            collapsedCards={collapsedCards}
-                            onToggleCard={toggleCard}
                             emptyLabel="No recent completed work."
                           />
                         </>
@@ -2524,19 +2478,18 @@ export default function CrewOverviewApp() {
                 onStop={path => { void stopLoop(path) }}
                 stopBusy={stopping !== null}
                 onPickStep={what => { void handleConductorSend(what) }}
-                          collapsedCards={collapsedCards}
-                          onToggleCard={toggleCard}
                           emptyLabel="No matching work"
                         />
                       )}
                 </div>
               </main>
+              </div>
             </details>
 
             {/* Companion surfaces. Neither is a lens on the work list — each is
                 its own kind of thing, so they are peers of Work rather than modes
                 of it, and either can take column 1. */}
-              <details {...panelShell('loops')}>
+              {PANEL_ORDER.includes('loops') && (<details {...panelShell('loops')}>
                 <summary onClick={event => { event.preventDefault(); if (primary !== 'loops') toggleStack('loops') }}>
                   <span className="ow-stack-title">
                     <ChevronRight className="ow-icon ow-stack-chevron" />
@@ -2578,9 +2531,9 @@ export default function CrewOverviewApp() {
                       )
                     })}
                 </div>
-              </details>
+              </details>)}
 
-              <details {...panelShell('schedule')}>
+              {PANEL_ORDER.includes('schedule') && (<details {...panelShell('schedule')}>
                 <summary onClick={event => { event.preventDefault(); if (primary !== 'schedule') toggleStack('schedule') }}>
                   <span className="ow-stack-title">
                     <ChevronRight className="ow-icon ow-stack-chevron" />
@@ -2637,8 +2590,8 @@ export default function CrewOverviewApp() {
                       )
                     })}
                 </div>
-              </details>
-            <ColumnResizer
+              </details>)}
+            {railOrder.length > 0 && (<ColumnResizer
               side="start"
               containerRef={mainRef}
               min={COLW.workMin}
@@ -2647,7 +2600,7 @@ export default function CrewOverviewApp() {
               value={panelW.work}
               onChange={px => setPanelW(p => ({ ...p, work: px }))}
               label="Resize the work column"
-            />
+            />)}
           </div>
 
           <ColumnResizer
