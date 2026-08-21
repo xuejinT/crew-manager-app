@@ -1,0 +1,188 @@
+{
+  "title": "Chess engine from scratch",
+  "statement": "Build a working chess engine in pure Python 3.12 with zero third-party dependencies, in /path/to/.kiro/crew/workspace/chess-poc. It must represent a board, generate legal moves, evaluate a position, search for a best move, and speak enough UCI to be driven from stdin. Every module carries its own directly-runnable tests. Conventions and the inter-module contract are in CLAUDE.md at the repo root; every dispatched session must read it first.",
+  "scope": {
+    "root": "/path/to/.kiro/crew/workspace/chess-poc",
+    "paths_allow": [
+      "src/**",
+      "tests/**",
+      "main.py",
+      "README.md"
+    ],
+    "paths_deny": [
+      ".git/**",
+      ".github/**",
+      "CLAUDE.md",
+      "../**"
+    ],
+    "worker_trust": "trust"
+  },
+  "authority": {
+    "session_create": "act",
+    "session_continue": "act",
+    "context_inject": "act",
+    "escalate": "act",
+    "loop_arm": "propose",
+    "cron_create": "propose",
+    "pr_comment": "propose",
+    "narrate": "act",
+    "operator_notify": "act"
+  },
+  "budgets": {
+    "wip": 3,
+    "turns": 200,
+    "wall_clock_secs": 21600,
+    "actions": {
+      "session_create": 12,
+      "session_continue": 60,
+      "context_inject": 120,
+      "escalate": 20,
+      "operator_notify": 20
+    }
+  },
+  "done_when": [
+    {
+      "kind": "all_leaves_closed"
+    },
+    {
+      "kind": "file_exists",
+      "path": "src/constants.py"
+    },
+    {
+      "kind": "file_exists",
+      "path": "src/board.py"
+    },
+    {
+      "kind": "file_exists",
+      "path": "src/movegen.py"
+    },
+    {
+      "kind": "file_exists",
+      "path": "src/evaluation.py"
+    },
+    {
+      "kind": "file_exists",
+      "path": "src/search.py"
+    },
+    {
+      "kind": "file_exists",
+      "path": "src/uci.py"
+    }
+  ],
+  "leaves": [
+    {
+      "title": "Piece constants and starting FEN",
+      "depends_on": [],
+      "done_when": [
+        {
+          "kind": "file_exists",
+          "path": "src/constants.py"
+        }
+      ],
+      "id": "constants",
+      "predicted_paths": [
+        "src/constants.py",
+        "tests/test_constants.py"
+      ],
+      "status": "open",
+      "intent_text": "Read /path/to/.kiro/crew/workspace/chess-poc/CLAUDE.md first and follow it exactly.\n\nYou own ONLY these files: src/constants.py, tests/test_constants.py. Do not create or edit any other file.\n\nWrite src/constants.py providing exactly the interface CLAUDE.md documents: WHITE/BLACK, EMPTY/PAWN/KNIGHT/BISHOP/ROOK/QUEEN/KING as range(7), PIECE_VALUES in centipawns (pawn 100, knight 320, bishop 330, rook 500, queen 900, king 20000), and START_FEN set to the standard starting position. Add whatever square/file/rank helper constants you need (e.g. square index 0 = a1 through 63 = h8) and document the indexing convention in the module docstring, because five other agents are writing code against it.\n\nWrite tests/test_constants.py asserting the values and the indexing convention, runnable as `python3 tests/test_constants.py`, printing `ok <what>` per assertion and exiting non-zero on failure.\n\nThen commit only your two files. Finish by writing TASK COMPLETE and listing the files."
+    },
+    {
+      "title": "Board representation with make/unmake",
+      "depends_on": [
+        "constants"
+      ],
+      "done_when": [
+        {
+          "kind": "file_exists",
+          "path": "src/board.py"
+        }
+      ],
+      "id": "board",
+      "predicted_paths": [
+        "src/board.py",
+        "tests/test_board.py"
+      ],
+      "status": "open",
+      "intent_text": "Read /path/to/.kiro/crew/workspace/chess-poc/CLAUDE.md first and follow it exactly.\n\nYou own ONLY these files: src/board.py, tests/test_board.py. src/constants.py is written by another agent against the interface in CLAUDE.md \u2014 import it, do not edit it.\n\nWrite src/board.py with the Board class exactly as CLAUDE.md documents: a 64-element squares list using signed integers (positive = white, negative = black), side_to_move, FEN parsing in __init__ and to_fen(), make_move/unmake_move with an internal undo stack, is_attacked(square, by_side), and king_square(side). make_move followed by unmake_move MUST restore the position exactly, including castling rights, en-passant square and the halfmove clock \u2014 that round-trip is the single most important property, because the search calls it millions of times and a leak corrupts everything downstream.\n\nHandle castling, en passant and promotion in make/unmake.\n\nWrite tests/test_board.py covering: FEN round-trip on at least three positions, make/unmake restoring to_fen() exactly for a normal move, a capture, a castle, an en-passant capture and a promotion, and is_attacked on a few known positions. Runnable as `python3 tests/test_board.py`.\n\nThen commit only your two files. Finish by writing TASK COMPLETE and listing the files."
+    },
+    {
+      "title": "Legal move generation, perft-validated",
+      "depends_on": [
+        "board"
+      ],
+      "done_when": [
+        {
+          "kind": "file_exists",
+          "path": "src/movegen.py"
+        }
+      ],
+      "id": "movegen",
+      "predicted_paths": [
+        "src/movegen.py",
+        "tests/test_movegen.py"
+      ],
+      "status": "open",
+      "intent_text": "Read /path/to/.kiro/crew/workspace/chess-poc/CLAUDE.md first and follow it exactly.\n\nYou own ONLY these files: src/movegen.py, tests/test_movegen.py. Import src/constants.py and src/board.py; never edit them.\n\nWrite src/movegen.py providing the Move value type (frm, to, promo) plus generate_pseudo_legal_moves(board) and generate_legal_moves(board). Cover pawn pushes and double pushes, pawn captures, en passant, all four promotion pieces, knight/bishop/rook/queen/king movement, and both castles with the correct legality conditions (king and rook unmoved, squares empty, king not currently in check and not passing through or landing on an attacked square). generate_legal_moves must filter pseudo-legal moves by making the move and rejecting any that leaves your own king attacked.\n\nWrite tests/test_movegen.py with a perft function and assert these known node counts, which are the standard correctness gate for a move generator: from the starting position depth 1 = 20, depth 2 = 400, depth 3 = 8902, depth 4 = 197281. Also perft the Kiwipete position 'r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1' to depth 2 = 2039. Keep depth 4 as the deepest so the suite stays fast. Runnable as `python3 tests/test_movegen.py`.\n\nIf a perft number does not match, your generator is wrong \u2014 fix it rather than adjusting the expected value. Those numbers are not negotiable.\n\nThen commit only your two files. Finish by writing TASK COMPLETE and listing the files."
+    },
+    {
+      "title": "Material and piece-square evaluation",
+      "depends_on": [
+        "board"
+      ],
+      "done_when": [
+        {
+          "kind": "file_exists",
+          "path": "src/evaluation.py"
+        }
+      ],
+      "id": "evaluation",
+      "predicted_paths": [
+        "src/evaluation.py",
+        "tests/test_evaluation.py"
+      ],
+      "status": "open",
+      "intent_text": "Read /path/to/.kiro/crew/workspace/chess-poc/CLAUDE.md first and follow it exactly.\n\nYou own ONLY these files: src/evaluation.py, tests/test_evaluation.py. Import src/constants.py and src/board.py; never edit them.\n\nWrite src/evaluation.py with evaluate(board) -> int returning centipawns from the perspective of board.side_to_move, so POSITIVE always means good for the side about to move. Combine material counting with piece-square tables (Michniewski's Simplified Evaluation Function is the expected reference); mirror the tables vertically for black. Keep it pure and fast \u2014 the search calls it at every leaf.\n\nWrite tests/test_evaluation.py asserting: the starting position evaluates to approximately 0 (allow a small tolerance); a position where white is up a queen evaluates strongly positive when it is white to move and strongly negative when it is black to move (the sign convention is the thing most likely to be wrong, so test it explicitly in both directions); and that a centralised knight scores better than a cornered one. Runnable as `python3 tests/test_evaluation.py`.\n\nThen commit only your two files. Finish by writing TASK COMPLETE and listing the files."
+    },
+    {
+      "title": "Negamax with alpha-beta and iterative deepening",
+      "depends_on": [
+        "movegen",
+        "evaluation"
+      ],
+      "done_when": [
+        {
+          "kind": "file_exists",
+          "path": "src/search.py"
+        }
+      ],
+      "id": "search",
+      "predicted_paths": [
+        "src/search.py",
+        "tests/test_search.py"
+      ],
+      "status": "open",
+      "intent_text": "Read /path/to/.kiro/crew/workspace/chess-poc/CLAUDE.md first and follow it exactly.\n\nYou own ONLY these files: src/search.py, tests/test_search.py. Import constants, board, movegen and evaluation; never edit them.\n\nWrite src/search.py with search(board, depth=3, time_limit_s=None) -> Move | None. Implement negamax with alpha-beta pruning, quiescence search on captures to avoid the horizon effect, iterative deepening from depth 1 up to the requested depth, and MVV-LVA capture ordering. Respect time_limit_s if given by returning the best move found so far. Detect checkmate and stalemate and return None when there is no legal move.\n\nWrite tests/test_search.py asserting: a mate-in-one position returns the mating move; a position with a free hanging queen returns the capture; search never returns an illegal move (cross-check the result against generate_legal_moves); and searching the starting position at depth 2 completes in under 10 seconds. Runnable as `python3 tests/test_search.py`.\n\nThen commit only your two files. Finish by writing TASK COMPLETE and listing the files."
+    },
+    {
+      "title": "UCI protocol and entry point",
+      "depends_on": [
+        "search"
+      ],
+      "done_when": [
+        {
+          "kind": "file_exists",
+          "path": "src/uci.py"
+        }
+      ],
+      "id": "uci",
+      "predicted_paths": [
+        "src/uci.py",
+        "main.py",
+        "tests/test_uci.py"
+      ],
+      "status": "open",
+      "intent_text": "Read /path/to/.kiro/crew/workspace/chess-poc/CLAUDE.md first and follow it exactly.\n\nYou own ONLY these files: src/uci.py, main.py, tests/test_uci.py. Import the other modules; never edit them.\n\nWrite src/uci.py with main() implementing enough of the UCI protocol to be driven by a GUI: handle `uci` (reply `id name`, `id author`, then `uciok`), `isready` (reply `readyok`), `ucinewgame`, `position startpos [moves ...]` and `position fen <fen> [moves ...]`, `go` with optional depth/movetime (reply `bestmove <move>` in coordinate notation such as e2e4 or a7a8q), and `quit`. Parse and emit moves in UCI coordinate notation. Write main.py as a two-line entry point calling src.uci.main().\n\nStructure main() so it reads from an injectable stream rather than hard-coding sys.stdin, because that is what makes it testable without a subprocess.\n\nWrite tests/test_uci.py driving main() with a scripted list of input lines and asserting the replies: `uci` produces `uciok`, `isready` produces `readyok`, and `position startpos moves e2e4` followed by `go depth 1` produces a line starting with `bestmove ` whose move is legal in that position. Runnable as `python3 tests/test_uci.py`.\n\nThen commit only your three files. Finish by writing TASK COMPLETE and listing the files."
+    }
+  ]
+}

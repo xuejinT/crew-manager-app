@@ -20,6 +20,17 @@ Endpoints:
   written about it
 * ``GET  /assigned`` -- the developer's own open pull requests and assigned issues
 * ``GET  /conductor-agent`` -- whether the Conductor agent is bindable here
+* ``/conductor/*`` -- the autonomous Conductor's own surface, declared in
+  ``backend/conductor/routes.py`` and appended here. Kept in its own module
+  because it is a different feature with a different failure model: those
+  handlers must answer usefully on a gateway where the control loop is absent.
+
+This module also re-exports ``bind_host`` (defined in ``backend/hooks.py``). The
+route registry looks that symbol up on the module named by the manifest's
+``backend.hooks.routes`` hook -- this file -- and calls it with the gateway's
+aiohttp application before ``register_routes`` runs
+(``apps/route_registry.py:226,339``). That is how the Conductor reaches
+``DashboardState`` without waiting for a browser to open the panel.
 """
 
 from __future__ import annotations
@@ -44,6 +55,61 @@ from assigned import assigned_work  # noqa: E402
 from watcher import WATCHER  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+def _load_conductor() -> tuple[Any, Any]:
+    """``(conductor_routes_fn, bind_host_fn)``, or ``(None, None)``.
+
+    Guarded so a conductor module that will not import costs the app its
+    autonomy and nothing else -- the board, recall and peek keep working, and the
+    operator keeps the HTTP surface they would use to look at what broke.
+
+    ``backend/hooks.py`` is loaded by explicit file path under a private module
+    name rather than as ``import hooks``. The app's backend directory goes on
+    ``sys.path`` above, so a plain import would claim the top-level name
+    ``hooks`` process-wide and the second installed app to ship a
+    ``backend/hooks.py`` would silently get ours. The conductor's own singleton
+    does not live in that module for the same class of reason -- see
+    ``ConductorRuntime``'s docstring.
+    """
+    try:
+        import importlib.util
+
+        from conductor.routes import conductor_routes
+
+        spec = importlib.util.spec_from_file_location(
+            "_crew_manager_backend_hooks", Path(__file__).resolve().parent / "hooks.py"
+        )
+        if spec is None or spec.loader is None:  # pragma: no cover - defensive
+            raise ImportError("could not build a spec for backend/hooks.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return conductor_routes, module.bind_host
+    except Exception:
+        logger.exception("crew-manager: conductor routes unavailable; app routes unaffected")
+        return None, None
+
+
+_CONDUCTOR_ROUTES, _BIND_HOST = _load_conductor()
+
+
+def bind_host(app: Any) -> None:
+    """Take the gateway's host handle. See ``backend/hooks.py:bind_host``.
+
+    Defined here because the route registry resolves the symbol on the hook
+    module (``apps/route_registry.py:114-137``), and never raising because a
+    failure here would mark the app degraded for a feature the operator may not
+    even be using.
+    """
+    if _BIND_HOST is None:
+        logger.warning("crew-manager: bind_host called but the conductor did not load")
+        return
+    try:
+        _BIND_HOST(app)
+    except Exception:
+        logger.exception("crew-manager: bind_host failed; the conductor stays unarmed")
+
 
 # Bounds on user-supplied settings. A one-minute floor keeps the threshold above
 # ordinary long tool calls; the ceiling stops a typo parking the feature for a
@@ -265,7 +331,7 @@ def register_routes(ctx: Any) -> list:
     from kiro_crew.apps.route_registry import AppRoute
 
     logger.info("crew-manager: registering backend routes")
-    return [
+    declared = [
         AppRoute(method="GET", path="/stalls", handler=handle_stalls),
         AppRoute(method="POST", path="/sweep", handler=handle_sweep),
         AppRoute(method="POST", path="/settings", handler=handle_settings),
@@ -274,3 +340,13 @@ def register_routes(ctx: Any) -> list:
         AppRoute(method="GET", path="/conductor-agent", handler=handle_conductor_agent),
         AppRoute(method="GET", path="/assigned", handler=handle_assigned),
     ]
+    if _CONDUCTOR_ROUTES is not None:
+        try:
+            declared.extend(_CONDUCTOR_ROUTES(AppRoute))
+        except Exception:
+            # An app whose route list raises loses EVERY route
+            # (``route_registry.register_app_routes`` marks it degraded and
+            # returns []), so a broken conductor declaration must not be able to
+            # take the board down with it.
+            logger.exception("crew-manager: conductor routes not registered")
+    return declared

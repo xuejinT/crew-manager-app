@@ -725,6 +725,167 @@ export const OVERWATCH_STYLES = String.raw`
      name (flex 0 1 auto) and still truncating a long one. */
   .ow-goalcard-title { flex: 1; min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; max-width: none; }
   .ow-goalcard .ow-block-open { flex: none; margin: 0; }
+  /* ---- Conductor panel (the operator surface for autonomous work) ----
+     Namespaced ow-cond- rather than ow-conductor-: that name already belongs to
+     the Conductor CHAT column, whose stacked-layout rule would otherwise apply
+     a 560px min-height to this card. */
+  .ow-cond { display: flex; flex-direction: column; gap: 8px; }
+  .ow-cond-json {
+    width: 100%;
+    margin: 6px 0;
+    padding: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    resize: vertical;
+  }
+  .ow-cond-events { display: flex; flex-direction: column; gap: 2px; }
+  /* One row per event, columns aligned so a column can be scanned rather than
+     read: time, class, target, reason. */
+  .ow-cond-event {
+    display: grid;
+    grid-template-columns: 62px auto minmax(0, 90px) minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+    font-size: 11px;
+  }
+  .ow-cond-when { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ow-cond-target {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .ow-cond-why {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+  }
+
+  /* The collapsible automation shell inside the Conductor column. Bounded height
+     so an event stream cannot push the chat off screen — the chat is the column's
+     primary tenant. */
+  .ow-cond-shell {
+    border-bottom: 1px solid var(--border);
+    max-height: 46vh;
+    overflow-y: auto;
+    flex: none;
+  }
+  .ow-cond-summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .ow-cond-shell[open] > .ow-cond-summary { color: var(--text); }
+  .ow-cond-shell[open] .ow-stack-chevron { transform: rotate(90deg); }
+  .ow-cond-note { margin: 2px 10px; }
+
+  /* Inline variant: inside the work card the shell is a strip, not a column
+     tenant, so it must not claim viewport height of its own. */
+  /* Its own scroll, because it sits in the card's HEADER area rather than the
+     scrolling body: an open edit form with six steps is taller than the region,
+     and without this the Declare/Save buttons sit below the fold with no way to
+     reach them. Capped rather than unbounded so the goal list underneath is never
+     pushed entirely off screen. overflow auto means a short list still shows no bar. */
+  .ow-cond-inline {
+    border-bottom: 1px solid var(--border);
+    max-height: 55vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .ow-cond-inline > .ow-cond { padding: 6px 10px 10px; }
+  /* Inputs must not widen the section into a horizontal scroll. */
+  .ow-cond-inline input,
+  .ow-cond-inline textarea,
+  .ow-cond-inline select { max-width: 100%; box-sizing: border-box; }
+
+  /* ---- the goal form ---- */
+  .ow-cond-form { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .ow-cond-field { display: flex; flex-direction: column; gap: 3px; }
+  .ow-cond-field > span { font-size: 11px; color: var(--muted); }
+  .ow-cond-text {
+    width: 100%;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    resize: vertical;
+  }
+  .ow-cond-select {
+    padding: 5px 8px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .ow-cond-steps-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  /* A step is one visually grouped unit: without the rule, six steps read as
+     eighteen loose inputs. */
+  .ow-cond-step {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .ow-cond-step-row { display: flex; gap: 4px; align-items: center; }
+  .ow-cond-step-row > * { min-width: 0; flex: 1; }
+  .ow-cond-step-row > button { flex: none; }
+
+  /* A draft's planned steps, readable before the operator accepts them. */
+  .ow-cond-plan { margin: 4px 0 2px; padding-left: 18px; font-size: 11px; color: var(--text); }
+  .ow-cond-plan > li { margin: 1px 0; }
+  .ow-cond-plan code { font-size: 10px; padding: 0 3px; border: 1px solid var(--border); border-radius: 3px; }
+  .ow-cond-plan-file, .ow-cond-plan-after { color: var(--muted); }
+
+  .ow-cond-setting {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--muted);
+    flex-wrap: wrap;
+  }
+  .ow-cond-setting .ow-cond-secs { width: 72px; flex: none; }
+  .ow-cond-hint { color: var(--muted); }
+  /* Two buttons side by side in the steps header: Add step, and Decompose. */
+  .ow-cond-step-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+  /* Header row for the events pane: label on the left, Clear chat on the right. */
+  .ow-cond-events-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  /* The per-goal worker list: one row per session, with its own Remove. */
+  .ow-cond-workers { margin: 6px 0 0; display: flex; flex-direction: column; gap: 4px; }
+  .ow-cond-workers-head { color: var(--muted); font-size: 11px; }
+  .ow-cond-worker { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .ow-cond-worker-rows { color: var(--muted); margin-left: auto; white-space: nowrap; }
+
+  /* A closed step reads as done at a glance without needing the chip. */
+  .ow-cond-plan > li[data-closed] { color: var(--muted); text-decoration: line-through; }
+
   .ow-goal-flag {
     flex: none; margin-left: auto; padding: 1px 8px; border-radius: 999px;
     font-size: 11px; font-weight: 600; white-space: nowrap;

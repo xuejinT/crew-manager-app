@@ -18,6 +18,7 @@ import {
   Users,
   Zap as Workflow,
 } from 'lucide-react'
+import { ConductorPanel } from './conductor'
 import { useAppApi, useNavigate, useNavBadge, ChatEmbed } from '@kirocrew/app-sdk'
 import {
   Badge,
@@ -2552,6 +2553,16 @@ export default function CrewOverviewApp() {
                 </nav>
               <main className="ow-work">
                 <div className="ow-work-inner">
+              {/* Goal automation sits with the work list rather than in the chat
+                  column: this is where the operator already reads what is going
+                  on, so declaring, planning and arming a goal belongs here. The
+                  chat column keeps the narration and the event stream. Always
+                  open — it was a <details> once, and hiding the controls behind a
+                  disclosure made the operator click twice for the thing they came
+                  for. */}
+              <section className="ow-cond-inline" aria-label="Automation">
+                <ConductorPanel api={api} view="goals" />
+              </section>
               {sourcesLoading
                 ? <ContentSkeleton rows={7} />
                 : sourcesError && !sources
@@ -2818,6 +2829,19 @@ export default function CrewOverviewApp() {
                 {!quoted && <span className="ow-conductor-sub">select work, or ask across all</span>}
               </div>
             </div>
+
+            {/* Automation controls sit ABOVE the chat, in the column already
+                called Conductor: the chat explains what the driver did, and these
+                are how you arm it, declare what it should pursue, and read the
+                events. Collapsed by default so the chat keeps the column's height
+                until the operator wants the controls. */}
+            <details className="ow-cond-shell">
+              <summary className="ow-cond-summary">
+                <ChevronRight className="ow-icon ow-stack-chevron" />
+                Conductor events
+              </summary>
+              <ConductorPanel api={api} view="events" />
+            </details>
 
             <div className="ow-chat">
               {conductorAvailable
