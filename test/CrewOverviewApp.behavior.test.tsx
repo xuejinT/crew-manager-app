@@ -81,15 +81,13 @@ describe('Crew Manager Conductor boundaries', () => {
     expect(screen.queryByText('Workspace overview')).not.toBeInTheDocument()
   })
 
-  it('opens a session only through the one Open button on its title', async () => {
+  it('opens a session through its clickable name, not a separate Open button', async () => {
     renderApp()
-    await screen.findByTestId('work-item-session:session-1')
+    const card = await screen.findByTestId('work-item-session:session-1')
 
-    // Exactly one visible way in per session header, and it is a button rather
-    // than a hit area behind text that reads as a label.
-    const opens = screen.getAllByRole('button', { name: /^Open / })
-    expect(opens.length).toBeGreaterThan(0)
-    expect(document.querySelectorAll('.ow-block-open').length).toBe(opens.length)
+    // The old standalone "Open" button is gone; the session name is the way in.
+    expect(document.querySelector('.ow-block-open')).toBeNull()
+    expect(card.querySelector('.ow-card-name')).not.toBeNull()
   })
 
   it('carries no action button on the work item itself', async () => {
@@ -161,7 +159,7 @@ describe('Crew Manager Conductor boundaries', () => {
     fireEvent.click(await screen.findByTestId('work-item-session:session-1'))
 
     await waitFor(() => {
-      expect(document.querySelector('.ow-row .ow-formal-approval')).not.toBeNull()
+      expect(document.querySelector('.ow-sessioncard .ow-formal-approval')).not.toBeNull()
     })
     const card = within(document.querySelector('.ow-formal-approval') as HTMLElement)
     expect(card.getByText('Waiting for approval')).toBeInTheDocument()
@@ -182,7 +180,7 @@ describe('Crew Manager Conductor boundaries', () => {
     // The click must not bubble into the row's select toggle: the card stays
     // selected and expanded instead of collapsing out from under the decision.
     expect(screen.getByTestId('work-item-session:session-1')).toHaveAttribute('aria-pressed', 'true')
-    expect(document.querySelector('.ow-row .ow-formal-approval')).not.toBeNull()
+    expect(document.querySelector('.ow-sessioncard .ow-formal-approval')).not.toBeNull()
   })
 
   it('the approval is asked in one place: the expanded card', async () => {
@@ -223,8 +221,8 @@ describe('Crew Manager Conductor boundaries', () => {
     renderApp()
     await screen.findByTestId('work-item-session:session-3')
 
-    // The response used to be a terse verb pill ("Unblock"); it now reads as a
-    // lane state badge ("Needs you"), with no lane-head badge at all.
+    // The card leads with a "Needs you" state pill (.ow-rowstate), and never an
+    // "Issue" badge — the red change no longer promotes itself into a badge.
     await waitFor(() => {
       expect(document.querySelector('.ow-rowstate')?.textContent).toContain('Needs you')
     })
@@ -906,42 +904,61 @@ describe('a work card accounts for the goal it stands for', () => {
 
   const rowId = 'work-item-intent:session-2:0'
 
-  it('renders all three sections with their content once the row is expanded', async () => {
+  it('leads the card with a status pill and the goal title', async () => {
     withFullIntent()
     renderApp()
 
-    const row = await screen.findByTestId(rowId)
-    fireEvent.click(row)
-
-    // "You asked for" -- the ORIGINAL request, verbatim, quoted rather than
-    // paraphrased. Before this it reached the model only as a last-resort
-    // fallback for the one-line summary.
-    expect(within(row).getByText('You asked for')).toBeInTheDocument()
-    expect(within(row).getByText(ASK)).toBeInTheDocument()
-    expect(row.querySelector('.ow-detail-quote')?.textContent).toBe(ASK)
-
-    // "Where it stands" -- every progress fact, as a list. This is the payload
-    // the card used to discard entirely.
-    expect(within(row).getByText('Where it stands')).toBeInTheDocument()
-    for (const fact of FACTS) expect(within(row).getByText(fact)).toBeInTheDocument()
-    expect(row.querySelectorAll('.ow-detail-facts li')).toHaveLength(FACTS.length)
-
-    // "Suggested next" -- three tiers of one suggestion, all three present.
-    expect(within(row).getByText('Suggested next')).toBeInTheDocument()
-    expect(within(row).getByText(STEP.what)).toBeInTheDocument()
-    expect(within(row).getByText(STEP.why)).toBeInTheDocument()
-    expect(within(row).getByText(STEP.expect)).toBeInTheDocument()
+    const card = await screen.findByTestId(rowId)
+    // A status pill (not a roll-up), the goal title, and a clickable session name.
+    expect(within(card).getByText('Needs you')).toBeInTheDocument()
+    expect(within(card).getByText('Restyle the work cards')).toBeInTheDocument()
+    expect(card.querySelector('.ow-card-name')).not.toBeNull()
   })
 
-  it('keeps the resting row compact and says so, revealing nothing until asked', async () => {
-    /*
-     * TWO intents, and this asserts on the SECOND.
-     *
-     * The board now opens the first card of Needs you by itself, so the first row
-     * is no longer a witness for "reveals nothing until asked" -- it is the one
-     * deliberate exception. The property still holds for every other row, which
-     * is what this pins; the exception is pinned separately below.
-     */
+  it('leads with the newest-turn goal; older goals sit behind Show more', async () => {
+    withIntents([
+      { title: 'Older thing', initial_intent: ASK, progress: FACTS, state: 'needs-you', verified: false, last_touched_turn: 3 },
+      { title: 'Newest thing', initial_intent: ASK, progress: FACTS, state: 'needs-you', verified: false, last_touched_turn: 9 },
+    ])
+    renderApp()
+
+    // The card IS the newest goal (:1); the older (:0) is not its own card — it
+    // lives behind the card's Show more.
+    const card = await screen.findByTestId('work-item-intent:session-2:1')
+    expect(within(card).getByText('Newest thing')).toBeInTheDocument()
+    expect(screen.queryByTestId('work-item-intent:session-2:0')).toBeNull()
+
+    fireEvent.click(screen.getByText('Show more'))
+    expect(await screen.findByTestId('work-item-intent:session-2:0')).toBeInTheDocument()
+  })
+
+  it('shows summary + first step on the card, ask + progress behind Show more', async () => {
+    withFullIntent()
+    renderApp()
+
+    const card = await screen.findByTestId(rowId)
+
+    // On the card at rest: the first suggested step (what + why) and a progress
+    // summary line.
+    expect(within(card).getByText(STEP.what)).toBeInTheDocument()
+    expect(within(card).getByText(STEP.why)).toBeInTheDocument()
+    expect(card.querySelector('.ow-card-summary')).not.toBeNull()
+
+    // "You asked for" + "Where it stands" are behind Show more, in the expanded
+    // section (a sibling of the card, so queried at screen level).
+    expect(screen.queryByText('You asked for')).toBeNull()
+    fireEvent.click(screen.getByText('Show more'))
+
+    expect(await screen.findByText('You asked for')).toBeInTheDocument()
+    expect(screen.getByText(ASK)).toBeInTheDocument()
+    expect(document.querySelector('.ow-detail-quote')?.textContent).toBe(ASK)
+
+    expect(screen.getByText('Where it stands')).toBeInTheDocument()
+    for (const fact of FACTS) expect(screen.getByText(fact)).toBeInTheDocument()
+    expect(document.querySelectorAll('.ow-detail-facts li')).toHaveLength(FACTS.length)
+  })
+
+  it('keeps ask + progress behind Show more; the first step leads the card', async () => {
     withIntents([
       {
         title: 'Restyle the work cards',
@@ -964,26 +981,18 @@ describe('a work card accounts for the goal it stands for', () => {
     ])
     renderApp()
 
-    const row = await screen.findByTestId('work-item-intent:session-2:1')
+    const card = await screen.findByTestId('work-item-intent:session-2:0')
 
-    // The board answers "what needs me now" by being scannable. None of the
-    // three sections may cost a row anything before it is picked.
-    expect(within(row).queryByText('You asked for')).toBeNull()
-    expect(within(row).queryByText('Where it stands')).toBeNull()
-    expect(within(row).queryByText('Suggested next')).toBeNull()
-    expect(within(row).queryByText(SECOND_ASK)).toBeNull()
-    expect(row.querySelector('.ow-row-detail')).toBeNull()
+    // Ask + progress are not on the resting card — they live behind Show more.
+    expect(within(card).queryByText('You asked for')).toBeNull()
+    expect(within(card).queryByText(ASK)).toBeNull()
 
-    // Reachable and labelled, and honest about being closed: a row that hides
-    // detail must announce that it has detail to hide.
-    expect(row).toHaveAttribute('aria-label', 'Second thing')
-    expect(row).toHaveAttribute('aria-expanded', 'false')
-    expect(row).toHaveAttribute('tabindex', '0')
+    // The first suggested step leads the card, clickable.
+    expect(within(card).getByText(STEP.what)).toBeInTheDocument()
 
-    // The turn stays on the resting row, and it is ONE number. `last_touched_turn`
-    // is the only turn datum the payload carries, so a span would be invented.
-    expect(within(row).getByText('turn 7')).toBeInTheDocument()
-    expect(row.textContent).not.toMatch(/turns \d/)
+    // The card is a labelled, focusable, selectable control.
+    expect(card).toHaveAttribute('aria-label', 'Restyle the work cards')
+    expect(card).toHaveAttribute('tabindex', '0')
   })
 
   it('opens nothing when the first card has no account to give', async () => {
@@ -1053,18 +1062,18 @@ describe('a work card accounts for the goal it stands for', () => {
     expect(detail?.textContent).not.toMatch(/[{}]/)
   })
 
-  it('expands and collapses on the same affordance', async () => {
+  it('expands and collapses on the Show more toggle', async () => {
     withFullIntent()
     renderApp()
 
-    const row = await screen.findByTestId(rowId)
-    fireEvent.click(row)
-    expect(row).toHaveAttribute('aria-expanded', 'true')
-    expect(within(row).getByText('Where it stands')).toBeInTheDocument()
+    await screen.findByTestId(rowId)
+    expect(screen.queryByText('Where it stands')).toBeNull()
 
-    fireEvent.click(row)
-    expect(row).toHaveAttribute('aria-expanded', 'false')
-    expect(within(row).queryByText('Where it stands')).toBeNull()
+    fireEvent.click(screen.getByText('Show more'))
+    expect(await screen.findByText('Where it stands')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Show less'))
+    await waitFor(() => expect(screen.queryByText('Where it stands')).toBeNull())
   })
 
   it('drops a section it has no data for, label and rule together', async () => {
@@ -1078,18 +1087,18 @@ describe('a work card accounts for the goal it stands for', () => {
     }])
     renderApp()
 
-    const row = await screen.findByTestId(rowId)
-    fireEvent.click(row)
+    const card = await screen.findByTestId(rowId)
+    const scope = card.closest('.ow-block') as HTMLElement
+    fireEvent.click(screen.getByText('Show more'))
+    await within(scope).findByText('You asked for')
 
-    expect(within(row).getByText('You asked for')).toBeInTheDocument()
-    // No empty labelled section, and therefore no rule hanging over a gap: the
-    // rule is drawn by the label, so an absent section takes its rule with it.
-    expect(within(row).queryByText('Where it stands')).toBeNull()
-    expect(within(row).queryByText('Suggested next')).toBeNull()
-    expect(row.querySelectorAll('.ow-detail')).toHaveLength(1)
-    expect(row.querySelectorAll('.ow-detail-label')).toHaveLength(1)
-    expect(row.querySelectorAll('.ow-detail-facts')).toHaveLength(0)
-    expect(row.querySelectorAll('.ow-detail-step')).toHaveLength(0)
+    // No empty labelled section, and therefore no rule hanging over a gap: only
+    // "You asked for" renders — no "Where it stands", no steps.
+    expect(within(scope).queryByText('Where it stands')).toBeNull()
+    expect(scope.querySelectorAll('.ow-detail')).toHaveLength(1)
+    expect(scope.querySelectorAll('.ow-detail-label')).toHaveLength(1)
+    expect(scope.querySelectorAll('.ow-detail-facts')).toHaveLength(0)
+    expect(scope.querySelectorAll('.ow-card-step')).toHaveLength(0)
   })
 
   it('renders no detail block at all for an intent carrying none of the three', async () => {
@@ -1112,7 +1121,7 @@ describe('a work card accounts for the goal it stands for', () => {
     expect(row.querySelectorAll('.ow-detail-label')).toHaveLength(0)
   })
 
-  it('still picks a step from inside the section, and still caps how many show', async () => {
+  it('shows the session steps on the card, capped, and picks one on click', async () => {
     withIntents([{
       title: 'Restyle the work cards',
       initial_intent: ASK,
@@ -1129,21 +1138,23 @@ describe('a work card accounts for the goal it stands for', () => {
     }])
     renderApp()
 
-    const row = await screen.findByTestId(rowId)
-    fireEvent.click(row)
+    const card = await screen.findByTestId(rowId)
+    // The first suggested step leads the card; the rest sit behind Show more.
+    expect(within(card).getByText(STEP.what)).toBeInTheDocument()
+    expect(card.querySelectorAll('.ow-card-step')).toHaveLength(1)
+    expect(screen.queryByText('Fourth suggestion')).toBeNull()
 
-    // The cap survives the restyle: three shown, the rest behind the toggle.
-    expect(row.querySelectorAll('.ow-detail-step')).toHaveLength(3)
-    expect(within(row).queryByText('Fourth suggestion')).toBeNull()
-    fireEvent.click(within(row).getByRole('button', { name: '+1 more' }))
-    expect(row.querySelectorAll('.ow-detail-step')).toHaveLength(4)
+    fireEvent.click(screen.getByText('Show more'))
+    await screen.findByText('Fourth suggestion')
+    // All four steps now render (one on the card, three in the expanded section).
+    expect(document.querySelectorAll('.ow-card-step')).toHaveLength(4)
 
-    // And so does the picking affordance: the block is the button.
-    fireEvent.click(within(row).getByText(STEP.what))
+    // The block is the button: picking a step hands it to the Conductor.
+    fireEvent.click(within(card).getByText(STEP.what))
     await waitFor(() => {
       expect(appSdkMocks.post).toHaveBeenCalledWith('/api/chat', {
         message: STEP.what,
-        slot: 'session-2',
+        slot: 'crew-manager-conductor',
       })
     })
   })

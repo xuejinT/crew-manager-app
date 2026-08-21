@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import {
   AlertTriangle as AlertCircle,
+  ArrowRight,
   Bot,
   Check,
   ChevronRight,
@@ -33,6 +34,7 @@ import type {
   CronRun,
   MonitorLoop,
   SessionSummary,
+  SummaryNextStep,
   ErrorLoopFinding,
   StallFinding,
   StallReport,
@@ -710,6 +712,7 @@ function WorkRow({
   onHandled,
   compact,
   headless,
+  showBadge = true,
   onDecideApproval,
 }: {
   item: WorkItem
@@ -717,6 +720,9 @@ function WorkRow({
   compact?: boolean
   /** The card header already states this row's badge+title — do not repeat. */
   headless?: boolean
+  /** Show the per-row state badge. Off on single-state cards, where the card's
+   *  roll-up line carries the state instead. */
+  showBadge?: boolean
   /** Answer the formal approval card inside this row. */
   onDecideApproval?: (item: WorkItem, action: string) => void
   onAnswerPermission?: (id: string, approve: boolean) => void
@@ -744,7 +750,6 @@ function WorkRow({
   onSelect: () => void
   onOpenSession: (slot: string) => void
 }) {
-  const [showAllSteps, setShowAllSteps] = useState(false)
   /*
    * What this card can reveal. Computed up front because it decides three
    * separate things: whether the row claims to be expandable at all
@@ -757,9 +762,9 @@ function WorkRow({
   const askedFor = item.initialIntent?.trim()
   // Steps are the picker: without a handler there is nothing to pick, which is
   // the condition this block has always had.
-  const hasSteps = Boolean(onPickStep) && detailSteps.length > 0
-  const hasDetail = Boolean(askedFor) || progressFacts.length > 0 || hasSteps
-  const shownSteps = showAllSteps ? detailSteps : detailSteps.slice(0, MAX_QUOTE_STEPS)
+  // Steps show at the card level now (under the recap), so they don't count
+  // toward what EXPANDING a row reveals.
+  const hasDetail = Boolean(askedFor) || progressFacts.length > 0
   const badge = stateBadge(item)
   /*
    * ONE number, never a span. The platform records `last_touched_turn` per goal
@@ -829,9 +834,9 @@ function WorkRow({
           </div>
           {/* Status line: the state badge, then the one-line reason — the
               why-you-must-act line on needs-you rows, otherwise the goal summary. */}
-          {(badge || statusText) && (
+          {((showBadge && badge) || statusText) && (
             <div className="ow-row-status">
-              {badge}
+              {showBadge && badge}
               {statusText && <span className="ow-row-statustext">{statusText}</span>}
             </div>
           )}
@@ -956,40 +961,6 @@ function WorkRow({
               </ul>
             </DetailSection>
           )}
-          {hasSteps && (
-            <DetailSection label={workCopy('card_suggested_next')}>
-              {shownSteps.map((step, index) => (
-                <button
-                  type="button"
-                  key={`${index}:${step.what}`}
-                  className="ow-quote-step ow-detail-step"
-                  title={step.why ?? step.what}
-                  onClick={event => {
-                    // Selection already happened; picking a step must not re-toggle it.
-                    event.stopPropagation()
-                    onPickStep?.(step.what)
-                  }}
-                >
-                  {/* Three tiers, loudest first: the action, then why it is
-                      being suggested, then what it should leave behind. */}
-                  <span className="ow-detail-step-what">{step.what}</span>
-                  {step.why && <span className="ow-detail-step-why">{step.why}</span>}
-                  {step.expect && <span className="ow-detail-step-expect">{step.expect}</span>}
-                </button>
-              ))}
-              {detailSteps.length > MAX_QUOTE_STEPS && (
-                <button
-                  type="button"
-                  className="ow-steps-more"
-                  onClick={event => { event.stopPropagation(); setShowAllSteps(show => !show) }}
-                >
-                  {showAllSteps
-                    ? 'Show fewer'
-                    : `+${detailSteps.length - MAX_QUOTE_STEPS} more`}
-                </button>
-              )}
-            </DetailSection>
-          )}
         </div></Expand>
       )}
       {/*
@@ -1031,10 +1002,8 @@ function WorkRow({
       )}
       {/*
         Management, not response: taking the item OUT of the queue. On hover (and
-        keyboard focus), not on select — deferring something you are scanning past
-        should not require entering the quote mode first. Response actions still
-        expand on select, above; these float over the row's top-right corner so
-        the resting card stays clean.
+        keyboard focus), not on select. Floats over the row's top-right corner so
+        the resting row stays clean.
       */}
       {item.state === 'needs-you' && onSnooze && onHandled && (
         <div className="ow-row-aside">
@@ -1047,8 +1016,6 @@ function WorkRow({
 }
 
 type LaneKey = 'unblock' | 'followup' | 'running' | 'done'
-const LANE_ORDER: LaneKey[] = ['unblock', 'followup', 'running', 'done']
-
 function laneKeyOf(item: WorkItem): LaneKey {
   if (item.state === 'done') return 'done'
   if (item.state === 'running') return 'running'
@@ -1092,48 +1059,49 @@ function SessionLanes({
   doneTitles?: string[]
 }) {
   const [showDone, setShowDone] = useState(false)
-  const byLane = new Map<LaneKey, WorkItem[]>()
-  for (const item of items) {
-    const key = laneKeyOf(item)
-    const list = byLane.get(key)
-    if (list) list.push(item)
-    else byLane.set(key, [item])
-  }
+  // Needs-you items lead, ranked latest-turn first, then running, then done.
+  // All of them list as compact rows — the roll-up above says how many there are.
+  const needsYou = [...items]
+    .filter(i => i.state === 'needs-you')
+    .sort((a, b) => (b.lastTouchedTurn ?? 0) - (a.lastTouchedTurn ?? 0))
+  const running = items.filter(i => i.state === 'running')
+  const done = items.filter(i => i.state === 'done')
+
+  const renderRow = (item: WorkItem) => (
+    <WorkRow
+      key={item.id}
+      item={item}
+      compact
+      showBadge={false}
+      selected={selectedId === item.id}
+      continuation
+      whyRanked={item.state === 'needs-you' && item.action !== 'resume'
+        ? explainRank(rankWorkItem(item), workCopy)
+        : undefined}
+      onSelect={() => onSelect(item)}
+      onOpenSession={onOpenSession}
+      onAnswerPermission={onAnswerPermission}
+      onDecideApproval={onDecideApproval}
+      permissionBusy={permissionBusy}
+      onRetry={onRetry}
+      retryBusy={retryBusy}
+      onPickStep={onPickStep}
+      onSnooze={onSnooze}
+      onHandled={onHandled}
+    />
+  )
+
   return (
     <>
-      {LANE_ORDER.filter(key => byLane.has(key)).map(laneKey => {
-        const laneItems = byLane.get(laneKey) as WorkItem[]
-        return (
-          <div className="ow-lane" key={laneKey}>
-            {laneItems.map(item => (
-              <WorkRow
-                key={item.id}
-                item={item}
-                compact
-                selected={selectedId === item.id}
-                continuation
-                whyRanked={item.state === 'needs-you' && item.action !== 'resume'
-                  ? explainRank(rankWorkItem(item), workCopy)
-                  : undefined}
-                onSelect={() => onSelect(item)}
-                onOpenSession={onOpenSession}
-                onAnswerPermission={onAnswerPermission}
-                onDecideApproval={onDecideApproval}
-                permissionBusy={permissionBusy}
-                onRetry={onRetry}
-                retryBusy={retryBusy}
-                onPickStep={onPickStep}
-                onSnooze={onSnooze}
-                onHandled={onHandled}
-              />
-            ))}
-          </div>
-        )
-      })}
+      {needsYou.length > 0 && (
+        <div className="ow-lane">{needsYou.map(renderRow)}</div>
+      )}
+      {running.length > 0 && <div className="ow-lane">{running.map(renderRow)}</div>}
+      {done.length > 0 && <div className="ow-lane">{done.map(renderRow)}</div>}
       {/* This session's finished goals. They are their own items in Done, but the
           card is where you judge what is LEFT — so the ledger is offered here,
           collapsed, rather than making you open another section to see it. */}
-      {!byLane.has('done') && doneTitles && doneTitles.length > 0 && (
+      {done.length === 0 && doneTitles && doneTitles.length > 0 && (
         <div className="ow-lane ow-lane-done">
           <button
             type="button"
@@ -1159,6 +1127,217 @@ function SessionLanes({
     </>
   )
 }
+/**
+ * One session as a single card: a status / clickable-name / last-active / turns
+ * headline, the PRs it touches, the latest goal's summary and its first next step.
+ * Everything else — the rest of the steps, the ask + progress, the other goals —
+ * lives behind the expand.
+ */
+function SessionCard({
+  items,
+  doneTitles,
+  selectedId,
+  onSelect,
+  onOpenSession,
+  onAnswerPermission,
+  onDecideApproval,
+  permissionBusy,
+  onRetry,
+  retryBusy,
+  onPickStep,
+  onSnooze,
+  onHandled,
+}: {
+  items: WorkItem[]
+  doneTitles?: string[]
+  selectedId: string | null
+  onSelect: (item: WorkItem) => void
+  onOpenSession: (slot: string) => void
+  onAnswerPermission?: (id: string, approve: boolean) => void
+  onDecideApproval?: (item: WorkItem, action: string) => void
+  permissionBusy?: boolean
+  onRetry?: (path: string) => void
+  retryBusy?: boolean
+  onPickStep?: (what: string) => void
+  onSnooze?: (id: string) => void
+  onHandled?: (id: string, updatedAt: number) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  // The latest-touched goal is the card's headline; the rest sit behind expand.
+  const ordered = [...items].sort((a, b) => (b.lastTouchedTurn ?? 0) - (a.lastTouchedTurn ?? 0))
+  const lead = ordered[0]
+  const rest = ordered.slice(1)
+  const slot = lead.sessionKey as string
+
+  // The status pill reflects the whole session: what you owe first, then motion.
+  const statusItem = items.find(item => item.state === 'needs-you')
+    ?? items.find(item => item.state === 'running')
+    ?? lead
+
+  const comp = goalComposition(items)
+  const name = lead.references.find(ref => ref.kind === 'session')?.label ?? lead.provenance
+  const active = sinceLabel(comp.lastActivityAt)
+  const turns = lead.sessionTurns
+    ? `${lead.sessionTurns} ${lead.sessionTurns === 1 ? 'turn' : 'turns'}`
+    : null
+  const metaParts = [active, turns].filter(Boolean) as string[]
+
+  // Every PR/issue the session touches — the whole set, not just the ones this
+  // one intent's text happens to name — deduped, each with its own status.
+  const prRefs: WorkReference[] = []
+  const seen = new Set<string>()
+  for (const ref of lead.sessionChanges ?? []) {
+    if (ref.url && !seen.has(ref.url)) {
+      seen.add(ref.url)
+      prRefs.push(ref)
+    }
+  }
+
+  // The latest goal's story: progress punctuated and capped at two sentences.
+  const prose = (lead.progress ?? [])
+    .map(entry => entry.trim())
+    .filter(Boolean)
+    .map(entry => (/[.!?]$/.test(entry) ? entry : `${entry}.`))
+    .join(' ')
+  const summaryProse = prose
+    ? prose.split(/(?<=[.!?])\s+/).filter(s => s.trim()).slice(0, 2).join(' ')
+    : ''
+  const steps = (lead.nextSteps ?? []).filter(step => step.what?.trim())
+  const askedFor = lead.initialIntent?.trim()
+  const facts = (lead.progress ?? []).filter(entry => entry.trim())
+  const hasMore = steps.length > 1 || Boolean(askedFor) || facts.length > 0 || rest.length > 0
+
+  const renderStep = (step: SummaryNextStep, key: string) => (
+    <button
+      type="button"
+      key={key}
+      className="ow-card-step"
+      title={step.why ?? step.what}
+      onClick={event => { event.stopPropagation(); onPickStep?.(step.what) }}
+    >
+      <ArrowRight className="ow-icon ow-card-step-arrow" aria-hidden="true" />
+      <span className="ow-card-step-body">
+        <span className="ow-card-step-what">{step.what}</span>
+        {step.why && <span className="ow-card-step-why">{step.why}</span>}
+      </span>
+    </button>
+  )
+
+  const selected = selectedId === lead.id
+
+  return (
+    <>
+    <Clickable
+      className="ow-sessioncard"
+      onActivate={() => onSelect(lead)}
+      aria-label={lead.title}
+      aria-pressed={selected}
+      data-selected={selected ? 'true' : undefined}
+      data-testid={`work-item-${lead.id}`}
+    >
+      <div className="ow-card-top">
+        {stateBadge(statusItem)}
+        <span className="ow-card-meta">
+          <button
+            type="button"
+            className="ow-card-name"
+            onClick={event => { event.stopPropagation(); onOpenSession(slot) }}
+          >
+            {name}
+          </button>
+          {metaParts.map(part => <span key={part} className="ow-card-metapart">{part}</span>)}
+        </span>
+      </div>
+      <h3 className="ow-card-title">{lead.title}</h3>
+      {prRefs.length > 0 && (
+        <div className="ow-card-prs">
+          {prRefs.map(ref => (
+            <a
+              key={ref.id}
+              className="ow-card-pr"
+              data-status={ref.status || undefined}
+              href={ref.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={event => event.stopPropagation()}
+            >
+              {ref.label}
+              {ref.status && <span className="ow-card-pr-status"> · {ref.status}</span>}
+            </a>
+          ))}
+        </div>
+      )}
+      {summaryProse && <p className="ow-card-summary">{summaryProse}</p>}
+      {steps[0] && renderStep(steps[0], `0:${steps[0].what}`)}
+      {/* A permission item is answered in the formal approval card, expanded on
+          the selected card — the same anatomy as the row-era placement. */}
+      {selected && lead.permissionId && onDecideApproval && (
+        <Expand><FormalApproval
+          item={lead}
+          busy={Boolean(permissionBusy)}
+          onDecide={action => onDecideApproval(lead, action)}
+        /></Expand>
+      )}
+      {hasMore && (
+        <button
+          type="button"
+          className="ow-goals-toggle"
+          aria-expanded={expanded}
+          onClick={event => { event.stopPropagation(); setExpanded(show => !show) }}
+        >
+          <ChevronRight className="ow-icon" data-open={expanded ? 'true' : undefined} aria-hidden="true" />
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+      {/* Hover-only, like the rows: Later sets it aside, Already done clears it. */}
+      {lead.state === 'needs-you' && onSnooze && onHandled && (
+        <div className="ow-row-aside">
+          <button type="button" className="ow-aside-btn" onClick={event => { event.stopPropagation(); onSnooze(lead.id) }}>Later</button>
+          <button type="button" className="ow-aside-btn" onClick={event => { event.stopPropagation(); onHandled(lead.id, lead.updatedAt) }}>Already done</button>
+        </div>
+      )}
+    </Clickable>
+      {/* Expanded content sits OUTSIDE the clickable card: hovering or clicking the
+          rest of the goals is their own target, not the card's. */}
+      {expanded && (
+        <div className="ow-card-expanded">
+          {steps.slice(1).map((step, index) => renderStep(step, `${index + 1}:${step.what}`))}
+          {askedFor && (
+            <DetailSection label={workCopy('card_asked_for')}>
+              <blockquote className="ow-detail-quote">{askedFor}</blockquote>
+            </DetailSection>
+          )}
+          {facts.length > 0 && (
+            <DetailSection label={workCopy('card_where_it_stands')}>
+              <ul className="ow-detail-facts">
+                {facts.map((fact, index) => <li key={`${index}:${fact}`}>{fact}</li>)}
+              </ul>
+            </DetailSection>
+          )}
+          {rest.length > 0 && (
+            <SessionLanes
+              items={rest}
+              doneTitles={doneTitles}
+              selectedId={selectedId}
+              onSelect={onSelect}
+              onOpenSession={onOpenSession}
+              onAnswerPermission={onAnswerPermission}
+              onDecideApproval={onDecideApproval}
+              permissionBusy={permissionBusy}
+              onRetry={onRetry}
+              retryBusy={retryBusy}
+              onPickStep={onPickStep}
+              onSnooze={onSnooze}
+              onHandled={onHandled}
+            />
+          )}
+        </div>
+      )}
+    </>
+  )
+}
+
 
 function WorkSection({
   title,
@@ -1218,29 +1397,24 @@ function WorkSection({
   hideHeader?: boolean
   emptyLabel: string
 }) {
-  const blocks = clusterBy(items)
+  // Cards ordered by last update, most recent first — a session's freshest item
+  // dates the card.
+  const blocks = clusterBy(items).sort((a, b) =>
+    Math.max(...b.items.map(item => item.updatedAt)) - Math.max(...a.items.map(item => item.updatedAt)),
+  )
 
   const renderBlock = (block: WorkBlock) => {
     return (
       <div
         key={block.key}
         className={`ow-block${block.header === 'session' ? ' ow-goalcard' : ''}`}
-        // Every card that belongs to a session gets the header, whether it holds
-        // one row or five. One row is not a different KIND of thing.
         data-grouped={block.header ? 'true' : undefined}
         data-open={block.header === 'session' ? 'true' : undefined}
       >
-        {block.header === 'session' && block.sessionKey && (
-          <SessionBlockHeader
-            item={block.items[0]}
+        {block.header === 'session' && block.sessionKey ? (
+          <SessionCard
             items={block.items}
-            onOpen={() => onOpenSession(block.sessionKey as string)}
-          />
-        )}
-        {block.header === 'session' ? (
-          <SessionLanes
-            items={block.items}
-            doneTitles={block.sessionKey ? doneBySession?.[block.sessionKey] : undefined}
+            doneTitles={doneBySession?.[block.sessionKey]}
             selectedId={selectedId}
             onSelect={onSelect}
             onOpenSession={onOpenSession}

@@ -285,19 +285,19 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-row[data-lane='running'] { box-shadow: inset 3px 0 0 var(--accent); }
   .ow-row[data-lane='done'] { box-shadow: inset 3px 0 0 var(--ok); }
   .ow-row:hover { border-color: var(--border-strong); background: var(--bg-hover); }
-  .ow-row:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
-  .ow-row[data-selected='true'] {
-    border-color: var(--accent);
-    background: var(--aim-subtle);
-    box-shadow: inset 3px 0 0 var(--accent);
-  }
+  /* Focus ring via outline, not box-shadow, so it never replaces the lane rail.
+     Keyboard-focus only; a mouse click to select shows nothing. */
+  .ow-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* Selection recolours nothing on the row — the expanded detail and the
+     Conductor quote are the feedback, so the rail and edges never change. */
   .ow-row-layout { display: flex; align-items: flex-start; gap: 12px; }
   .ow-row-content { min-width: 0; flex: 1; }
   /* Title line. The chevron is pushed to the trailing edge by the title's own
      flex growth, so it lands in the same place on every card. */
   .ow-row-heading { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
-  .ow-row-chevron { margin-top: 3px; color: var(--muted); transition: transform 140ms ease; }
+  .ow-row-chevron { flex: none; margin-top: 3px; color: var(--muted); transition: transform 140ms ease, color 140ms ease; }
   .ow-row-chevron[data-expanded='true'] { transform: rotate(90deg); }
+  .ow-row:hover .ow-row-chevron { color: var(--text-strong); }
   /* Status line (option B): the state badge, then the one-line reason. */
   .ow-row-status { display: flex; min-width: 0; align-items: center; gap: 8px; margin-top: 6px; }
   .ow-row-statustext {
@@ -740,6 +740,65 @@ export const OVERWATCH_STYLES = String.raw`
     background: var(--bg-hover);
   }
   .ow-goal-meta { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+  /* --- Session card: one session = one card (status/name/turns, PRs, latest
+     goal summary + first next step, everything else behind expand). --- */
+  .ow-sessioncard {
+    position: relative; display: flex; flex-direction: column;
+    padding: 8px 10px; margin: -8px -10px 0; border-radius: 6px;
+    cursor: pointer; outline: none;
+  }
+  /* No hover background: the enclosing .ow-block[data-grouped] is ALREADY the
+     card, so filling it on hover read as the whole session container being the
+     target. Hover only reveals the aside; selection gets a contained tint. NOTE:
+     this must NOT be named .ow-card — that is the app's generic panel card
+     (border + --card bg), which drew a second frame line inside the container. */
+  .ow-sessioncard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ow-sessioncard[data-selected='true'] { background: var(--aim-subtle); }
+  .ow-sessioncard:hover .ow-row-aside,
+  .ow-sessioncard:focus-within .ow-row-aside { opacity: 1; pointer-events: auto; }
+  .ow-card-top { display: flex; align-items: center; gap: 8px; }
+  .ow-card-meta {
+    margin-left: auto; display: flex; align-items: center; gap: 6px;
+    min-width: 0; color: var(--muted); font-size: 12px;
+  }
+  .ow-card-meta > * + *::before { content: '·'; margin-right: 6px; color: var(--border); }
+  .ow-card-name {
+    padding: 0; border: 0; background: none; font: inherit; font-size: 12px;
+    color: var(--muted); font-weight: 500; max-width: 240px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+  }
+  .ow-card-name:hover { color: var(--accent); text-decoration: underline; }
+  .ow-card-metapart { white-space: nowrap; }
+  .ow-card-title { margin: 8px 0 0; color: var(--text-strong); font-size: 16px; font-weight: 600; line-height: 1.3; }
+  .ow-card-prs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
+  .ow-card-pr {
+    display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px;
+    font-size: 12px; color: var(--text); background: var(--bg-hover);
+    border: 1px solid var(--border); text-decoration: none; white-space: nowrap;
+  }
+  .ow-card-pr:hover { border-color: var(--border-strong); }
+  .ow-card-pr-status { color: var(--muted); }
+  .ow-card-pr[data-status='merged'] { color: var(--ok); background: var(--ok-subtle, rgba(52,211,153,.12)); border-color: transparent; }
+  .ow-card-pr[data-status='merged'] .ow-card-pr-status { color: var(--ok); }
+  .ow-card-pr[data-status='checks running'] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .ow-card-pr[data-status='checks running'] .ow-card-pr-status { color: var(--accent); }
+  .ow-card-pr[data-status='checks failing'], .ow-card-pr[data-status='conflict'] { color: var(--warn); background: var(--warn-subtle, rgba(251,191,36,.12)); border-color: transparent; }
+  .ow-card-pr[data-status='checks failing'] .ow-card-pr-status, .ow-card-pr[data-status='conflict'] .ow-card-pr-status { color: var(--warn); }
+  .ow-card-pr[data-status='closed'] { color: var(--muted); }
+  .ow-card-summary { margin: 10px 0 0; color: var(--text); font-size: 13px; line-height: 1.5; }
+  /* Suggested next step: an arrow, the step, its quieter "why" underneath. Sits
+     above a hairline so it reads as a distinct call to action. */
+  .ow-card-step {
+    display: flex; gap: 8px; align-items: flex-start; width: 100%; margin: 10px 0 0;
+    padding: 10px 0 0; border: 0; border-top: 1px solid var(--border);
+    background: none; text-align: left; cursor: pointer; color: var(--text);
+  }
+  .ow-card-step:hover .ow-card-step-what { color: var(--accent); }
+  .ow-card-step-arrow { flex: none; margin-top: 1px; color: var(--warn); }
+  .ow-card-step-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ow-card-step-what { font-size: 13px; }
+  .ow-card-step-why { color: var(--muted); font-size: 12px; font-style: italic; }
+  .ow-card-expanded { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
   /* PR/issue links share the line and the muted look of the rest of the meta;
      a dot separates each piece the way the text parts are joined. */
   .ow-goal-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -862,6 +921,8 @@ export const OVERWATCH_STYLES = String.raw`
      is clean; shown on hover OR keyboard focus so it is not mouse-only. Floated
      over the corner (not in flow) so appearing shifts no layout. A backing panel
      keeps the labels legible over whatever text sits behind them. */
+  /* Management CTAs (Later / Handled) float top-right and appear on hover/focus
+     only, so the resting row stays clean. */
   .ow-row-aside {
     position: absolute; top: 8px; right: 10px; z-index: 1;
     display: flex; gap: 2px; padding: 2px;

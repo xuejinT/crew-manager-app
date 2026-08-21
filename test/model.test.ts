@@ -354,15 +354,14 @@ describe('intent summaries', () => {
         { title: 'Old spike', state: 'dropped' },
       ]),
     )
-    // Three unrelated goals are three items: one to resume, two finished. A
-    // shared row claimed they were parts of one thing and let one goal's blocker
-    // label the others.
+    // Three unrelated goals are three items. The idle unfinished goal is handed
+    // back to the user (needs-you, Resume, and marked nobody_on_it so it ranks
+    // into Follow up); the two finished goals stand on their own.
     expect(items).toHaveLength(3)
     const resume = items.find(item => item.action === 'resume')
     expect(resume?.state).toBe('needs-you')
     expect(resume?.title).toBe('Ship the thing')
     expect(resume?.unattendedGoals).toBe(1)
-    // Finished goals stand on their own instead of riding along as checkmarks.
     expect(items.filter(item => item.state === 'done').map(item => item.title))
       .toEqual(['Write the spec', 'Old spike'])
   })
@@ -439,7 +438,7 @@ describe('intent summaries', () => {
     expect(items[0].state).toBe('running')
   })
 
-  it('hands an idle session\'s unfinished goals back to the user as one card', () => {
+  it('routes an idle session\'s unfinished goals to Follow up (nobody_on_it)', () => {
     const items = normalizeWorkItemsWithCopy(
       sources({ slots: [slot({ running: false })] }),
       key => key,
@@ -449,31 +448,29 @@ describe('intent summaries', () => {
       ]),
     )
 
-    // Nobody is executing, so the only actor who can move these is the user. Two
-    // unfinished goals are two items: they are routinely unrelated work, so each
-    // gets its own selection, its own badge and its own next step.
+    // Nobody is executing, so these are the user's to carry forward: each is a
+    // needs-you Resume item marked nobody_on_it, which ranks it into Follow up
+    // (its responseVerb is 'followup'), not In-progress/Queued.
     expect(items).toHaveLength(2)
     expect(items.every(item => item.state === 'needs-you')).toBe(true)
     expect(items.every(item => item.action === 'resume')).toBe(true)
     expect(items.every(item => item.unattendedGoals === 1)).toBe(true)
-    // Naming them, not just counting them: a card reading "2 unfinished goals"
-    // would force the user to open a thread to learn what is being asked.
+    expect(items.every(item => responseVerb(item) === 'followup')).toBe(true)
     expect(items.map(item => item.title)).toEqual(['Explore the layout', 'Wire the backend'])
-    // Each item states its OWN concrete next step, not the leading goal's.
-    expect(items[0].summary).toBe('Pick a direction')
-    expect(items[1].summary).toBe('no_next_step')
   })
 
-  it('says so plainly when a stopped session recorded no next step', () => {
+  it('hands an idle in-progress goal to the user even when it recorded no next step', () => {
     const [item] = normalizeWorkItemsWithCopy(
       sources({ slots: [slot({ running: false })] }),
       key => key,
       summarized([{ title: 'Explore the layout', state: 'in-progress' }]),
     )
 
-    // Better than dumping the initial-intent paragraph: no next step IS the
-    // signal, because that is the state work gets forgotten in.
-    expect(item.summary).toBe('no_next_step')
+    // No next step, no progress, no initial intent — the summary falls back to
+    // the plain work-in-progress line, but it is still a needs-you Follow-up item.
+    expect(item.state).toBe('needs-you')
+    expect(item.unattendedGoals).toBe(1)
+    expect(item.summary).toBe('work_in_progress')
   })
 
   it('caps how many goals one session contributes, keeping handoffs first', () => {
