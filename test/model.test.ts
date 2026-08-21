@@ -29,6 +29,9 @@ import {
   searchWorkItems,
   sortWorkItems,
   workCounts,
+  workflowFacts,
+  workflowSteps,
+  shortError,
   OWNED_STANDALONE_LIMIT,
   type RankSignal,
   type ResponseVerb,
@@ -2073,5 +2076,132 @@ describe('owned work folded in', () => {
     const board = sources({ slots: [slot({ last_ts: RECENT, source_links: [link()] })] })
     expect(normalizeWorkItems({ ...board, assigned: [] }, {}, NOW))
       .toEqual(normalizeWorkItems(board, {}, NOW))
+  })
+})
+
+describe('a failed workflow accounts for itself', () => {
+  /*
+   * The board already fetches all of this in the run LIST -- error, last_log,
+   * phase and the two counts. It used to keep four fields and drop the rest, so
+   * a card said "This workflow stopped before finishing" while holding the
+   * reason it stopped.
+   */
+  const run = {
+    run_id: 'wf_000024',
+    name: 'kiro-agent compatibility',
+    status: 'failed' as const,
+    session_key: null,
+    error: 'timeout',
+    event_count: 36,
+    phase: 'red-team-and-finalize',
+    last_log: 'Phase 5: Red-teaming findings and writing final report',
+    agent_error_count: 3,
+    partial_result_count: 9,
+  }
+  const copy = (key: string, values?: Record<string, string>) => (
+    [key, ...Object.values(values ?? {})].join(':')
+  )
+
+  it('reports how far it got, why it stopped, and what survived', () => {
+    const facts = workflowFacts(run, copy)
+
+    expect(facts).toEqual([
+      'workflow_fact_last_log:Phase 5: Red-teaming findings and writing final report',
+      'workflow_fact_phase:red-team-and-finalize',
+      'workflow_fact_error:timeout',
+      'workflow_fact_agent_errors:3',
+      'workflow_fact_partials:9',
+    ])
+  })
+
+  it('says nothing at all about a run that reported nothing', () => {
+    /*
+     * The load-bearing property. Three labelled sections padded with invented
+     * prose is worse than one honest line, so an empty account must stay empty
+     * and let the card render exactly as compact as it was.
+     */
+    expect(workflowFacts(
+      { ...run, error: null, phase: null, last_log: null, agent_error_count: 0, partial_result_count: 0 },
+      copy,
+    )).toEqual([])
+  })
+
+  it('tolerates a gateway that never sends the new fields', () => {
+    // The fields are optional: an older gateway omits them entirely, and the
+    // card must degrade to fewer facts rather than to "undefined".
+    expect(workflowFacts(
+      { run_id: 'r', name: 'n', status: 'failed', session_key: null, error: 'boom', event_count: 0 },
+      copy,
+    )).toEqual(['workflow_fact_error:boom'])
+  })
+
+  it('drops the phase when the last log already names it', () => {
+    // Both fields usually carry the phase, and printing each in its own bullet
+    // says the same thing twice in adjacent lines.
+    expect(workflowFacts({ ...run, last_log: 'Starting the audit phase' , phase: 'audit' }, copy))
+      .not.toContain('workflow_fact_phase:audit')
+  })
+
+  it('suggests diagnosing before re-running, and never just "retry"', () => {
+    // The card already carries a Retry button. A suggestion that duplicates an
+    // adjacent control wastes the only section that could say something else --
+    // and re-running a timeout as-is reproduces the timeout.
+    const [step] = workflowSteps(run, copy)
+
+    expect(step.what).toBe('workflow_step_diagnose:kiro-agent compatibility')
+    expect(step.why).toBe('workflow_step_why_error:timeout')
+    expect(step.expect).toBe('workflow_step_expect_partials:9')
+  })
+
+  it('suggests nothing for a run that has not failed', () => {
+    expect(workflowSteps({ ...run, status: 'running' }, copy)).toEqual([])
+    expect(workflowSteps({ ...run, status: 'finished' }, copy)).toEqual([])
+  })
+
+  it('unwraps a python exception repr into its message', () => {
+    // What the platform actually stores. The repr wrapper is noise to a reader,
+    // and the message inside is the whole value of the line.
+    expect(shortError("RuntimeError('ctx.nudge is not available for this run')"))
+      .toBe('ctx.nudge is not available for this run')
+    // A bare message is left exactly as it is.
+    expect(shortError('timeout')).toBe('timeout')
+    // A repr with no message falls back to the repr rather than to an empty
+    // string, which would render as a blank fact.
+    expect(shortError('KeyboardInterrupt()')).toBe('KeyboardInterrupt()')
+  })
+
+  it('marks a truncated error instead of cutting it silently', () => {
+    // A silently cut message reads as a complete one and sends the reader
+    // looking for a cause that is really just off the end of the string.
+    const long = 'x'.repeat(400)
+    const short = shortError(long)
+
+    expect(short.length).toBeLessThan(long.length)
+    expect(short.endsWith('\u2026')).toBe(true)
+  })
+
+  it('puts the account on the standalone card, through the real pipeline', () => {
+    // End to end rather than on the helper: a builder nothing calls is worth
+    // nothing, and this is the wire that was missing.
+    const items = normalizeWorkItems(sources({ workflows: [run] }))
+    const item = items.find(entry => entry.id === 'workflow:wf_000024')
+
+    expect(item?.state).toBe('needs-you')
+    expect(item?.progress).toContain('workflow_fact_error:timeout')
+    expect(item?.nextSteps?.[0]?.what).toBe('workflow_step_diagnose:kiro-agent compatibility')
+  })
+
+  it('adds the run account to the session that owns it, keeping what was there', () => {
+    // A session with its own summarized progress must end up with BOTH: the
+    // run's facts are more specific, not a replacement.
+    const items = normalizeWorkItems(
+      sources({
+        slots: [slot({ key: 'session-9', title: 'Perf remediation' })],
+        workflows: [{ ...run, session_key: 'session-9' }],
+      }),
+    )
+    const item = items.find(entry => entry.sessionKey === 'session-9')
+
+    expect(item?.progress).toContain('workflow_fact_error:timeout')
   })
 })
