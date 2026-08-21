@@ -296,7 +296,7 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   related_same_change: 'same change',
   related_same_artifact: 'same artifact',
   related_same_deliverable: 'same deliverable',
-  related_same_topic: 'similar goal',
+  related_same_topic: 'similar item',
   related_same_step: 'same next step',
   related_more: 'and {{count}} more',
   rank_approval_owed: 'only you can clear this approval',
@@ -310,7 +310,7 @@ const WORK_COPY: Record<WorkCopyKey, string> = {
   rank_changes_requested: 'a reviewer asked you for changes',
   rank_assigned_to_you: 'assigned to you and nobody has started it',
   rank_merge_ready: 'approved and green — only you can merge it',
-  rank_nobody_on_it: 'nobody is on {{count}} unfinished goal(s) in this session',
+  rank_nobody_on_it: 'nobody is on {{count}} unfinished item(s) in this session',
   no_next_step: 'No next step recorded — nobody is on this',
   // Same-session queue only — the platform does not model one session
   // blocking another, so this must not claim it does.
@@ -1022,111 +1022,104 @@ function laneKeyOf(item: WorkItem): LaneKey {
   return responseVerb(item) ?? 'unblock'
 }
 
+/** The suggested-next-step CTA — arrow + what + its quieter why, one hit area. */
+function NextStepButton({ step, onPick }: { step: SummaryNextStep; onPick?: (what: string) => void }) {
+  return (
+    <button
+      type="button"
+      className="ow-card-step"
+      title={step.why ?? step.what}
+      onClick={event => { event.stopPropagation(); onPick?.(step.what) }}
+    >
+      <ArrowRight className="ow-icon ow-card-step-arrow" aria-hidden="true" />
+      <span className="ow-card-step-body">
+        <span className="ow-card-step-what">{step.what}</span>
+        {step.why && <span className="ow-card-step-why">{step.why}</span>}
+      </span>
+    </button>
+  )
+}
+
 /**
- * A session's items, grouped by response. The verb moves OFF each row and onto
- * ONE lane head, so four "verify" items read as one labelled group of four
- * instead of four repeated badges. Rows stay compact and selectable; the badge
- * is a column you scan once, not per row.
+ * One of a session's OTHER items in the expand — same treatment as the headline:
+ * status pill, title, its first next step as a CTA, and its OWN expand for the
+ * rest of its steps + ask/progress. Reference in chat / Later / Already done on hover.
  */
-function SessionLanes({
-  items,
-  selectedId,
+function MoreItem({
+  item,
+  selected,
   onSelect,
-  onOpenSession,
-  onAnswerPermission,
-  onDecideApproval,
-  permissionBusy,
-  onRetry,
-  retryBusy,
-  onPickStep,
   onSnooze,
   onHandled,
-  doneTitles,
+  onPickStep,
 }: {
-  items: WorkItem[]
-  selectedId: string | null
+  item: WorkItem
+  selected: boolean
   onSelect: (item: WorkItem) => void
-  onOpenSession: (slot: string) => void
-  onAnswerPermission?: (id: string, approve: boolean) => void
-  onDecideApproval?: (item: WorkItem, action: string) => void
-  permissionBusy?: boolean
-  onRetry?: (path: string) => void
-  retryBusy?: boolean
-  onPickStep?: (what: string) => void
   onSnooze?: (id: string) => void
   onHandled?: (id: string, updatedAt: number) => void
-  /** This session's finished goals, listed elsewhere — shown here as context. */
-  doneTitles?: string[]
+  onPickStep?: (what: string) => void
 }) {
-  const [showDone, setShowDone] = useState(false)
-  // Needs-you items lead, ranked latest-turn first, then running, then done.
-  // All of them list as compact rows — the roll-up above says how many there are.
-  const needsYou = [...items]
-    .filter(i => i.state === 'needs-you')
-    .sort((a, b) => (b.lastTouchedTurn ?? 0) - (a.lastTouchedTurn ?? 0))
-  const running = items.filter(i => i.state === 'running')
-  const done = items.filter(i => i.state === 'done')
-
-  const renderRow = (item: WorkItem) => (
-    <WorkRow
-      key={item.id}
-      item={item}
-      compact
-      showBadge={false}
-      selected={selectedId === item.id}
-      continuation
-      whyRanked={item.state === 'needs-you' && item.action !== 'resume'
-        ? explainRank(rankWorkItem(item), workCopy)
-        : undefined}
-      onSelect={() => onSelect(item)}
-      onOpenSession={onOpenSession}
-      onAnswerPermission={onAnswerPermission}
-      onDecideApproval={onDecideApproval}
-      permissionBusy={permissionBusy}
-      onRetry={onRetry}
-      retryBusy={retryBusy}
-      onPickStep={onPickStep}
-      onSnooze={onSnooze}
-      onHandled={onHandled}
-    />
-  )
-
+  const [expanded, setExpanded] = useState(false)
+  const steps = item.state === 'done' ? [] : (item.nextSteps ?? []).filter(s => s.what?.trim())
+  const askedFor = item.initialIntent?.trim()
+  const facts = (item.progress ?? []).filter(entry => entry.trim())
+  const hasMore = steps.length > 1 || Boolean(askedFor) || facts.length > 0
   return (
     <>
-      {needsYou.length > 0 && (
-        <div className="ow-lane">{needsYou.map(renderRow)}</div>
-      )}
-      {running.length > 0 && <div className="ow-lane">{running.map(renderRow)}</div>}
-      {done.length > 0 && <div className="ow-lane">{done.map(renderRow)}</div>}
-      {/* This session's finished goals. They are their own items in Done, but the
-          card is where you judge what is LEFT — so the ledger is offered here,
-          collapsed, rather than making you open another section to see it. */}
-      {done.length === 0 && doneTitles && doneTitles.length > 0 && (
-        <div className="ow-lane ow-lane-done">
+      <div
+        className="ow-moreitem"
+        data-selected={selected ? 'true' : undefined}
+        data-testid={`work-item-${item.id}`}
+      >
+        <div className="ow-moreitem-head">
+          {stateBadge(item)}
+          <span className="ow-moreitem-title ow-truncate">{item.title}</span>
+        </div>
+        {item.summary && <p className="ow-moreitem-summary">{item.summary}</p>}
+        {steps[0] && <NextStepButton step={steps[0]} onPick={onPickStep} />}
+        {hasMore && (
           <button
             type="button"
             className="ow-goals-toggle"
-            aria-expanded={showDone}
-            onClick={() => setShowDone(show => !show)}
+            aria-expanded={expanded}
+            onClick={() => setExpanded(show => !show)}
           >
-            <ChevronRight className="ow-icon" data-open={showDone ? 'true' : undefined} aria-hidden="true" />
-            {doneTitles.length} done
+            <ChevronRight className="ow-icon" data-open={expanded ? 'true' : undefined} aria-hidden="true" />
+            {expanded ? 'Show less' : 'Show more'}
           </button>
-          {showDone && (
-            <ul className="ow-done-list">
-              {doneTitles.map(title => (
-                <li key={title} className="ow-row-goal-done">
-                  <Check className="ow-icon" aria-hidden="true" />
-                  <span className="ow-truncate">{title}</span>
-                </li>
-              ))}
-            </ul>
+        )}
+        <div className="ow-row-aside">
+          <button type="button" className="ow-aside-btn ow-aside-btn--ref" onClick={() => onSelect(item)}>Reference in chat</button>
+          {item.state === 'needs-you' && onSnooze && (
+            <button type="button" className="ow-aside-btn" onClick={() => onSnooze(item.id)}>Later</button>
+          )}
+          {item.state === 'needs-you' && onHandled && (
+            <button type="button" className="ow-aside-btn" onClick={() => onHandled(item.id, item.updatedAt)}>Already done</button>
+          )}
+        </div>
+      </div>
+      {expanded && (
+        <div className="ow-moreitem-detail">
+          {steps.slice(1).map((s, i) => <NextStepButton key={`${item.id}:${i + 1}`} step={s} onPick={onPickStep} />)}
+          {askedFor && (
+            <DetailSection label={workCopy('card_asked_for')}>
+              <blockquote className="ow-detail-quote">{askedFor}</blockquote>
+            </DetailSection>
+          )}
+          {facts.length > 0 && (
+            <DetailSection label={workCopy('card_where_it_stands')}>
+              <ul className="ow-detail-facts">
+                {facts.map((fact, i) => <li key={`${i}:${fact}`}>{fact}</li>)}
+              </ul>
+            </DetailSection>
           )}
         </div>
       )}
     </>
   )
 }
+
 /**
  * One session as a single card: a status / clickable-name / last-active / turns
  * headline, the PRs it touches, the latest goal's summary and its first next step.
@@ -1163,6 +1156,7 @@ function SessionCard({
   onHandled?: (id: string, updatedAt: number) => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [showDone, setShowDone] = useState(false)
 
   // The latest-touched goal is the card's headline; the rest sit behind expand.
   const ordered = [...items].sort((a, b) => (b.lastTouchedTurn ?? 0) - (a.lastTouchedTurn ?? 0))
@@ -1211,31 +1205,12 @@ function SessionCard({
   const facts = (lead.progress ?? []).filter(entry => entry.trim())
   const hasMore = steps.length > 1 || Boolean(askedFor) || facts.length > 0 || rest.length > 0
 
-  const renderStep = (step: SummaryNextStep, key: string) => (
-    <button
-      type="button"
-      key={key}
-      className="ow-card-step"
-      title={step.why ?? step.what}
-      onClick={event => { event.stopPropagation(); onPickStep?.(step.what) }}
-    >
-      <ArrowRight className="ow-icon ow-card-step-arrow" aria-hidden="true" />
-      <span className="ow-card-step-body">
-        <span className="ow-card-step-what">{step.what}</span>
-        {step.why && <span className="ow-card-step-why">{step.why}</span>}
-      </span>
-    </button>
-  )
-
   const selected = selectedId === lead.id
 
   return (
     <>
-    <Clickable
+    <div
       className="ow-sessioncard"
-      onActivate={() => onSelect(lead)}
-      aria-label={lead.title}
-      aria-pressed={selected}
       data-selected={selected ? 'true' : undefined}
       data-testid={`work-item-${lead.id}`}
     >
@@ -1274,8 +1249,9 @@ function SessionCard({
       {summaryProse && <p className="ow-card-summary">{summaryProse}</p>}
       {steps[0] && (
         <div className="ow-card-nextstep">
-          <div className="ow-card-nextstep-label">Suggested next step</div>
-          {renderStep(steps[0], `0:${steps[0].what}`)}
+          <DetailSection label="Suggested next step">
+            <NextStepButton step={steps[0]} onPick={onPickStep} />
+          </DetailSection>
         </div>
       )}
       {/* A permission item is answered in the formal approval card, expanded on
@@ -1298,19 +1274,23 @@ function SessionCard({
           {expanded ? 'Show less' : 'Show more'}
         </button>
       )}
-      {/* Hover-only, like the rows: Later sets it aside, Already done clears it. */}
-      {lead.state === 'needs-you' && onSnooze && onHandled && (
-        <div className="ow-row-aside">
-          <button type="button" className="ow-aside-btn" onClick={event => { event.stopPropagation(); onSnooze(lead.id) }}>Later</button>
-          <button type="button" className="ow-aside-btn" onClick={event => { event.stopPropagation(); onHandled(lead.id, lead.updatedAt) }}>Already done</button>
-        </div>
-      )}
-    </Clickable>
-      {/* Expanded content sits OUTSIDE the clickable card: hovering or clicking the
-          rest of the goals is their own target, not the card's. */}
+      {/* Hover-only actions. Reference in chat quotes this goal to the Conductor
+          (the card body itself is inert — quoting is a deliberate click, not a
+          stray one). Later / Already done manage a needs-you goal. */}
+      <div className="ow-row-aside">
+        <button type="button" className="ow-aside-btn ow-aside-btn--ref" onClick={() => onSelect(lead)}>Reference in chat</button>
+        {lead.state === 'needs-you' && onSnooze && (
+          <button type="button" className="ow-aside-btn" onClick={() => onSnooze(lead.id)}>Later</button>
+        )}
+        {lead.state === 'needs-you' && onHandled && (
+          <button type="button" className="ow-aside-btn" onClick={() => onHandled(lead.id, lead.updatedAt)}>Already done</button>
+        )}
+      </div>
+    </div>
+      {/* Expanded content sits OUTSIDE the card: its own hover/click targets. */}
       {expanded && (
         <div className="ow-card-expanded">
-          {steps.slice(1).map((step, index) => renderStep(step, `${index + 1}:${step.what}`))}
+          {steps.slice(1).map((step, index) => <NextStepButton key={`${index + 1}:${step.what}`} step={step} onPick={onPickStep} />)}
           {askedFor && (
             <DetailSection label={workCopy('card_asked_for')}>
               <blockquote className="ow-detail-quote">{askedFor}</blockquote>
@@ -1324,21 +1304,46 @@ function SessionCard({
             </DetailSection>
           )}
           {rest.length > 0 && (
-            <SessionLanes
-              items={rest}
-              doneTitles={doneTitles}
-              selectedId={selectedId}
+            <div className="ow-card-morelabel">
+              {lead.state === 'needs-you' ? 'More that needs you'
+                : lead.state === 'running' ? 'More in progress'
+                : 'More done'}
+            </div>
+          )}
+          {rest.map(item => (
+            <MoreItem
+              key={item.id}
+              item={item}
+              selected={selectedId === item.id}
               onSelect={onSelect}
-              onOpenSession={onOpenSession}
-              onAnswerPermission={onAnswerPermission}
-              onDecideApproval={onDecideApproval}
-              permissionBusy={permissionBusy}
-              onRetry={onRetry}
-              retryBusy={retryBusy}
-              onPickStep={onPickStep}
               onSnooze={onSnooze}
               onHandled={onHandled}
+              onPickStep={onPickStep}
             />
+          ))}
+          {/* This session's finished items, offered as collapsed context. */}
+          {doneTitles && doneTitles.length > 0 && (
+            <div className="ow-lane ow-lane-done">
+              <button
+                type="button"
+                className="ow-goals-toggle"
+                aria-expanded={showDone}
+                onClick={() => setShowDone(show => !show)}
+              >
+                <ChevronRight className="ow-icon" data-open={showDone ? 'true' : undefined} aria-hidden="true" />
+                {doneTitles.length} done
+              </button>
+              {showDone && (
+                <ul className="ow-done-list">
+                  {doneTitles.map(title => (
+                    <li key={title} className="ow-row-goal-done">
+                      <Check className="ow-icon" aria-hidden="true" />
+                      <span className="ow-truncate">{title}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </div>
       )}

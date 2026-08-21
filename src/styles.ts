@@ -744,18 +744,12 @@ export const OVERWATCH_STYLES = String.raw`
      goal summary + first next step, everything else behind expand). --- */
   .ow-sessioncard {
     position: relative; display: flex; flex-direction: column;
-    padding: 8px 10px; margin: -8px -10px 0; border-radius: 6px;
-    cursor: pointer; outline: none;
   }
-  /* No hover background: the enclosing .ow-block[data-grouped] is ALREADY the
-     card, so filling it on hover read as the whole session container being the
-     target. Hover only reveals the aside; selection gets a contained tint. NOTE:
-     this must NOT be named .ow-card — that is the app's generic panel card
-     (border + --card bg), which drew a second frame line inside the container. */
-  .ow-sessioncard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* Selection tints the WHOLE goal card, not just the headline: the expanded
      section is a sibling of .ow-sessioncard, so the tint lives on the enclosing
-     card container and covers both (headline + expanded). */
+     card container and covers both (headline + expanded). The card body itself
+     is inert — quoting is the deliberate "Reference in chat" hover action, not a
+     stray click, so no pointer cursor / focus ring here. */
   .ow-block[data-grouped='true']:has(.ow-sessioncard[data-selected='true']) { background: var(--aim-subtle); }
   .ow-sessioncard:hover .ow-row-aside,
   .ow-sessioncard:focus-within .ow-row-aside { opacity: 1; pointer-events: auto; }
@@ -791,11 +785,9 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-card-summary { margin: 10px 0 0; color: var(--text); font-size: 13px; line-height: 1.5; }
   /* Suggested next step: a label, then the step as one CTA (arrow + what + its
      quieter "why"). The whole button is the hit area and highlights together. */
-  .ow-card-nextstep { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
-  .ow-card-nextstep-label {
-    margin: 0 0 6px 2px; color: var(--muted); font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: .04em;
-  }
+  /* Spacing-only wrapper: the "Suggested next step" heading now uses the shared
+     .ow-detail-label (a caption + trailing rule) so it matches "You asked for". */
+  .ow-card-nextstep { margin-top: 12px; }
   .ow-card-step {
     display: flex; gap: 8px; align-items: flex-start; width: 100%;
     padding: 6px 8px; margin: 0 -8px; border: 0; border-radius: 6px;
@@ -808,6 +800,29 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-card-step-what { font-size: 13px; }
   .ow-card-step-why { color: var(--muted); font-size: 12px; font-style: italic; }
   .ow-card-expanded { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  /* A clear section break: the session's OTHER items are distinct from the
+     headline goal's own detail above, so give the group a rule + real space. */
+  .ow-card-morelabel {
+    margin: 20px 0 4px; padding-top: 16px; border-top: 1px solid var(--border-strong, var(--border));
+    color: var(--muted-strong, var(--muted)); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
+  /* One of the session's other items, in the expand — same treatment as the
+     headline (status, title, its own next-step CTA, hover actions). */
+  .ow-moreitem {
+    position: relative; display: flex; flex-direction: column; gap: 6px;
+    padding-top: 8px; border-top: 1px solid var(--border);
+  }
+  /* The first item sits directly under the section label's rule — don't draw a
+     second line right beneath it. */
+  .ow-card-morelabel + .ow-moreitem { border-top: 0; padding-top: 4px; }
+  .ow-moreitem:hover .ow-row-aside,
+  .ow-moreitem:focus-within .ow-row-aside { opacity: 1; pointer-events: auto; }
+  .ow-moreitem-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .ow-moreitem-title { min-width: 0; color: var(--text-strong); font-size: 13px; font-weight: 600; }
+  .ow-moreitem-summary { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+  /* A more-item's own expanded detail (rest of its steps + ask/progress). */
+  .ow-moreitem-detail { display: flex; flex-direction: column; gap: 8px; padding: 2px 0 6px; }
   /* PR/issue links share the line and the muted look of the rest of the meta;
      a dot separates each piece the way the text parts are joined. */
   .ow-goal-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -945,6 +960,9 @@ export const OVERWATCH_STYLES = String.raw`
     color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
   }
   .ow-aside-btn:hover { background: var(--bg-hover); color: var(--text); }
+  /* The primary aside action: quote this goal to the Conductor. */
+  .ow-aside-btn--ref { color: var(--accent); font-weight: 600; }
+  .ow-aside-btn--ref:hover { background: var(--accent-subtle, var(--bg-hover)); color: var(--accent); }
   .ow-section-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; cursor: pointer; }
   .ow-section-chevron { transition: transform 120ms ease; }
   .ow-section-chevron[data-open='true'] { transform: rotate(90deg); }
