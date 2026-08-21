@@ -753,7 +753,10 @@ export const OVERWATCH_STYLES = String.raw`
      this must NOT be named .ow-card — that is the app's generic panel card
      (border + --card bg), which drew a second frame line inside the container. */
   .ow-sessioncard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .ow-sessioncard[data-selected='true'] { background: var(--aim-subtle); }
+  /* Selection tints the WHOLE goal card, not just the headline: the expanded
+     section is a sibling of .ow-sessioncard, so the tint lives on the enclosing
+     card container and covers both (headline + expanded). */
+  .ow-block[data-grouped='true']:has(.ow-sessioncard[data-selected='true']) { background: var(--aim-subtle); }
   .ow-sessioncard:hover .ow-row-aside,
   .ow-sessioncard:focus-within .ow-row-aside { opacity: 1; pointer-events: auto; }
   .ow-card-top { display: flex; align-items: center; gap: 8px; }
@@ -786,13 +789,19 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-card-pr[data-status='checks failing'] .ow-card-pr-status, .ow-card-pr[data-status='conflict'] .ow-card-pr-status { color: var(--warn); }
   .ow-card-pr[data-status='closed'] { color: var(--muted); }
   .ow-card-summary { margin: 10px 0 0; color: var(--text); font-size: 13px; line-height: 1.5; }
-  /* Suggested next step: an arrow, the step, its quieter "why" underneath. Sits
-     above a hairline so it reads as a distinct call to action. */
+  /* Suggested next step: a label, then the step as one CTA (arrow + what + its
+     quieter "why"). The whole button is the hit area and highlights together. */
+  .ow-card-nextstep { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .ow-card-nextstep-label {
+    margin: 0 0 6px 2px; color: var(--muted); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .04em;
+  }
   .ow-card-step {
-    display: flex; gap: 8px; align-items: flex-start; width: 100%; margin: 10px 0 0;
-    padding: 10px 0 0; border: 0; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: flex-start; width: 100%;
+    padding: 6px 8px; margin: 0 -8px; border: 0; border-radius: 6px;
     background: none; text-align: left; cursor: pointer; color: var(--text);
   }
+  .ow-card-step:hover { background: var(--bg-hover); }
   .ow-card-step:hover .ow-card-step-what { color: var(--accent); }
   .ow-card-step-arrow { flex: none; margin-top: 1px; color: var(--warn); }
   .ow-card-step-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }

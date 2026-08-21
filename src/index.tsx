@@ -1203,7 +1203,10 @@ function SessionCard({
   const summaryProse = prose
     ? prose.split(/(?<=[.!?])\s+/).filter(s => s.trim()).slice(0, 2).join(' ')
     : ''
-  const steps = (lead.nextSteps ?? []).filter(step => step.what?.trim())
+  // A Done goal is finished — it carries no "next step", on the card or in expand.
+  const steps = lead.state === 'done'
+    ? []
+    : (lead.nextSteps ?? []).filter(step => step.what?.trim())
   const askedFor = lead.initialIntent?.trim()
   const facts = (lead.progress ?? []).filter(entry => entry.trim())
   const hasMore = steps.length > 1 || Boolean(askedFor) || facts.length > 0 || rest.length > 0
@@ -1269,7 +1272,12 @@ function SessionCard({
         </div>
       )}
       {summaryProse && <p className="ow-card-summary">{summaryProse}</p>}
-      {steps[0] && renderStep(steps[0], `0:${steps[0].what}`)}
+      {steps[0] && (
+        <div className="ow-card-nextstep">
+          <div className="ow-card-nextstep-label">Suggested next step</div>
+          {renderStep(steps[0], `0:${steps[0].what}`)}
+        </div>
+      )}
       {/* A permission item is answered in the formal approval card, expanded on
           the selected card — the same anatomy as the row-era placement. */}
       {selected && lead.permissionId && onDecideApproval && (
