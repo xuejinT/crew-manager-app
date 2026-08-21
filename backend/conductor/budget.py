@@ -80,7 +80,13 @@ NOTIFY_CLASSES: frozenset[str] = frozenset({"operator_notify", "escalate"})
 #: reading the day's ledger.
 DEFAULT_DAILY_CAPS: dict[str, int] = {
     "context_inject": 200,
-    "narrate": 48,
+    # 48 was one digest a minute for under an hour, chosen before anyone had
+    # watched a real build. A six-leaf goal runs for hours, and the cap was
+    # reached mid-afternoon — after which the Conductor chat went silent while the
+    # loop was still working, which reads to an operator exactly like a stall.
+    # A digest costs a transcript row and no turn, so the cap is here to stop a
+    # runaway, not to ration: 240 is a digest a minute for four hours.
+    "narrate": 240,
     "pr_read": 500,
     "cron_pause": 20,
     "operator_notify": 40,

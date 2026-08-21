@@ -53,6 +53,7 @@ import contextlib
 import importlib
 import inspect
 import logging
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -132,12 +133,68 @@ _SLOT_NAME_PREFIX = "cm-"
 SLOT_NAME_PREFIX = _SLOT_NAME_PREFIX
 
 
+def host_symbol(module: str, name: str) -> Any:
+    """Public view of the guarded host-import helper.
+
+    ``steps.py`` needs the same "resolve a gateway private, degrade to None"
+    behaviour when it re-adopts worker slots, and copying the try/except would be
+    a second place for the degradation policy to drift.
+    """
+    return _host(module, name)
+
+
 #: Approval modes the OPERATOR may declare for a goal's workers. Mirrors the
 #: platform's own slot-scoped set (VERIFIED: chat_handlers.py:122,
 #: ``_SLOT_SCOPED_TRUST_MODES = ("trust", "trust_reads")``). Global modes — and
 #: ``yolo`` in particular — are deliberately absent: this may only ever widen the
 #: one session the Conductor just minted.
 _WORKER_TRUST_MODES = frozenset({"trust", "trust_reads"})
+
+
+#: The platform's placeholder for an unnamed session.
+_NEW_SESSION_TITLE = "New Session…"
+
+
+def _name_worker(slot: Any, leaf_id: str, leaf_title: str) -> str:
+    """Give a worker slot a title that says what it is. Returns the title set.
+
+    ``get_or_create_slot`` takes no title, so a worker was born as "New Session…"
+    and stayed that way until the platform's auto-titler guessed one from the
+    conversation. On a board of six autonomous workers that is six identical rows:
+    the operator can see that something is happening and not what, which defeats
+    the point of putting them on the board at all.
+
+    The leaf already carries the operator's own words for the work, so use them —
+    ``constants · Piece constants and starting FEN``. The leaf id leads because it
+    is what every other surface (ledger rows, digests, slot names, dependency
+    lines) identifies the work by, so the board agrees with them at a glance.
+
+    Only overwrites a placeholder. A title the operator or the auto-titler has
+    already set is theirs, and a re-adopted worker must not have its history-derived
+    name replaced on every tick.
+    """
+    current = str(getattr(slot, "title", "") or "").strip()
+    key = str(getattr(slot, "key", "") or "")
+    if current and current not in (_NEW_SESSION_TITLE, key):
+        return current
+    label = leaf_title.strip() or leaf_id
+    title = f"{leaf_id} · {label}" if label != leaf_id else leaf_id
+    try:
+        slot.title = title[:120]
+    except Exception:
+        logger.debug("conductor: could not set a title on %s", key, exc_info=True)
+        return current
+    return title
+
+
+def name_worker(slot: Any, leaf_id: str, leaf_title: str = "") -> str:
+    """Public entry point for :func:`_name_worker`.
+
+    ``steps.readopt_workers`` recreates worker slots after a restart and must name
+    them the same way the executor does, or a re-adopted worker would appear on the
+    board as "New Session…" while a freshly dispatched one is labelled.
+    """
+    return _name_worker(slot, leaf_id, leaf_title)
 
 
 def _apply_declared_worker_trust(state: Any, slot: Any, requested: Any) -> str:
@@ -171,15 +228,23 @@ def _apply_declared_worker_trust(state: Any, slot: Any, requested: Any) -> str:
         )
         return ""
     try:
-        # Mirrors the platform's own handler for the slot-scoped case
-        # (chat_handlers.py:4898-4907): set the flags, then clear the per-slot
-        # approval policy so a stale one cannot outvote them.
+        # Mirrors the platform's SINGLE-approval trust path
+        # (chat_handlers.py:5123-5127), not its bulk one. The difference is the
+        # policy KEY and it is the whole correctness of this function: a slot we
+        # created carries a ``linked_session_key``, and the running session reads
+        # its approval policy under THAT key. Writing ``dashboard:{slot.key}``
+        # instead — which the bulk path does, for slots that have no link — leaves
+        # the live session on its default policy, so the grant reports success and
+        # the worker's first tool call parks anyway. The platform's own comment at
+        # that line says the same thing: "a linked cron/workflow slot runs under
+        # linked_session_key, not dashboard:{key}".
         slot._trust = mode == "trust"
         slot._trust_reads = True
         sessions = getattr(state, "sessions", None)
         setter = getattr(sessions, "set_approval_policy", None)
         if callable(setter):
-            setter(f"dashboard:{getattr(slot, 'key', '')}", "")
+            session_key = getattr(slot, "linked_session_key", "") or f"dashboard:{getattr(slot, 'key', '')}"
+            setter(session_key, "auto" if slot._trust else "")
     except Exception:
         logger.warning("conductor: could not apply worker_trust", exc_info=True)
         return ""
@@ -191,6 +256,208 @@ def _apply_declared_worker_trust(state: Any, slot: Any, requested: Any) -> str:
         mode, getattr(slot, "key", ""),
     )
     return f"operator-declared worker_trust={mode} applied"
+
+
+def clear_conductor_chat(state: Any) -> dict[str, Any]:
+    """Empty the Conductor chat — the visible rows AND the agent's memory of them.
+
+    "Clear the chat" has two halves and only doing one is worse than doing neither.
+    Wiping the visible rows while the agent keeps the conversation leaves an
+    operator talking to something that remembers a history they cannot see; wiping
+    the agent while the rows remain leaves rows that no longer correspond to
+    anything. So this does both, in the order that makes each stick:
+
+    1. **Queued context** (``slot._pending_context``) — entries waiting to ride
+       along with the next turn. Dropped first: they are the one part that would
+       otherwise survive every step below and reappear in the next answer.
+    2. **The in-memory transcript**, with ``_dirty`` cleared so the periodic flush
+       cannot write the rows back out after we have removed the file.
+    3. **The slot itself**, popped from the registry. That is what drops the ACP
+       session, and dropping the session is what makes the agent forget — there is
+       no "reset context" call, so a fresh session IS the reset.
+    4. **The persisted transcript**, RENAMED aside rather than unlinked. Removing
+       only the slot was tried and is not enough: the next
+       ``get_or_create_slot`` rehydrates from history and the whole conversation
+       comes back (observed). A rename is safe with an open descriptor, needs no
+       history lock, and leaves the operator a way back — "clear the chat for a
+       demo" should not be the one irreversible button in the panel.
+
+    Refuses while a turn is running. Clearing a session mid-turn would leave the
+    ACP runtime writing into a slot nobody owns.
+    """
+    name = CONDUCTOR_SLOT
+    slots = getattr(state, "_slots", None)
+    slot = slots.get(name) if isinstance(slots, dict) else None
+    if slot is not None and bool(getattr(slot, "running", False)):
+        return {"ok": False, "refused": "the Conductor is mid-turn; try again when it settles"}
+
+    dropped_context = 0
+    dropped_rows = 0
+    if slot is not None:
+        pending = getattr(slot, "_pending_context", None)
+        if isinstance(pending, list):
+            dropped_context = len(pending)
+            pending.clear()
+        messages = getattr(slot, "messages", None)
+        if isinstance(messages, list):
+            dropped_rows = len(messages)
+            messages.clear()
+        for attr, value in (("_dirty", False), ("_resumed_count", 0), ("_disk_window_len", 0)):
+            try:
+                setattr(slot, attr, value)
+            except Exception:
+                logger.debug("conductor: could not reset slot.%s", attr, exc_info=True)
+        try:
+            note = _host("kiro_crew.dashboard.channel_slots", "note_slot_closed")
+            if note is not None:
+                note(state, name)
+        except Exception:
+            logger.debug("conductor: note_slot_closed failed", exc_info=True)
+        if isinstance(slots, dict):
+            slots.pop(name, None)
+
+    archived = ""
+    try:
+        home = os.environ.get("KIROCREW_HOME") or str(Path.home() / ".kiro" / "crew")
+        live = Path(home) / "sessions" / f"dashboard_{name}.jsonl"
+        if live.exists():
+            keep = store.conductor_dir() / "chat-archive"
+            keep.mkdir(parents=True, exist_ok=True)
+            target = keep / f"{live.stem}.{int(time.time())}.jsonl"
+            live.replace(target)
+            archived = str(target)
+    except OSError:
+        logger.warning("conductor: could not archive the chat transcript", exc_info=True)
+
+    for call in ("push_slots_update", "broadcast_slots"):
+        fn = getattr(state, call, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                logger.debug("conductor: %s failed after clearing the chat", call, exc_info=True)
+    return {
+        "ok": True,
+        "rows_cleared": dropped_rows,
+        "context_cleared": dropped_context,
+        "archived_to": archived,
+    }
+
+
+def worker_slots(state: Any, goal_id: str = "") -> list[dict[str, Any]]:
+    """The worker slots this app owns, optionally just one goal's.
+
+    Reads the live registry rather than the goal file, because the question the
+    operator is asking — "what sessions exist for this?" — is about the gateway, and
+    a leaf that was never dispatched has no slot while a slot whose leaf was removed
+    still does. Message counts come from the LINKED session, since a worker slot's
+    own list is always empty (see :func:`_linked_transcript_rows`).
+    """
+    prefix = f"{_SLOT_NAME_PREFIX}{goal_id}-" if goal_id else _SLOT_NAME_PREFIX
+    slots = getattr(state, "_slots", None)
+    if not isinstance(slots, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for name, slot in sorted(slots.items()):
+        if not str(name).startswith(prefix):
+            continue
+        out.append({
+            "slot": str(name),
+            "title": str(getattr(slot, "title", "") or ""),
+            "running": bool(getattr(slot, "running", False)),
+            "messages": _linked_transcript_rows(slot),
+        })
+    return out
+
+
+def remove_worker_slots(
+    state: Any, *, goal_id: str = "", slot: str = "", force: bool = False
+) -> dict[str, Any]:
+    """Retire this app's worker sessions — one, or all of a goal's.
+
+    The gap this fills. A Conductor worker is named ``cm-<goal>-<leaf>``, so once its
+    goal is deleted nothing in the panel can address it again: the operator was left
+    with sessions they could see and not remove. Leaking them was not a design
+    decision, it was an omission.
+
+    **Archived, not deleted, and never silently.** A worker's transcript is the
+    record of what was actually built and why — the goal file is bookkeeping, the
+    transcript is evidence. So the slot goes and the transcript is renamed aside,
+    the same treatment :func:`clear_conductor_chat` gives the chat.
+
+    **Refuses a running worker unless forced.** Removing a goal must not kill a turn
+    in flight as a side effect; that is the operator's own decision to take
+    explicitly, which is what ``force`` is.
+
+    Only ever touches names beginning with :data:`_SLOT_NAME_PREFIX`. The app removes
+    what it created and nothing else — a session the operator opened themselves is
+    theirs, and the dashboard's own close is where that belongs.
+    """
+    slots = getattr(state, "_slots", None)
+    if not isinstance(slots, dict):
+        return {"ok": False, "refused": "no slot registry"}
+
+    if slot:
+        if not str(slot).startswith(_SLOT_NAME_PREFIX):
+            return {
+                "ok": False,
+                "refused": f"{slot!r} is not a Conductor worker; close it from the dashboard",
+            }
+        targets = [str(slot)] if slot in slots else []
+    else:
+        prefix = f"{_SLOT_NAME_PREFIX}{goal_id}-" if goal_id else ""
+        if not prefix:
+            return {"ok": False, "refused": "name a slot or a goal"}
+        targets = [str(n) for n in sorted(slots) if str(n).startswith(prefix)]
+
+    running = [n for n in targets if bool(getattr(slots.get(n), "running", False))]
+    if running and not force:
+        return {
+            "ok": False,
+            "refused": f"{len(running)} worker(s) are mid-turn: "
+                       + ", ".join(running[:3]),
+            "running": running,
+        }
+
+    removed: list[str] = []
+    archived: list[str] = []
+    for name in targets:
+        live = slots.get(name)
+        link = str(getattr(live, "linked_session_key", "") or "")
+        try:
+            note = _host("kiro_crew.dashboard.channel_slots", "note_slot_closed")
+            if note is not None:
+                note(state, name)
+        except Exception:
+            logger.debug("conductor: note_slot_closed failed for %s", name, exc_info=True)
+        slots.pop(name, None)
+        removed.append(name)
+        # The transcript lives under the LINKED key, folded the way the platform
+        # folds session filenames.
+        for key in (link.replace(":", "_"), f"dashboard_{name}"):
+            if not key:
+                continue
+            try:
+                home = os.environ.get("KIROCREW_HOME") or str(Path.home() / ".kiro" / "crew")
+                path = Path(home) / "sessions" / f"{key}.jsonl"
+                if not path.exists():
+                    continue
+                keep = store.conductor_dir() / "session-archive"
+                keep.mkdir(parents=True, exist_ok=True)
+                target = keep / f"{path.stem}.{int(time.time())}.jsonl"
+                path.replace(target)
+                archived.append(str(target))
+            except OSError:
+                logger.warning("conductor: could not archive %s", key, exc_info=True)
+
+    for call in ("push_slots_update", "broadcast_slots"):
+        fn = getattr(state, call, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                logger.debug("conductor: %s failed after removing workers", call, exc_info=True)
+    return {"ok": True, "removed": removed, "archived": archived, "forced": bool(running)}
 
 
 def conductor_link_key(goal_id: str, leaf_id: str) -> str:
@@ -600,20 +867,66 @@ def _subagent_blocker(state: Any, slot: Any) -> str:
     return ""
 
 
+def _linked_transcript_rows(slot: Any) -> int:
+    """How many real rows the slot's LINKED session has on disk.
+
+    A Conductor worker slot is linked: ``get_or_create_slot`` is called with a
+    ``linked_session_key``, and the turns land in THAT session's transcript, not in
+    the slot's own ``messages`` list — which stays empty for the slot's whole life.
+
+    This blind spot has now caused three separate failures, which is why it has a
+    named helper instead of being re-derived at each site: the dispatch proposer
+    read ``messages == 0`` as "never ran" and re-proposed a worker every tick
+    forever; the board reported ``run=False`` for a working session; and
+    ``session_continue`` refused with ``slot_empty`` for a session with a
+    twenty-row transcript. The filename is the session key with ``:`` folded to
+    ``_``, which is the platform's own convention for session files.
+    """
+    key = str(getattr(slot, "linked_session_key", "") or "").strip()
+    if not key:
+        return 0
+    try:
+        home = os.environ.get("KIROCREW_HOME") or str(Path.home() / ".kiro" / "crew")
+        path = Path(home) / "sessions" / (key.replace(":", "_") + ".jsonl")
+        if not path.exists():
+            return 0
+        rows = 0
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # The first line is metadata, not conversation.
+            if '"_type"' in line and '"metadata"' in line:
+                continue
+            rows += 1
+        return rows
+    except OSError:
+        return 0
+
+
 def _has_conversation(slot: Any) -> bool:
     """Whether there is anything here to continue.
 
-    The platform's own predicate, because it is the one ``/continue`` authorizes
-    on and a second reading of "is there a conversation" would eventually
-    disagree with it about the same slot.
+    The platform's own predicate first, because it is the one ``/continue``
+    authorizes on and a second reading of "is there a conversation" would
+    eventually disagree with it about the same slot.
+
+    Then, and only when that says no, the linked session's transcript — see
+    :func:`_linked_transcript_rows`. The platform's predicate is right about the
+    slots it was written for (a dashboard tab holds its own messages) and blind to
+    the ones this app creates. Widening it here rather than in the platform keeps
+    the answer identical for every slot the platform owns.
     """
     probe = _host("kiro_crew.dashboard.chat_handlers", "_has_conversation")
     if probe is not None:
         try:
-            return bool(probe(slot))
+            if bool(probe(slot)):
+                return True
         except Exception:
             logger.debug("conductor: _has_conversation raised", exc_info=True)
-    return bool(getattr(slot, "messages", None))
+    if bool(getattr(slot, "messages", None)):
+        return True
+    return _linked_transcript_rows(slot) > 0
 
 
 def _pristine(slot: Any) -> bool:
@@ -980,6 +1293,38 @@ async def _exec_context_inject(proposal: Proposal, state: Any, ctx: Any) -> dict
     )
 
 
+def say_in_conductor_chat(state: Any, content: str) -> bool:
+    """Write one VISIBLE line into the Conductor chat. No turn. Returns success.
+
+    ``slot.append`` writes a transcript row and broadcasts it (VERIFIED:
+    state.py:2060, ``broadcast`` defaults True), so the operator sees it live while
+    nothing is dispatched. Role ``inject`` renders as a system note rather than a
+    user bubble and is not mirrored to Slack as though the operator typed it.
+
+    Public because two callers need the same behaviour and must not each grow their
+    own copy: :func:`_exec_narrate` for digests, and the decompose route for
+    planning. Planning in particular was invisible in the chat — a button that span
+    for a minute and then silently changed a goal — and the operator asked for it to
+    narrate itself, which is the same requirement digests already had.
+    """
+    if not content.strip():
+        return False
+    slot = _slot_for(state, CONDUCTOR_SLOT)
+    if slot is None or not callable(getattr(slot, "append", None)):
+        return False
+    try:
+        slot.append(
+            "inject",
+            content,
+            cls="msg msg-inject",
+            meta={"injectKind": "conductor", "source": "crew-manager-conductor"},
+        )
+        return True
+    except Exception as exc:
+        logger.warning("conductor: slot.append failed: %r", exc)
+        return False
+
+
 async def _exec_narrate(proposal: Proposal, state: Any, ctx: Any) -> dict[str, Any]:
     """A digest into the Conductor's own slot, and only ever there.
 
@@ -1020,7 +1365,31 @@ async def _exec_narrate(proposal: Proposal, state: Any, ctx: Any) -> dict[str, A
             "refused": refusal,
             "detail": "nothing injected",
         }
-    return await _inject_context(
+    # VISIBLE, and still no turn. ``slot.append`` writes one transcript row and
+    # broadcasts it over the websocket (VERIFIED: state.py:2060, ``broadcast``
+    # defaults True), so the digest renders live in the Conductor chat while
+    # dispatching nothing — which is the property the ephemeral-context write was
+    # reaching for and missed. An ephemeral context write is invisible BY DESIGN
+    # (chat_handlers.py:5292: "no visible message is appended to the slot's chat
+    # history"), so narration could only ever be read by the model, never by the
+    # operator it was written for.
+    #
+    # Role ``inject`` renders as a system note rather than a user bubble
+    # (state.py:861 ``_PROMPT_ROLES``), and is not mirrored to Slack/Telegram as
+    # though the operator typed it. The assisted-mode contract is untouched: no
+    # turn is dispatched, so ``narrate`` stays REVERSIBLE.
+    written = say_in_conductor_chat(state, content)
+    if written:
+        return {
+            "ok": True,
+            "detail": f"narrated {len(content)} chars into {CONDUCTOR_SLOT} (visible, no turn)",
+            "slot": CONDUCTOR_SLOT,
+            "visible": True,
+        }
+
+    # Fallback for a gateway whose slot has no append: the digest is still worth
+    # having where the model can read it, even though the operator cannot see it.
+    result = await _inject_context(
         state,
         CONDUCTOR_SLOT,
         content=content,
@@ -1029,6 +1398,9 @@ async def _exec_narrate(proposal: Proposal, state: Any, ctx: Any) -> dict[str, A
         source=f"{CONTEXT_SOURCE}:narrate",
         max_age=_max_age(proposal.params),
     )
+    if isinstance(result, dict):
+        result["visible"] = False
+    return result
 
 
 async def _exec_session_continue(proposal: Proposal, state: Any, ctx: Any) -> dict[str, Any]:
@@ -1064,6 +1436,38 @@ async def _exec_session_continue(proposal: Proposal, state: Any, ctx: Any) -> di
     return await _dispatch_prompt(state, slot, message, require_conversation=True)
 
 
+def _with_working_dir(prompt: str, root: str) -> str:
+    """Prepend the absolute working directory to a leaf's brief.
+
+    **The single most consequential line in a dispatch.** Every session gets its
+    own sandbox cwd from the platform, derived from the session key
+    (observed: ``kirocrew-workspace/conductor_<goal>_<leaf>/``). A brief written in
+    relative paths is therefore satisfied *inside that sandbox* — the worker does
+    the work correctly, commits it, reports success, and the goal's ``file_exists``
+    predicates never see a thing because they are evaluated against
+    ``scope.root``. Six leaves then build six private copies of the project that
+    never compose into one artifact.
+
+    Observed exactly that: a worker wrote ``chess_engine/board.py`` with 20 passing
+    tests and committed it, while the goal root stayed empty and the leaf stayed
+    open forever.
+
+    The hand-written briefs in the POC happened to carry absolute paths, which is
+    why the failure only appeared once a MODEL wrote the briefs — a reminder that
+    the planner cannot be expected to know an operator's directory layout.
+    """
+    if not root.strip():
+        return prompt
+    return (
+        f"Work in {root}\n"
+        f"Change to that directory first. Every path in the task below is relative "
+        f"to it, and it is a shared repository: other agents are working in the same "
+        f"tree at the same time, so create ONLY the files this task names and commit "
+        f"only those. Do not create a project anywhere else.\n\n"
+        + prompt
+    )
+
+
 async def _exec_session_create(proposal: Proposal, state: Any, ctx: Any) -> dict[str, Any]:
     """Create (or adopt) a goal-bound worker session and give it its first turn.
 
@@ -1090,7 +1494,7 @@ async def _exec_session_create(proposal: Proposal, state: Any, ctx: Any) -> dict
             "refused": "session_create needs params['leaf_id']",
             "detail": "nothing created",
         }
-    prompt = str(params.get("prompt") or "")
+    prompt = _with_working_dir(str(params.get("prompt") or ""), str(params.get("root") or ""))
     if not prompt.strip():
         # The leaf's explicit task statement is the entire content of the
         # session. Creating the slot and leaving it empty would produce a worker
@@ -1187,6 +1591,7 @@ async def _exec_session_create(proposal: Proposal, state: Any, ctx: Any) -> dict
         }
 
     created = existing is None
+    _name_worker(slot, leaf, str(params.get("title") or ""))
     trust_note = _apply_declared_worker_trust(state, slot, params.get("worker_trust"))
     if not created and not _pristine(slot):
         # Adopted a session that has already been used: no second briefing.
@@ -1406,11 +1811,91 @@ _Executor = Callable[[Proposal, Any, Any], Awaitable[dict[str, Any]]]
 #: this table is not a configuration state — there is no code to run. Every
 #: member of ``intents.DENY_HARD`` is absent by construction and
 #: ``test_authority.py`` asserts it over :func:`executable_classes`.
+#: Prepended to a resumed brief. Deterministic on purpose — see
+#: :func:`_exec_session_resume` for why this one is not composed by a model.
+RESUME_PREAMBLE = (
+    "Your previous attempt at this task was CUT OFF mid-way — the gateway "
+    "restarted while your turn was in flight, so the turn ended without you "
+    "finishing or reporting. Nothing is wrong with your approach.\n\n"
+    "Before doing anything else: look at what is already on disk. Some or all of "
+    "this task may already be done. Do not redo finished work and do not revert "
+    "it. Carry on from where the tree actually is, and finish.\n\n"
+    "If the task cannot be finished because something outside this repository is "
+    "missing (a binary that is not installed, a service that is not reachable), "
+    "do NOT try to install it and do NOT stop silently. Implement the part you "
+    "can, make the missing piece a documented, gracefully-skipped path, and say "
+    "plainly in your final message what was missing and what you did instead.\n\n"
+    "The original task follows.\n\n"
+)
+
+
+async def _exec_session_resume(proposal: Proposal, state: Any, ctx: Any) -> dict[str, Any]:
+    """Re-dispatch a worker's own brief after its turn died. No model involved.
+
+    ``session_resume`` has been in :data:`intents.ACTION_CLASSES` since the plan,
+    at ``Tier.ACT`` and annotated "preferred over session_continue" — with no
+    executor, so it was declared and unreachable. This is that executor, and the
+    case that forced it is a real one: a worker was mid-tool-call when the gateway
+    restarted to deploy a fix, its turn was killed, and the leaf stayed open with a
+    session that would never speak again. Stall detection could not see it either
+    (``detect_stalls`` requires ``running``, and a killed turn is not running), so
+    the goal sat at five of six steps indefinitely.
+
+    **Why this one is deterministic while ``session_continue`` is composed.** A
+    continuation asks a model to judge what a stuck worker should be told, and the
+    plan is deliberately strict there: no composed message, no turn, because
+    "please continue" spam is the behaviour operators switch off on day one. A
+    resume is not that judgement. The previous turn did not decide to stop — it was
+    interrupted — so the correct message is the brief the operator already wrote,
+    re-sent, with a preamble saying so. There is nothing for a model to decide, and
+    making the recovery path depend on model availability would mean a restart
+    could strand a worker permanently on a gateway with no model.
+
+    Refuses rather than doubling up when the slot is already running: a resume into
+    a live turn would dispatch two turns into one session, which is the one thing
+    this must never do.
+    """
+    if not proposal.target_slot:
+        return {
+            "ok": False,
+            "refused": "session_resume needs a target_slot",
+            "detail": "no turn was dispatched",
+        }
+    brief = str(proposal.params.get("prompt") or proposal.params.get("message") or "")
+    if not brief.strip():
+        return {
+            "ok": False,
+            "refused": "session_resume needs params['prompt'] — the leaf's own brief",
+            "detail": "no turn was dispatched",
+        }
+    slot = _slot_for(state, proposal.target_slot)
+    if slot is None:
+        return {
+            "ok": False,
+            "refused": f"slot {proposal.target_slot!r} is not live; rehydration is the "
+            "reconciler's decision, not the executor's",
+            "detail": "no turn was dispatched",
+        }
+    if bool(getattr(slot, "running", False)):
+        return {
+            "ok": False,
+            "refused": "the session is already running a turn; a resume would dispatch a second",
+            "detail": "no turn was dispatched",
+        }
+    prompt = _with_working_dir(RESUME_PREAMBLE + brief, str(proposal.params.get("root") or ""))
+    trust_note = _apply_declared_worker_trust(state, slot, proposal.params.get("worker_trust"))
+    result = await _dispatch_prompt(state, slot, prompt, require_conversation=False)
+    if trust_note and result.get("ok"):
+        result["detail"] = f"{result.get('detail') or 'resumed'}; {trust_note}"
+    return result
+
+
 EXECUTORS: dict[str, _Executor] = {
     "context_inject": _exec_context_inject,
     "narrate": _exec_narrate,
     "session_continue": _exec_session_continue,
     "session_create": _exec_session_create,
+    "session_resume": _exec_session_resume,
     "escalate": _exec_escalate,
     "operator_notify": _exec_operator_notify,
 }

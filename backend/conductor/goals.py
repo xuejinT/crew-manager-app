@@ -127,10 +127,23 @@ _SCAN_CHUNK = 256 * 1024
 # ── vocabulary ───────────────────────────────────────────────────────────────
 
 class GoalStatus(str, Enum):
-    """``draft → active → holding | blocked | awaiting_confirmation → done | abandoned``."""
+    """``draft → ready → active → holding | blocked | awaiting_confirmation → done | abandoned``."""
 
     DRAFT = "draft"
-    """No ``done_when``, or not yet started. Never dispatched for."""
+    """No ``done_when``, or no steps yet. Never dispatched for."""
+
+    READY = "ready"
+    """Planned and waiting for the operator to start it. Never dispatched for.
+
+    Split out of ``draft`` because the two are different situations that an operator
+    acts on differently, and collapsing them hid the one that matters: a goal whose
+    steps had just been planned still read "draft", so the panel gave no sign that
+    anything had been achieved and no sign of what to do next. ``draft`` now means
+    "not described yet", ``ready`` means "described, planned, and yours to start".
+
+    Deliberately NOT in :data:`DISPATCHABLE_STATUSES`. Planning is not permission —
+    the draft→active transition stays the operator's, and this status is the place
+    where their decision is visibly outstanding rather than implied."""
 
     ACTIVE = "active"
     HOLDING = "holding"
@@ -796,6 +809,12 @@ def _normalize_leaves(raw: object) -> list[dict[str, Any]]:
             status = LeafStatus.OPEN.value
         out.append({
             "id": leaf_id,
+            # Preserved because it is what the operator SEES. Dropping it meant a
+            # dispatched worker could only be titled with its leaf id, so a board
+            # of six autonomous sessions read "constants / board / movegen" with no
+            # indication of what any of them was doing. The id is the handle; the
+            # title is the sentence.
+            "title": _clean_text(entry.get("title"), 160),
             "intent_text": _clean_body(entry.get("intent_text"), MAX_STATEMENT_CHARS),
             "done_when": _normalize_done_when(entry.get("done_when")),
             "predicted_paths": _str_list(entry.get("predicted_paths")),
@@ -1202,7 +1221,8 @@ def _eval_all_leaves_closed(goal: Goal, index: int) -> dict[str, Any]:
         if str(leaf.get("status", "")) not in CLOSED_LEAF_STATUSES
     ]
     if open_leaves:
-        detail = f"{len(open_leaves)} leaf/leaves not closed: {', '.join(open_leaves[:5])}"
+        noun = "step" if len(open_leaves) == 1 else "steps"
+        detail = f"{len(open_leaves)} {noun} not finished: {', '.join(open_leaves[:5])}"
         return _result("all_leaves_closed", False, detail, index=index)
     return _result("all_leaves_closed", True, f"all {len(goal.leaves)} leaves closed", index=index)
 
@@ -1339,6 +1359,8 @@ def dispatchable(goal: Goal) -> tuple[bool, str]:
         return False, "draft: no done_when predicate, so nothing would end it"
     if goal.status == GoalStatus.DRAFT.value:
         return False, "draft: not started yet"
+    if goal.status == GoalStatus.READY.value:
+        return False, f"planned ({len(goal.leaves)} step(s)) and ready — press Start"
     if goal.status == GoalStatus.HOLDING.value:
         return False, f"held by you{': ' + goal.paused_reason if goal.paused_reason else ''}"
     if goal.status == GoalStatus.BLOCKED.value:

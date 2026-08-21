@@ -26,11 +26,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+#: This machine's home, so the script carries no operator's absolute paths.
+HOME = str(Path.home())
+
 BASE = "http://localhost:5476"
 APP = "/api/apps/crew-manager"
 GOAL_FILE = Path(__file__).resolve().parent / "chess-goal.json"
-TARGET = Path("/local/home/zedmor/.kiro/crew/workspace/chess-poc")
-KIROCREW = "/local/home/zedmor/workplace/KiroCrew/.venv/bin/kirocrew"
+TARGET = Path(HOME + "/.kiro/crew/workspace/chess-poc")
+KIROCREW = HOME + "/workplace/KiroCrew/.venv/bin/kirocrew"
 
 
 def token() -> str:

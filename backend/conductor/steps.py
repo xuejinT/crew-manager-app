@@ -47,13 +47,18 @@ step callable, with no gateway present.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
+import time
 from dataclasses import dataclass, field
+from datetime import datetime
+import os
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 from . import act
+from . import approvals as approvals_mod
 from . import breaker
 from . import budget as budget_mod
 from . import control as control_mod
@@ -118,6 +123,11 @@ MAX_PROPOSALS_PER_TICK = 24
 #: Digest cadence per goal. The operator gets one digest per goal per period, not
 #: one bell per finding.
 DIGEST_SECS = 3600.0
+#: Floor between digests when there IS news. One deliberate tick is 60s, so this
+#: lets consecutive ticks each narrate while a goal is actually moving, and still
+#: bounds narration to at most one row per tick — the operator's chat is a surface
+#: to read, and a supervisor that writes faster than it acts is noise.
+MIN_DIGEST_SECS = 45.0
 
 #: Deliberate cadence floor. A goal's ``cadence.tick_secs`` may raise it, never
 #: lower it below the deliberate tick itself.
@@ -131,7 +141,16 @@ TURN_CLASSES: frozenset[str] = gate_mod.TURN_CLASSES
 
 #: Classes whose body is composed by a model at step 10.
 COMPOSED_CLASSES: frozenset[str] = frozenset({
-    "session_continue", "context_inject", "narrate", "escalate", "operator_notify",
+    # ``narrate`` is deliberately NOT here. It was, and the result was a status
+    # report that invented things: the model reworded the digest with the
+    # Conductor slot's own stale transcript in context and produced "three options
+    # were offered — saving a shareable artifact…" (leaked from an unrelated
+    # conversation the day before) and "silent for thirty hours and fifty-six
+    # minutes" (the Conductor slot's idle age, reported as though it were the
+    # goal's). Prose is what a model is for; a factual status line is not prose,
+    # and a digest that states a false duration destroys trust in the digests that
+    # matter. The body is machine-derived and shipped verbatim.
+    "session_continue", "context_inject", "escalate", "operator_notify",
 })
 
 #: How a class's composed text is carried in ``params``.
@@ -446,7 +465,15 @@ async def guard(tc: TickContext) -> dict[str, Any]:
 
 
 async def reconcile(tc: TickContext) -> dict[str, Any]:
-    """Close out intents that have no outcome, **by observation, never by retry**.
+    """Re-adopt lost workers, then close out intents that have no outcome.
+
+    Worker re-adoption runs FIRST and deliberately before :func:`observe`: a slot
+    the gateway forgot is indistinguishable from a slot that never existed, so
+    reconciling against an observation taken without it would conclude that a
+    dispatched worker was never created and free its leaf for re-dispatch —
+    duplicating work that is sitting finished on disk.
+
+    Then: close out intents that have no outcome, **by observation, never by retry**.
 
     An intent row with no outcome is precisely the crash window: the driver said
     what it was about to do, and then the process died before it could say what
@@ -479,9 +506,17 @@ async def reconcile(tc: TickContext) -> dict[str, Any]:
     * **unknown** ⇒ leave the claim exactly as it is. Unknown means reconcile, and a
       thing that may be half-landed must not be cleared for another attempt.
     """
+    readopted = await readopt_workers(tc)
+    # Then the goal↔session integrity check. Runs here because reconcile is where
+    # "make the world match the record" lives, and AFTER re-adoption so a worker the
+    # gateway had merely forgotten is back in the registry before we ask whether any
+    # goal claims it — otherwise every restart would look like a tree full of
+    # orphans. Never on a dry run: it mutates.
+    reaped = {} if tc.dry_run else await asyncio.to_thread(reap_orphan_workers, tc)
+
     open_rows = await ledger.unreconciled_async(limit=100)
     if not open_rows:
-        return {"open": 0}
+        return {"open": 0, **readopted, **reaped}
 
     journal = await store.read_json_async(act.acted_path(), None)
     acted = journal.get("acted") if isinstance(journal, dict) else None
@@ -520,7 +555,8 @@ async def reconcile(tc: TickContext) -> dict[str, Any]:
             detail,
         )
 
-    return {"open": len(open_rows), "landed": landed, "lost": lost, "unknown": unknown}
+    return {"open": len(open_rows), "landed": landed, "lost": lost, "unknown": unknown,
+            **readopted, **reaped}
 
 
 def _reconcile_one(
@@ -692,6 +728,396 @@ async def operator(tc: TickContext) -> dict[str, Any]:
 # ── step 3: steer ────────────────────────────────────────────────────────────
 
 
+#: Cursor for chat-sourced steers: the ts of the last Conductor message consumed.
+_CHAT_CURSOR = "chat.cursor.json"
+
+#: Explicit opt-in prefixes. A message in the Conductor window is a CONVERSATION
+#: by default and only an instruction when it says so.
+_STEER_PREFIXES: tuple[str, ...] = ("conductor:", "steer:", "/steer", "!")
+
+
+def _is_steer_intent(text: str) -> bool:
+    """Is this message meant for the DRIVER rather than the chat model?
+
+    Two ways to qualify: an explicit prefix, or a first token that is already a
+    recognised directive (``pause_goal``, ``stop``, …) so the HTTP grammar works
+    unchanged when typed.
+
+    **Everything else is conversation.** The first cut harvested every user
+    message, and the consequences were immediate and bad: "so are we done with the
+    goal?" and "what you can do as conductor?" became permanent goal *guidance*,
+    which shapes the wording of every injection and every model call the driver
+    makes. Asking a question silently reprogrammed the goal. An operator must be
+    able to talk to the chat without editing the machine, and the boundary has to
+    be something they can see, not something they have to remember.
+    """
+    lowered = text.strip().lower()
+    if any(lowered.startswith(p) for p in _STEER_PREFIXES):
+        return True
+    first = lowered.split()[0].strip(":") if lowered.split() else ""
+    return first in control_mod.DIRECTIVES
+
+
+def _strip_steer_prefix(text: str) -> str:
+    """Drop the opt-in marker so the directive grammar sees a clean first token."""
+    stripped = text.strip()
+    for prefix in _STEER_PREFIXES:
+        if stripped.lower().startswith(prefix):
+            return stripped[len(prefix):].strip() or stripped
+    return stripped
+
+
+def _sessions_dir() -> Path:
+    """Where the platform writes session transcripts.
+
+    Resolved from the environment the same way ``initiatives.py`` resolves the app
+    data home, rather than imported: the conductor must not fail to tick because a
+    gateway private moved.
+    """
+    home = os.environ.get("KIROCREW_HOME") or str(Path.home() / ".kiro" / "crew")
+    return Path(home) / "sessions"
+
+
+def _goal_files_exist() -> bool:
+    """Whether ANY goal file is on disk, load failures aside.
+
+    Used to tell "every goal was removed" from "the goals could not be read", which
+    is the difference between a legitimate reap and destroying a live tree.
+    """
+    try:
+        return any(goals_mod.goals_dir().glob("*.json"))
+    except OSError:
+        return True          # unreadable ⇒ assume goals exist and reap nothing
+
+
+def _reap_orphan_transcripts(claimed: set[str]) -> dict[str, Any]:
+    """Archive worker transcripts whose goal or step no longer exists.
+
+    The second half of the integrity check, and the half that actually leaked. A
+    worker slot lives in memory and is dropped on restart; its TRANSCRIPT is on disk
+    and outlives everything. So a goal removed after a restart left files that no
+    slot-based cleanup could ever reach — observed exactly that way: zero orphaned
+    slots, zero goal files, twelve worker transcripts.
+
+    Renamed into the app's own archive rather than deleted. A transcript is the
+    record of what a worker actually did, and "tidy the list" must not mean "destroy
+    the evidence".
+    """
+    moved: list[str] = []
+    try:
+        live_dir = _sessions_dir()
+        if not live_dir.is_dir():
+            return {}
+        keep = store.conductor_dir() / "session-archive"
+        for path in sorted(live_dir.glob("conductor_*.jsonl")):
+            if path.stem in claimed:
+                continue
+            keep.mkdir(parents=True, exist_ok=True)
+            try:
+                path.replace(keep / f"{path.stem}.{int(tc_now())}.jsonl")
+                moved.append(path.stem)
+            except OSError:
+                logger.warning("conductor: could not archive %s", path.name, exc_info=True)
+            # The lock sidecar is an empty mutex inode, not data; drop it so the
+            # directory does not accumulate one per retired worker.
+            lock = live_dir / f"{path.name}.lock"
+            try:
+                if lock.exists():
+                    lock.unlink()
+            except OSError:
+                pass
+    except OSError:
+        logger.debug("conductor: transcript sweep failed", exc_info=True)
+        return {}
+    if moved:
+        logger.info("conductor: archived %d orphaned worker transcript(s)", len(moved))
+        return {"transcripts_archived": moved}
+    return {}
+
+
+def tc_now() -> float:
+    """Wall clock, isolated so the sweep's filenames are testable."""
+    return time.time()
+
+
+def reap_orphan_workers(tc: TickContext) -> dict[str, Any]:
+    """Retire worker slots that no goal claims. The goal↔session integrity check.
+
+    Removing a goal takes its workers with it, but that is one write followed by
+    another and anything can happen in between — the process can die, a goal file can
+    be hand-edited or restored from a backup, a step can be renamed so its worker no
+    longer corresponds to any leaf. Eager cleanup handles the normal case; this
+    handles every other one, and it is what makes the invariant true rather than
+    merely usually true:
+
+        every ``cm-*`` slot corresponds to a leaf of a goal that exists.
+
+    **Claimed by construction, not by parsing.** Both goal ids and leaf ids may
+    contain dashes, so ``cm-a-b-c`` cannot be split back into (goal, leaf)
+    unambiguously. Instead the claimed set is BUILT from the goals — one name per
+    (goal, leaf) pair — and anything else carrying the prefix is an orphan. No
+    parsing, no ambiguity.
+
+    Two fail-safes, because the cost of a false positive here is destroying a working
+    session:
+
+    * **A running worker is never reaped.** It may belong to a goal being edited this
+      very second, and a turn in flight is exactly what must not be interrupted.
+    * **An empty goal list reaps nothing.** No goals loaded is far more likely to mean
+      the load failed than that every goal was deleted, and "the file was unreadable"
+      must not read as "remove all the workers".
+    """
+    state = tc.state
+    if state is None:
+        return {}
+    # The fail-safe, stated precisely. "No goals loaded" has two causes and only one
+    # of them makes reaping correct: every goal was genuinely removed, or the load
+    # failed. Comparing against the FILES tells them apart. Refusing to reap
+    # whenever the list was empty was the first cut and it was wrong in the most
+    # ordinary case there is — remove your only goal, and its workers could never be
+    # collected again.
+    if not tc.goals and _goal_files_exist():
+        return {"reap_skipped": "goals are on disk but none loaded"}
+
+    claimed_slots = {
+        f"{act.SLOT_NAME_PREFIX}{goal.id}-{leaf.get('id')}"
+        for goal in tc.goals
+        for leaf in (goal.leaves or [])
+        if leaf.get("id")
+    }
+    claimed_files = {
+        f"conductor_{goal.id}_{leaf.get('id')}"
+        for goal in tc.goals
+        for leaf in (goal.leaves or [])
+        if leaf.get("id")
+    }
+    summary = _reap_orphan_transcripts(claimed_files)
+    claimed = claimed_slots
+    live = act.worker_slots(state)
+    orphans = [w for w in live if w["slot"] not in claimed and not w["running"]]
+    held = [w["slot"] for w in live if w["slot"] not in claimed and w["running"]]
+    if held:
+        # Reported rather than silently skipped: a running orphan is the one case an
+        # operator may want to look at, and it will be collected once it settles.
+        summary["running_orphans"] = held
+    if not orphans:
+        return summary
+
+    removed: list[str] = []
+
+    for worker in orphans:
+        result = act.remove_worker_slots(state, slot=worker["slot"])
+        if result.get("ok"):
+            removed.extend(result.get("removed") or [])
+    if removed:
+        summary["orphans_reaped"] = removed
+        logger.info("conductor: reaped %d orphaned worker slot(s): %s",
+                    len(removed), ", ".join(removed[:5]))
+    return summary
+
+
+def _sandbox_root() -> str:
+    """The parent of every per-session working directory.
+
+    The platform gives each session its own cwd under this root, so it is a
+    legitimate place for a worker to write even though no goal names it.
+    Resolved the way ``kiro_crew.config.paths`` resolves it (``KIROCREW_WORKSPACE``,
+    else ``~/workplace/kirocrew-workspace``) and, like :func:`_sessions_dir`,
+    re-derived rather than imported so a gateway private moving cannot stop the
+    tick.
+    """
+    override = os.environ.get("KIROCREW_WORKSPACE")
+    if override:
+        return str(Path(override))
+    return str(Path.home() / "workplace" / "kirocrew-workspace")
+
+
+def _worker_ran_before(goal_id: str, leaf_id: str, leaf: dict[str, Any]) -> bool:
+    """Did this leaf ever have a live worker? Evidence only, never assumption.
+
+    Two acceptable proofs: the leaf records the slot it was dispatched to, or a
+    transcript exists under the conductor link key the executor stamps
+    (``conductor_<goal>_<leaf>.jsonl``). Anything else is a leaf that has not run,
+    and recreating a slot for it would take dispatch away from the proposer.
+    """
+    if str(leaf.get("slot") or "").strip():
+        return True
+    try:
+        return (_sessions_dir() / f"conductor_{goal_id}_{leaf_id}.jsonl").exists()
+    except OSError:
+        return False
+
+
+async def readopt_workers(tc: TickContext) -> dict[str, Any]:
+    """Bring back goal-owned worker slots the gateway no longer holds.
+
+    **The gap this closes.** The driver resumes itself across a restart from
+    ``control.json``, but its WORKERS did not: an app-owned slot is dropped from
+    memory on shutdown and the boot restore skips anything marked ``closed``
+    (``chat_persistence.py:474``). Observed, mid-run: a restart to deploy an
+    unrelated fix left five worker transcripts on disk, zero worker slots in the
+    gateway, and a board showing nothing — while the goal was still active with
+    three leaves open. A supervisor whose premise is surviving restarts cannot
+    lose its whole crew to one.
+
+    The platform already supports this and says so: ``adopt_closed`` exists
+    precisely because "app-owned worker slots … lifecycle belongs to the app …
+    and idle-slot cleanup marks them closed without the user ever asking for
+    that" (``chat_persistence.py:470-473``). It is opt-in, and the app has to ask.
+    This is the app asking.
+
+    Runs on every tick rather than only at resume, so it also heals a slot the
+    idle sweeper closed while the goal was still working. Rehydration is by
+    transcript: a leaf whose session never existed has no metadata and is skipped
+    rather than conjured, so this can only ever restore a worker that really ran.
+    """
+    state = tc.state
+    if state is None or not tc.goals:
+        return {}
+    # Recreate rather than rehydrate. ``rehydrate_slot_from_history_async`` keys on
+    # the SLOT name and derives its transcript path from it, but a worker's
+    # transcript is written under its ``linked_session_key`` — on disk it is
+    # ``conductor_<goal>_<leaf>.jsonl``, not ``dashboard_cm-<goal>-<leaf>.jsonl``.
+    # So rehydrating by slot name finds no metadata and returns None every time
+    # (verified: it did). ``get_or_create_slot`` is idempotent by name AND takes
+    # the link key, so recreating restores the slot and reattaches the history the
+    # platform already has. The executor's own pristine-check stops this from
+    # re-briefing a worker that has already run.
+    create = getattr(state, "get_or_create_slot", None)
+    if not callable(create):
+        return {"skipped": "gateway state has no get_or_create_slot"}
+
+    live = set()
+    try:
+        live = set(getattr(state, "_slots", {}) or {})
+    except Exception:
+        pass
+
+    restored: list[str] = []
+    for goal in tc.goals:
+        if goal.status not in goals_mod.DISPATCHABLE_STATUSES:
+            continue
+        for leaf in goal.leaves or []:
+            leaf_id = str(leaf.get("id") or "")
+            if not leaf_id:
+                continue
+            if str(leaf.get("status", "")) in goals_mod.CLOSED_LEAF_STATUSES:
+                continue
+            name = str(leaf.get("slot") or f"{act.SLOT_NAME_PREFIX}{goal.id}-{leaf_id}")
+            if name in live:
+                continue
+            # RE-ADOPTION IS RECOVERY, NOT CREATION. Without this guard every open
+            # leaf got a slot on the first tick — six empty shells, msgs=0, no turn
+            # dispatched — and because the slot then existed, ``_propose_dispatch``
+            # skipped the leaf as already-worked and NOTHING was ever dispatched.
+            # The regression was mine and it silently disabled the whole feature.
+            #
+            # A leaf that really ran has a transcript, because its
+            # ``linked_session_key`` is the history key. That file is the evidence,
+            # and dispatch belongs to ``_propose_dispatch`` alone.
+            if not _worker_ran_before(goal.id, leaf_id, leaf):
+                continue
+            try:
+                slot = create(
+                    name=name,
+                    workspace=str(goal.scope.get("workspace") or "default"),
+                    app=act.APP_NAME,
+                    linked_session_key=act.conductor_link_key(goal.id, leaf_id),
+                    origin="app",
+                )
+            except Exception:
+                logger.debug("conductor: could not re-adopt %s", name, exc_info=True)
+                continue
+            if slot is not None:
+                act.name_worker(slot, leaf_id, str(leaf.get("title") or ""))
+                restored.append(name)
+                logger.info("conductor: re-adopted worker slot %s after a restart", name)
+    return {"readopted": len(restored), "slots": restored[:6]} if restored else {}
+
+
+async def _harvest_conductor_chat(tc: TickContext) -> int:
+    """Turn what the operator typed in the Conductor window into steer records.
+
+    **Why this exists.** The window is labelled Conductor, so an operator types
+    "focus on the search module" into it and reasonably expects the driver to hear
+    them. It did not: steers arrived only via ``POST /conductor/steer``, and the
+    chat talked to a model that could not act. So the one surface that looked like
+    a control was the one surface that was not connected to anything.
+
+    **Why it grants nothing.** Harvested text goes through
+    :func:`control.append_steer` — the same queue, parsed by the same
+    :func:`control.parse_steer`, applied by the same :func:`steer`. A directive is
+    honoured exactly as it would be over HTTP, guidance is guidance, and a request
+    for a hard-denied class hits ``_refuse_authority`` and comes back as "you asked
+    for X; that requires you". The chat becomes an INPUT to the existing
+    chokepoint, never a bypass of it.
+
+    Only ``user`` rows are read. Reading ``assistant`` would let the model steer
+    the driver, and reading ``inject`` would let the driver's own digests steer it —
+    a feedback loop that writes to the file it then reads.
+    """
+    state = tc.state
+    if state is None:
+        return 0
+    slot = None
+    try:
+        slots = getattr(state, "_slots", {}) or {}
+        slot = slots.get(act.CONDUCTOR_SLOT)
+    except Exception:
+        slot = None
+    if slot is None:
+        return 0
+    rows = getattr(slot, "messages", None)
+    if not isinstance(rows, list):
+        return 0
+
+    path = store.conductor_dir() / _CHAT_CURSOR
+    cursor = await store.read_json_async(path, {}) or {}
+    last_seen = str(cursor.get("ts") or "")
+
+    if not last_seen:
+        # COLD START: adopt the latest message as the watermark and harvest
+        # NOTHING. An empty cursor previously meant "read the backlog", which
+        # ingested a whole prior conversation the moment the feature shipped — a
+        # document request from the day before became guidance on a chess build.
+        # A control surface must start listening when it is switched on, not
+        # retroactively consent to everything already said.
+        newest = ""
+        for row in rows:
+            if isinstance(row, dict) and str(row.get("role")) == "user":
+                newest = str(row.get("ts") or "") or newest
+        await store.write_json_async(path, {"ts": newest})
+        logger.info("conductor: chat steer cursor initialised at %r (nothing harvested)", newest)
+        return 0
+
+    fresh: list[str] = []
+    for row in rows[-40:]:
+        if not isinstance(row, dict) or str(row.get("role")) != "user":
+            continue
+        ts = str(row.get("ts") or "")
+        if ts and ts <= last_seen:
+            continue
+        if ts:
+            last_seen = ts
+        text = str(row.get("content") or "").strip()
+        if not text or not _is_steer_intent(text):
+            continue
+        fresh.append(_strip_steer_prefix(text))
+
+    for text in fresh[:5]:
+        try:
+            # actor carries the provenance so a ledger reader can tell a steer
+            # typed into the chat from one POSTed to /conductor/steer. It is still
+            # the operator either way — which is exactly why it may steer at all.
+            await control_mod.append_steer_async(text, actor="operator:conductor-chat")
+        except Exception:
+            logger.warning("conductor: could not queue a chat steer", exc_info=True)
+    if fresh:
+        await store.write_json_async(path, {"ts": last_seen})
+        logger.info("conductor: harvested %d steer(s) from the Conductor chat", len(fresh))
+    return len(fresh)
+
+
 async def steer(tc: TickContext) -> dict[str, Any]:
     """Drain the steer queue and apply it. Two halves, and the split is the boundary.
 
@@ -712,10 +1138,11 @@ async def steer(tc: TickContext) -> dict[str, Any]:
     counter from inside the hash — which means clearing it has to happen here,
     explicitly, where it is auditable.
     """
+    harvested = await _harvest_conductor_chat(tc)
     records = await control_mod.drain_steer_async()
     tc.steers = records
     if not records:
-        return {"drained": 0}
+        return {"drained": 0, "from_chat": harvested}
 
     applied: list[str] = []
     refused: list[str] = []
@@ -1565,10 +1992,26 @@ async def propose(tc: TickContext) -> dict[str, Any]:
             continue
         members = tc.members.get(goal.id, [])
         tc.proposals.extend(_propose_dispatch(tc, goal, members))
+        # Before nudging anything, make sure the workers that already exist are
+        # actually working. A killed turn is invisible to `_propose_stalls`.
+        tc.proposals.extend(_propose_worker_liveness(tc, goal, members))
         tc.proposals.extend(_propose_statement(tc, goal, members))
         tc.proposals.extend(_propose_stalls(tc, goal, members))
         tc.proposals.extend(_propose_loops(tc, goal, members))
-        tc.proposals.extend(_propose_digest(tc, goal, members))
+        # The events the last digest has not yet reported. Read here rather than
+        # inside the (sync) proposer so the file read is offloaded, and read from
+        # the LEDGER rather than from this tick's decisions because propose runs
+        # BEFORE execute — a digest built from this tick's proposals would report
+        # intentions as though they were outcomes.
+        events: list[dict[str, Any]] = []
+        try:
+            # Wide enough that a burst of worker starts cannot be pushed out by
+            # the driver's own digest rows before the next digest reads them: at
+            # three rows a tick, 40 covered barely a few minutes.
+            events = await ledger.tail_async(200, goal_id=goal.id)
+        except Exception:
+            logger.debug("conductor: ledger tail failed for digest", exc_info=True)
+        tc.proposals.extend(_propose_digest(tc, goal, members, events))
 
     if len(tc.proposals) > MAX_PROPOSALS_PER_TICK:
         logger.warning(
@@ -1667,14 +2110,38 @@ def _propose_dispatch(tc: TickContext, goal: Goal, members: list[str]) -> list[P
         if in_flight + len(out) >= max_wip:
             tc.note(
                 f"goal {goal.id}: WIP ceiling {max_wip} reached; "
-                f"{len([l for l in leaves if str(l.get('id')) not in closed])} leaf/leaves still open"
+                f"{len([l for l in leaves if str(l.get('id')) not in closed])} step(s) still open"
             )
             break
         blocking = [d for d in (leaf.get("depends_on") or []) if str(d) not in closed]
         if blocking:
             continue
         slot_name = f"{act.SLOT_NAME_PREFIX}{goal.id}-{leaf_id}"
-        if observation is not None and slot_name in observation.slots:
+        # Skip a leaf whose worker has actually BEEN USED, not one that merely has
+        # a slot. An empty slot is not evidence of work — re-adoption creates
+        # pristine shells after a restart, and treating mere existence as "already
+        # dispatched" made the driver skip every leaf and dispatch nothing at all.
+        #
+        # But the slot's own message count is NOT the liveness test either, and
+        # this is the trap: a worker slot is LINKED (``linked_session_key``), so its
+        # transcript lives under the linked session and the slot itself reports
+        # ``messages=0`` forever. Trusting that count meant this proposer re-proposed
+        # a worker for a finished leaf every single tick, the executor's idempotency
+        # guard refused each one as a duplicate, and the operator got "Started a
+        # worker … — denied: duplicate: nothing executed" once a minute while
+        # nothing moved. A livelock that only looked like an event.
+        #
+        # ``_worker_ran_before`` asks the question the count cannot: is there a
+        # transcript under the conductor link key, or a slot recorded on the leaf.
+        existing = observation.slots.get(slot_name) if observation is not None else None
+        if existing is not None and (
+            int(getattr(existing, "messages", 0) or 0) > 0
+            or _worker_ran_before(goal.id, leaf_id, leaf)
+        ):
+            # The leaf still is not closed, so it does need attention — but a
+            # SECOND session is not the way to give it. Nudging or resuming the
+            # worker that already exists is the stall detector's job, and a
+            # duplicate create would only ever be refused downstream.
             continue
         # ``intent_text`` is the field the goal normalizer preserves and is
         # therefore the leaf's brief of record; ``prompt`` is only the name this
@@ -1716,11 +2183,304 @@ def _propose_dispatch(tc: TickContext, goal: Goal, members: list[str]) -> list[P
                     # deny-fast, so an unattended goal has to declare it.
                     "worker_trust": str(goal.scope.get("worker_trust") or ""),
                     "workspace": str(goal.scope.get("workspace") or "default"),
+                    # Where the work must LAND. Without it a worker writes into the
+                    # per-session sandbox the platform gives it
+                    # (kirocrew-workspace/<session key>/), the goal's path
+                    # predicates never see the files, and six workers each build a
+                    # private copy of the project that never composes.
+                    "root": str(goal.scope.get("root") or ""),
                 },
                 # The gate globs these against other in-flight leaves, which is
                 # what makes "file ownership is the concurrency control" an
                 # enforced rule rather than a line in a conventions file.
                 predicted_paths=[str(p) for p in (leaf.get("predicted_paths") or [])],
+            )
+        )
+    return out
+
+
+#: How long a worker may be idle on an open leaf before the driver treats it as
+#: not-working. Long enough that a turn which has just landed and is about to be
+#: followed by another is not interrupted; short enough that a killed turn is
+#: picked up within a couple of minutes rather than never.
+IDLE_WORKER_SECS = 150.0
+
+#: Resumes before the driver stops trying and asks the operator. Two, because a
+#: restart can plausibly catch the same worker twice, and because the third
+#: identical failure is evidence about the task rather than about the gateway.
+MAX_RESUMES_PER_LEAF = 2
+
+#: Nudges for a worker that ENDED its own turn with the step unfinished. Budgeted
+#: separately from resumes: the two answer different failures, and sharing one
+#: allowance meant a resumed leaf could never be nudged.
+MAX_CONTINUES_PER_LEAF = 2
+
+
+def _worker_turn_state(goal_id: str, leaf_id: str) -> tuple[str, float]:
+    """``(state, last_ts)`` for a worker's transcript. Never raises.
+
+    ``"interrupted"`` — the last thing in the transcript is a tool call with no
+    assistant row after it. A turn that ends this way did not decide to stop; it
+    was killed (a gateway restart mid-tool-call is the observed cause), so the
+    right answer is to re-send the brief.
+
+    ``"stopped"`` — the last row is an assistant message. The model chose to end
+    its turn with the leaf still open, which is a judgement the driver should not
+    paper over by re-sending the same brief: it needs a continuation whose message
+    says what to do differently, or the operator.
+
+    ``"empty"`` — briefed but nothing came back. ``"none"`` — no transcript.
+    """
+    try:
+        path = _sessions_dir() / f"conductor_{goal_id}_{leaf_id}.jsonl"
+        if not path.exists():
+            return "none", 0.0
+        rows: list[dict[str, Any]] = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("_type") != "metadata":
+                rows.append(row)
+    except OSError:
+        return "none", 0.0
+    if not rows:
+        return "empty", 0.0
+    last_ts = 0.0
+    for row in reversed(rows):
+        stamp = row.get("ts")
+        if stamp:
+            try:
+                last_ts = datetime.fromisoformat(str(stamp)).timestamp()
+            except (ValueError, TypeError):
+                last_ts = 0.0
+            break
+    roles = [str(r.get("role") or "") for r in rows]
+    body = [r for r in roles if r in ("assistant", "tool", "user", "inject")]
+    if not body:
+        return "empty", last_ts
+    if body[-1] == "tool":
+        return "interrupted", last_ts
+    if body[-1] in ("inject", "user"):
+        # Briefed, and not one word back. Same recovery as an interrupted turn:
+        # the dispatch itself did not take.
+        return "interrupted", last_ts
+    return "stopped", last_ts
+
+
+#: How much of a brief has to appear in the transcript for it to count as
+#: delivered. Long enough to be distinctive, short enough to survive the
+#: preamble and any whitespace the platform normalises.
+_BRIEF_FINGERPRINT_CHARS = 120
+
+
+def _brief_delivered(goal_id: str, leaf_id: str, brief: str) -> bool:
+    """Has this worker actually been told THIS version of its task?
+
+    Evidence from the transcript, not bookkeeping: the executor injects the brief
+    as an ``inject`` row, so the brief's own opening words are either in the
+    conversation or they are not.
+
+    The case this exists for. The operator rewrote a step — the original brief said
+    "match against Stockfish" and the rewrite added "you may clone and build it
+    into vendor/, and you may not use sudo". The worker had already stopped and was
+    asking what to do, so the liveness proposer sent a *continuation*, whose message
+    is composed from the situation and does NOT carry the brief. The worker went on
+    guessing at install commands from the old instructions and getting refused,
+    while the answer sat in a field it had never been shown. A step whose
+    instructions changed is a step whose worker has to be re-briefed.
+    """
+    fingerprint = " ".join((brief or "").split())[:_BRIEF_FINGERPRINT_CHARS].strip()
+    if not fingerprint:
+        return True          # nothing to deliver, so nothing is undelivered
+    try:
+        path = _sessions_dir() / f"conductor_{goal_id}_{leaf_id}.jsonl"
+        if not path.exists():
+            return False
+        body = " ".join(path.read_text(encoding="utf-8", errors="replace").split())
+    except OSError:
+        return True          # cannot read it: do not re-brief on a guess
+    # The transcript stores the brief JSON-escaped, so compare on collapsed
+    # whitespace and accept a prefix match.
+    return fingerprint.replace('"', '\\"') in body or fingerprint in body
+
+
+def _propose_worker_liveness(tc: TickContext, goal: Goal, members: list[str]) -> list[Proposal]:
+    """Make sure every open leaf's worker is *actually working*, and act if not.
+
+    The gap this closes. ``_propose_stalls`` handles a session that is RUNNING and
+    silent — a hang. It cannot see the other failure, which turned out to be the
+    common one: a session that is **not running at all** while its leaf is still
+    open. ``detect_stalls`` skips anything without ``running`` set, by design, so a
+    worker whose turn was killed mid-flight is invisible to every existing check.
+    Observed exactly that way: a gateway restart during a deploy killed a worker
+    mid-tool-call, and the goal sat at five of six steps with a silent session and
+    a driver reporting "working" for as long as it was left running.
+
+    So this asks the question the operator actually cares about — is this worker in
+    a real working state — and answers it from the transcript rather than from a
+    flag, because the flag is what was wrong.
+
+    Three outcomes, in the same one-then-escalate discipline the rest of the
+    proposers use:
+
+    * **interrupted** → ``session_resume``, deterministically, up to
+      :data:`MAX_RESUMES_PER_LEAF`. No model: the brief already exists.
+    * **stopped with the leaf open** → ``session_continue``, whose message is
+      composed, because "why did you stop" is a judgement.
+    * **either, once the resume budget is spent** → ``escalate``, carrying the
+      worker's own last words, which is where a genuine external blocker (no
+      Stockfish binary on the host) is supposed to end up.
+
+    A worker that is running, or parked on an approval, or whose leaf is closed, is
+    left entirely alone.
+    """
+    out: list[Proposal] = []
+    if tc.observation is None:
+        return out
+    scope = goal.scope if isinstance(goal.scope, dict) else {}
+    root = str(_resolve_root(goal) or "")
+    for leaf in goal.leaves or []:
+        leaf_id = str(leaf.get("id") or "")
+        if not leaf_id:
+            continue
+        if str(leaf.get("status") or "") in goals_mod.CLOSED_LEAF_STATUSES:
+            continue
+        slot_name = f"{act.SLOT_NAME_PREFIX}{goal.id}-{leaf_id}"
+        if slot_name not in members:
+            continue
+        facts = tc.observation.slots.get(slot_name)
+        if facts is None:
+            continue
+        if bool(getattr(facts, "running", False)):
+            continue                                  # working: leave it be
+        if bool(getattr(facts, "pending_approval", False)):
+            continue                                  # the approvals step owns this
+        if slot_name in tc.snoozed:
+            continue
+
+        state, last_ts = _worker_turn_state(goal.id, leaf_id)
+        if state in ("none",):
+            continue          # never briefed — that is the dispatch proposer's job
+        idle = tc.now - last_ts if last_ts else float(getattr(facts, "silent_secs", 0.0) or 0.0)
+        if idle < IDLE_WORKER_SECS:
+            continue          # may simply be between turns
+
+        title = _human_leaf(goal, leaf_id)
+        # A counter PER RECOVERY KIND, not one shared budget. Sharing them was a
+        # real bug: a resume (for a killed turn) consumed the same allowance a
+        # continuation (for a worker that chose to stop) needed, so once a leaf had
+        # been resumed it could never be nudged again — it went straight to
+        # escalation, even when the thing that had stopped it was since fixed. The
+        # two address different failures and are budgeted separately.
+        sig_resume = f"idle-worker-resume:{goal.id}:{leaf_id}"
+        sig_continue = f"idle-worker-continue:{goal.id}:{leaf_id}"
+        sig_escalate = f"idle-worker:{goal.id}:{leaf_id}"
+        resumes = _occurrences(tc, sig_resume)
+        continues = _occurrences(tc, sig_continue)
+        base = [
+            f"{title} is still open and its worker is not running",
+            f"its transcript ends {state}, idle for {detect.describe_silence(int(idle))}",
+            _member_reason(tc, goal, slot_name),
+        ]
+
+        # A rewritten brief outranks everything below. Whatever state the worker is
+        # in, if it has never been shown the instructions it is being judged
+        # against, re-sending them is the only action that can help — a composed
+        # nudge cannot carry a brief, and an escalation would ask the operator about
+        # a problem they have already fixed.
+        brief = str(leaf.get("intent_text") or leaf.get("prompt") or "")
+        rebriefs = _occurrences(tc, f"idle-worker-rebrief:{goal.id}:{leaf_id}")
+        if brief and rebriefs < MAX_RESUMES_PER_LEAF and not _brief_delivered(
+            goal.id, leaf_id, brief
+        ):
+            out.append(
+                Proposal(
+                    action_class="session_resume",
+                    goal_id=goal.id,
+                    target_slot=slot_name,
+                    reasons=base
+                    + [
+                        "its instructions have been rewritten since it was briefed, and "
+                        "it has never been shown the current ones",
+                        f"re-brief {rebriefs + 1} of {MAX_RESUMES_PER_LEAF} for this step",
+                    ],
+                    params={
+                        "kind": "rebrief",
+                        "failure_signature": f"idle-worker-rebrief:{goal.id}:{leaf_id}",
+                        "prompt": brief,
+                        "root": root,
+                        "worker_trust": scope.get("worker_trust") or "",
+                    },
+                )
+            )
+            continue
+
+        if state == "interrupted" and resumes < MAX_RESUMES_PER_LEAF:
+            out.append(
+                Proposal(
+                    action_class="session_resume",
+                    goal_id=goal.id,
+                    target_slot=slot_name,
+                    reasons=base
+                    + [
+                        "its turn was cut off rather than ended, so the brief it already "
+                        "has is the right thing to send again",
+                        f"resume {resumes + 1} of {MAX_RESUMES_PER_LEAF} for this step",
+                    ],
+                    params={
+                        "kind": "resume",
+                        "failure_signature": sig_resume,
+                        "prompt": str(leaf.get("intent_text") or leaf.get("prompt") or ""),
+                        "root": root,
+                        "worker_trust": scope.get("worker_trust") or "",
+                    },
+                )
+            )
+            continue
+
+        if state == "stopped" and continues < MAX_CONTINUES_PER_LEAF:
+            out.append(
+                Proposal(
+                    action_class="session_continue",
+                    goal_id=goal.id,
+                    target_slot=slot_name,
+                    reasons=base
+                    + [
+                        "the worker ended its own turn with the step unfinished, which is "
+                        "a judgement a re-sent brief would not address",
+                        f"nudge {continues + 1} of {MAX_CONTINUES_PER_LEAF} for this step",
+                    ],
+                    params={
+                        "kind": "continuation",
+                        "failure_signature": sig_continue,
+                        "message": "",
+                    },
+                )
+            )
+            continue
+
+        out.append(
+            Proposal(
+                action_class="escalate",
+                goal_id=goal.id,
+                target_slot=slot_name,
+                reasons=base
+                + [
+                    f"already resumed {resumes} time(s) and nudged {continues} time(s); "
+                    f"the ceiling is {MAX_RESUMES_PER_LEAF} and {MAX_CONTINUES_PER_LEAF}",
+                    "a step that will not finish after being restarted and nudged is "
+                    "usually blocked on something outside the repository",
+                ],
+                params={
+                    "kind": "blocked_needs_you",
+                    "failure_signature": sig_escalate,
+                    "title": f"{title} is not finishing",
+                },
             )
         )
     return out
@@ -1900,7 +2660,11 @@ def _propose_goal_attention(tc: TickContext, goal: Goal, why: str) -> list[Propo
     UI already renders, and ringing a bell about it every hour would train the
     operator to ignore the bell.
     """
-    if goal.status == goals_mod.GoalStatus.DRAFT.value:
+    if goal.status in (
+        goals_mod.GoalStatus.DRAFT.value, goals_mod.GoalStatus.READY.value
+    ):
+        # Neither is stuck: one is undescribed, the other is waiting for the
+        # operator on purpose. Ringing a bell about either trains them to ignore it.
         return []
     if goal.status in goals_mod.TERMINAL_STATUSES:
         return []
@@ -1924,19 +2688,46 @@ def _propose_goal_attention(tc: TickContext, goal: Goal, why: str) -> list[Propo
     ]
 
 
-def _propose_digest(tc: TickContext, goal: Goal, members: list[str]) -> list[Proposal]:
+def _propose_digest(
+    tc: TickContext,
+    goal: Goal,
+    members: list[str],
+    events: list[dict[str, Any]] | None = None,
+) -> list[Proposal]:
     """One digest per goal per hour, into the Conductor's own slot.
 
     ``narrate`` writes context, not a turn — so the Conductor chat stays the
     explanation surface and gains no authority. A goal with no members and nothing
     to say produces no digest: a trivial retro is worse than none.
     """
-    if not members and not tc.evaluations.get(goal.id, {}).get("done_when"):
+    summary = tc.evaluations.get(goal.id, {})
+    if not members and not summary.get("done_when"):
         return []
     last = _num(tc.runtime.digests.get(goal.id))
-    if last and (tc.now - last) < DIGEST_SECS:
-        return []
-    summary = tc.evaluations.get(goal.id, {})
+    elapsed = tc.now - last if last else None
+    # Narrate on EVENTS, with an hourly heartbeat as the floor — not on movement.
+    #
+    # The facts hash used to be the trigger, and it moves on any change at all,
+    # including a worker's activity timestamp ticking over. That produced a digest
+    # a minute whose entire content was the same three state lines — "Progress: 0
+    # of 6 steps done. Working on: … Still to do: …" — which an operator can
+    # already see in the sessions list, and which buries the messages that do
+    # carry news. Worse, it failed the other way too: three workers started
+    # inside one quiet period, the hash did not move enough to trip a digest, and
+    # by the time the hourly heartbeat fired those ledger rows had rolled out of
+    # the window the digest reads. Reported starts went missing while
+    # "still working" was reported thirty times.
+    #
+    # So: something HAPPENED (a worker started, a tool request was refused, a
+    # step finished, the status moved) or there is no digest. The state block
+    # still rides along, as context for the event rather than as the message.
+    reportable = _reportable_events(events or [], last)
+    news = bool(reportable) or bool(summary.get("leaves_closed")) or bool(summary.get("transition"))
+    if elapsed is not None:
+        if elapsed < MIN_DIGEST_SECS:
+            return []          # never faster than this, however much moved
+        if not news and elapsed < DIGEST_SECS:
+            return []          # quiet: fall back to the hourly heartbeat
     rows = summary.get("done_when") or []
     open_rows = [r for r in rows if not r.get("satisfied")]
     return [
@@ -1951,21 +2742,360 @@ def _propose_digest(tc: TickContext, goal: Goal, members: list[str]) -> list[Pro
                 + (f" ({goal.terminal_reason})" if goal.terminal_reason else ""),
             ],
             params={
-                "kind": "digest",
-                "content": _digest_body(goal, members, open_rows),
+                # The stamp is load-bearing, not decoration. Proposal.signature
+                # hashes the salient params, and ``kind`` is one of them — so a
+                # constant "digest" gave every digest for a goal ONE signature,
+                # and the gate's dedup (which correctly refuses to nudge the same
+                # stalled session twice) refused every digest after the first.
+                # Observed: 10 narrate rows, 2 distinct signatures, 6 refused, and
+                # an operator watching a chat that never updated.
+                #
+                # Stamping it with the satisfied-count and the facts hash gives a
+                # new signature exactly when there is something new to say, and
+                # keeps the old one when the state is identical — so an idle
+                # heartbeat still cannot spam. ``_context_body`` reads only
+                # ``content``, so nothing downstream depends on this value.
+                # The event count and the newest event's instant ride in the
+                # signature too: two digests a minute apart with the same
+                # satisfied-count and the same facts hash but DIFFERENT events are
+                # different messages, and without this the gate's dedup would
+                # refuse the second one — losing exactly the event report this
+                # change exists to deliver.
+                "kind": (
+                    f"digest:{len(rows) - len(open_rows)}/{len(rows)}"
+                    f":{str(summary.get('facts_hash') or '')[:8]}"
+                    f":{len(reportable)}@{int(_num(reportable[-1].get('ts')) if reportable else 0)}"
+                ),
+                "content": _digest_body(
+                    goal, members, open_rows, summary.get("leaves_closed") or [],
+                    events or [], last,
+                ),
             },
         )
     ]
 
 
-def _digest_body(goal: Goal, members: list[str], open_rows: list[dict[str, Any]]) -> str:
-    lines = [f"Goal {goal.title!r} ({goal.id}) is {goal.status}."]
+#: How a class reads as an event, in the operator's words rather than ours.
+#: Phrased as a sentence about the WORK, not about the mechanism: an operator
+#: watching this stream wants "started building the board" and never
+#: "session_create succeeded".
+_EVENT_VERB: dict[str, str] = {
+    "session_create": "Started a worker on",
+    "session_continue": "Nudged the worker on",
+    "session_resume": "Restarted the interrupted worker on",
+    "context_inject": "Sent new instructions to",
+    "loop_arm": "Set up a repeating check on",
+    "loop_stop": "Stopped the repeating check on",
+    "cron_create": "Scheduled",
+    "cron_pause": "Paused the schedule for",
+    "escalate": "Needs your decision on",
+    "operator_notify": "Told you about",
+    "pr_read": "Read the pull request for",
+    "tool_approval": "Answered a tool request from",
+    "plan": "Planned the steps for",
+}
+
+#: Classes that describe the digest's own machinery rather than the work. Left
+#: out of the event list entirely: an operator reading "narrated 332 chars into
+#: crew-manager-conductor (visible, no turn)" learns nothing except that the
+#: message they are reading was written, which they can see.
+_SELF_REFERENTIAL: frozenset[str] = frozenset({"narrate"})
+
+#: How a class reads when the action did NOT happen. Separate from
+#: :data:`_EVENT_VERB` because reusing the success verb produced the flatly
+#: self-contradictory "Started a worker on X — denied: nothing executed": the line
+#: announced the very thing the rest of it said had not occurred. An operator
+#: reading an event list has to be able to trust that a sentence in the past tense
+#: describes something that happened.
+_EVENT_VERB_REFUSED: dict[str, str] = {
+    "session_create": "Did not start another worker on",
+    "session_continue": "Did not nudge",
+    "session_resume": "Did not restart the worker on",
+    "context_inject": "Did not send new instructions to",
+    "escalate": "Could not escalate",
+    "operator_notify": "Could not notify you about",
+    "pr_read": "Could not read the pull request for",
+}
+
+#: Outcomes that mean "this has STARTED and has not finished". Not failures, and
+#: the distinction is not cosmetic: a long operation writes one row when it begins
+#: and another when it ends, and treating the first as a refusal produced
+#: "⚠ Could not plan Chess engine" immediately above "• Planned 6 steps in 56s" —
+#: two lines about one operation, the first of them false.
+_IN_PROGRESS_OUTCOMES: frozenset[str] = frozenset({"attempt", "pending", "started"})
+
+#: How a class reads while it is still running.
+_EVENT_VERB_STARTED: dict[str, str] = {
+    "plan": "Started planning",
+    "session_create": "Starting a worker on",
+    "session_resume": "Restarting the worker on",
+    "session_continue": "Nudging the worker on",
+}
+
+#: Outcomes that mean "nothing happened AND nothing was prevented" — the driver
+#: declining to repeat itself. Not events: reporting one tells the operator about
+#: a decision with no consequence, and when a proposer loops it reports it every
+#: tick. Genuine refusals (an authority denial, a rejected tool call) are NOT
+#: here; they changed what a worker was allowed to do and must stay visible.
+_NOOP_DETAIL_PREFIXES: tuple[str, ...] = ("duplicate:", "already ", "no-op")
+
+
+def _human_leaf(goal: Goal, leaf_id: str) -> str:
+    """A step's name as a person would say it.
+
+    Prefers the title the planner wrote; falls back to the id with its dashes
+    opened out, because ``board-representation`` reads as an identifier and
+    "board representation" reads as a thing someone is building.
+    """
+    leaf_id = str(leaf_id or "").strip()
+    if not leaf_id:
+        return ""
+    for leaf in goal.leaves or []:
+        if str(leaf.get("id")) == leaf_id:
+            title = str(leaf.get("title") or "").strip()
+            if title:
+                return title
+    return leaf_id.replace("-", " ").replace("_", " ")
+
+
+def _leaf_of_resource(goal: Goal, resource: str) -> str:
+    """The leaf id inside a ``cm-<goal>-<leaf>`` slot name.
+
+    Strips the goal's own id rather than splitting on the last dash. Both halves
+    contain dashes, so the old rsplit turned ``board-representation`` into
+    ``representation`` — a name the operator never chose and could not search for.
+    """
+    resource = str(resource or "")
+    # An approval row's resource is ``<slot>:<request_id>``. The id is machine
+    # bookkeeping and, left on, it also defeats the title lookup — which is why
+    # the digest read "move generation:r1" instead of "Move generation".
+    resource = resource.split(":", 1)[0]
+    prefix = f"{act.SLOT_NAME_PREFIX}{goal.id}-"
+    if resource.startswith(prefix):
+        return resource[len(prefix):]
+    if resource.startswith(act.SLOT_NAME_PREFIX):
+        return resource[len(act.SLOT_NAME_PREFIX):]
+    return resource
+
+
+def _reportable_events(events: list[dict[str, Any]], since: float) -> list[dict[str, Any]]:
+    """The rows since *since* that are worth telling the operator about.
+
+    One definition, used both to DECIDE whether to narrate and to BUILD the lines,
+    so a digest can never fire on something it then declines to mention — or stay
+    silent about something it would have shown.
+
+    Only ``outcome`` rows: an ``intent`` is a decision to act and its outcome
+    follows within the same tick, so showing both would double every event. A
+    refusal or escalation IS kept — a supervisor that reports only its successes
+    is the least trustworthy kind, and "why did nothing happen" is the question
+    these lines most often have to answer.
+    """
+    out: list[dict[str, Any]] = []
+    for row in events:
+        ts = _num(row.get("ts"))
+        if since and ts and ts <= since:
+            continue
+        if str(row.get("event_type")) != "outcome":
+            continue
+        if str(row.get("action_class") or "") in _SELF_REFERENTIAL:
+            continue
+        if _is_noop(row):
+            continue
+        out.append(row)
+    # A long operation writes a start row and then a finish row. Once the finish is
+    # in the same window the start is noise, and showing both made one planning run
+    # read as two events that disagreed with each other. Keyed on class+resource, so
+    # an unresolved start still shows on its own — which is the whole reason the
+    # start row exists.
+    resolved = {
+        (str(r.get("action_class") or ""), str(r.get("resource") or ""))
+        for r in out
+        if str(r.get("outcome") or "") not in _IN_PROGRESS_OUTCOMES
+    }
+    return [
+        r for r in out
+        if str(r.get("outcome") or "") not in _IN_PROGRESS_OUTCOMES
+        or (str(r.get("action_class") or ""), str(r.get("resource") or "")) not in resolved
+    ]
+
+
+def _is_noop(row: dict[str, Any]) -> bool:
+    """True when the row records the driver declining to repeat itself.
+
+    A successful outcome is always an event. A refusal is an event when it changed
+    what something was allowed to do — and is NOT one when it merely says "I have
+    done this already", which is the shape a looping proposer emits every tick.
+    """
+    if str(row.get("outcome") or "") == ledger.OUTCOME_SUCCESS:
+        return False
+    body = f"{row.get('detail') or ''} {row.get('reason') or ''}".strip().lower()
+    return any(body.startswith(p) for p in _NOOP_DETAIL_PREFIXES)
+
+
+def _event_target(goal: Goal, resource: str) -> str:
+    """What an event line should call its subject.
+
+    A resource is either the GOAL (planning, digests, goal-level attention) or one
+    of its workers. Running everything through the leaf-name helper turned the
+    goal's own id into a step that does not exist — "Started planning chess engine
+    f8de18" — because a name that matches no leaf falls back to its dashes being
+    opened out. So the goal is checked for first, by id.
+    """
+    bare = str(resource or "").split(":", 1)[0]
+    if not bare or bare == goal.id:
+        return goal.title or goal.id
+    return _human_leaf(goal, _leaf_of_resource(goal, bare))
+
+
+def _event_lines(goal: Goal, events: list[dict[str, Any]], since: float) -> list[str]:
+    """One readable line per reportable event."""
+    out: list[str] = []
+    for row in _reportable_events(events, since):
+        cls = str(row.get("action_class") or "")
+        outcome = str(row.get("outcome") or "")
+        happened = outcome in (ledger.OUTCOME_SUCCESS, "approved")
+        started = outcome in _IN_PROGRESS_OUTCOMES
+        if happened:
+            verb = _EVENT_VERB.get(cls, f"Did {cls}" if cls else "Acted")
+        elif started:
+            verb = _EVENT_VERB_STARTED.get(cls) or (
+                f"Started {cls}" if cls else "Started working"
+            )
+        else:
+            verb = _EVENT_VERB_REFUSED.get(cls) or (
+                f"Could not {cls}" if cls else "Could not act"
+            )
+        target = _event_target(goal, str(row.get("resource") or ""))
+        icon = "•" if happened else "⏳" if started else "⚠"
+        # The reason, in the words whoever wrote the row chose — clipped, not
+        # re-summarised, because a paraphrase of a refusal is how a refusal gets
+        # quietly softened.
+        detail = str(row.get("reason") or row.get("detail") or "").split(";")[0][:90]
+        line = f"{icon} {verb} {target or 'the goal'}".rstrip()
+        if cls == "tool_approval":
+            # These read best as the decision, not the target: "Refused a tool
+            # request from board representation — …" buries the verdict.
+            word = {"approved": "Allowed", "deny": "Refused", "escalate": "Needs your call on"}.get(
+                outcome, "Answered"
+            )
+            line = f"{icon} {word} a tool request from {target or 'a worker'}"
+        out.append(line + (f" — {detail}" if detail else ""))
+    return out[-8:]
+
+
+#: Goal status as a person would say it. The stored values are the state
+#: machine's and stay that way; this is only what the operator reads.
+_HUMAN_STATUS: dict[str, str] = {
+    "draft": "not started yet",
+    "active": "working",
+    "paused": "paused",
+    "awaiting_confirmation": "waiting for you to confirm it is done",
+    "done": "finished",
+    "stopped": "stopped",
+    "failed": "failed",
+}
+
+
+def _predicate_phrase(goal: Goal, row: dict[str, Any]) -> str:
+    """One unmet completion test, in a sentence.
+
+    The stored ``kind`` is a predicate name (``all_leaves_closed``) and the stored
+    ``detail`` is written for a ledger reader ("6 leaf/leaves not closed: …").
+    Neither belongs in a chat message, so this says the same thing in words —
+    without inventing a claim the predicate did not make.
+    """
+    kind = str(row.get("kind") or "")
+    detail = str(row.get("detail") or "")
+    if kind == "all_leaves_closed":
+        total = len(goal.leaves or [])
+        open_names = [
+            _human_leaf(goal, str(leaf.get("id")))
+            for leaf in (goal.leaves or [])
+            if str(leaf.get("status", "")) not in goals_mod.CLOSED_LEAF_STATUSES
+        ]
+        head = f"this goal is done when all {total} steps are done"
+        if open_names:
+            shown = ", ".join(open_names[:5])
+            more = f" (+{len(open_names) - 5} more)" if len(open_names) > 5 else ""
+            return f"{head} — {len(open_names)} still open: {shown}{more}"
+        return head
+    if kind == "leaf_closed":
+        return f"one step still has to finish — {detail}" if detail else "one step still has to finish"
+    if kind == "file_exists":
+        return f"a file it needs is not there yet — {detail}" if detail else "a file it needs is not there yet"
+    if kind == "path_matches":
+        return f"the expected files are not all there yet — {detail}" if detail else (
+            "the expected files are not all there yet"
+        )
+    if kind == "manual":
+        return "you have to confirm this one by hand"
+    return f"{kind}: {detail}" if detail else kind or "an unmet completion test"
+
+
+def _digest_body(
+    goal: Goal,
+    members: list[str],
+    open_rows: list[dict[str, Any]],
+    leaves_closed: list[dict[str, Any]] | None = None,
+    events: list[dict[str, Any]] | None = None,
+    since: float = 0.0,
+) -> str:
+    """The prose an operator reads in the Conductor chat.
+
+    Ordered newest-news-first on purpose: what just changed, then where the work
+    stands, then what is still outstanding. An operator glancing at one row should
+    learn whether to intervene without opening anything else.
+    """
+    closed_now = leaves_closed or []
+    lines = [f"**{goal.title}** — {_HUMAN_STATUS.get(goal.status, goal.status)}"]
+
+    # THE EVENT LOG, first, because it is the thing an operator is watching for:
+    # what did you actually do. Built from ledger OUTCOME rows since the previous
+    # digest, so every line is something that happened rather than something
+    # proposed, and refusals/escalations are shown as loudly as successes.
+    for line in _event_lines(goal, events or [], since):
+        lines.append(line)
+
+    for row in closed_now[:4]:
+        lines.append(
+            f"✅ Finished: {_human_leaf(goal, str(row.get('leaf_id') or ''))}"
+            f" — {row.get('why')}"
+        )
+
+    if goal.leaves:
+        done = [str(l.get("id")) for l in goal.leaves
+                if str(l.get("status", "")) in goals_mod.CLOSED_LEAF_STATUSES]
+        todo = [str(l.get("id")) for l in goal.leaves if str(l.get("id")) not in done]
+        lines.append(f"Progress: {len(done)} of {len(goal.leaves)} steps done.")
+        if todo:
+            # "Working on" is the one being built right now; the rest are waiting
+            # on it or on each other. Naming them separately is the difference
+            # between a status line and a list of identifiers.
+            names = [_human_leaf(goal, leaf_id) for leaf_id in todo]
+            lines.append(f"Working on: {names[0]}.")
+            if len(names) > 1:
+                rest = ", ".join(names[1:5])
+                more = f" (+{len(names) - 5} more)" if len(names) > 5 else ""
+                lines.append(f"Still to do: {rest}{more}.")
+        else:
+            lines.append("Every step is done.")
+
     if members:
-        lines.append("Sessions: " + ", ".join(members[:8]))
-    for row in open_rows[:6]:
-        lines.append(f"- not yet: {row.get('kind')} — {row.get('detail')}")
+        names = [_human_leaf(goal, _leaf_of_resource(goal, m)) for m in members[:6]]
+        # "running" would be a claim this function cannot check: `members` is
+        # MEMBERSHIP, so a finished worker stays in it. The digest said "6 workers
+        # running" about five sessions that had already exited.
+        noun = "worker" if len(members) == 1 else "workers"
+        lines.append(f"{len(members)} {noun} on this goal: " + ", ".join(n for n in names if n))
+
+    for row in open_rows[:4]:
+        lines.append(f"⏳ Not finished yet: {_predicate_phrase(goal, row)}")
+
     if goal.terminal_reason:
-        lines.append(f"Reason it stopped: {goal.terminal_reason}")
+        lines.append(f"Stopped: {goal.terminal_reason}")
+    if goal.paused_reason:
+        lines.append(f"Paused: {goal.paused_reason}")
     return "\n".join(lines)[: act.MAX_CONTEXT_CHARS]
 
 
@@ -2475,6 +3605,215 @@ async def report(tc: TickContext) -> dict[str, Any]:
     }
 
 
+#: Whether this process has already told the operator that a global override is
+#: auto-approving everything. Process-local on purpose: it is a standing
+#: condition, so it wants saying once per run and again after a restart, not
+#: persisting forever in the runtime file.
+_YOLO_NOTED = False
+
+#: Same idea for the provisioning posture: announced once per driver process.
+_PROVISION_NOTED = False
+
+
+async def approvals(tc: TickContext) -> dict[str, Any]:
+    """Answer the tool-approval requests this goal's workers are parked on.
+
+    Runs on the OBSERVE cadence, not the deliberate one. A parked tool call is a
+    worker doing nothing, and the platform's unattended deny-fast rejects it
+    after 180s — so 15s is the budget this step is sized against, and the
+    deterministic classifier that answers almost everything costs microseconds.
+
+    Model calls happen only on a deliberate tick, and at most
+    :data:`approvals_mod.MAX_JUDGED_PER_PASS` of them. On an observe tick an
+    unclassifiable request is left alone rather than refused: the next deliberate
+    tick is at most 60s away, well inside the deny-fast window, and refusing
+    something merely because the cheap tick could not name it would throw away
+    the one case the adjudicator exists for.
+
+    Never touches a slot this app does not own — the scan is keyed on the
+    ``cm-`` name prefix, so a human's own parked session stays the human's.
+    """
+    summary: dict[str, Any] = {}
+    if tc.control.approvals_mode == control_mod.APPROVALS_OFF:
+        return {"mode": "off"}
+    state = tc.state
+    if state is None:
+        return {"skipped": "no state"}
+
+    # A process-wide safety override (the dashboard's YOLO) auto-approves every
+    # tool call before anyone is asked, so no request ever reaches this step. That
+    # is the operator's switch to throw and not ours to touch — ``safety_override``
+    # is hard-DENY for the driver, and the audit shows the driver being refused
+    # when it reaches for one. But an operator who has turned adjudication on is
+    # entitled to know it is not the thing deciding: silence here reads as "the
+    # Conductor approved these", when in fact it never saw them. Said once per
+    # driver process, because it is a standing condition, not an event.
+    global _YOLO_NOTED
+    if getattr(state, "is_yolo_active", lambda: False)():
+        summary["bypassed"] = "yolo"
+        if not _YOLO_NOTED:
+            _YOLO_NOTED = True
+            _say_approval_note(
+                state,
+                "Note: this gateway has the global safety override (YOLO) switched on, "
+                "so the platform auto-approves every tool call before I am asked. "
+                "My tool-approval decisions are NOT being applied while that is on. "
+                "Turn it off in the dashboard if you want me to adjudicate.",
+            )
+
+    # Say the provisioning posture once. A worker that may fetch a dependency off
+    # the network is a real widening of what unattended work can do, and an
+    # operator should never discover it from a ledger row after the fact.
+    global _PROVISION_NOTED
+    if tc.control.provisioning == control_mod.PROVISIONING_LOCAL and not _PROVISION_NOTED:
+        _PROVISION_NOTED = True
+        _say_approval_note(
+            state,
+            "Note: local provisioning is ON. Workers may clone, download or "
+            "pip-install a dependency their step needs, as long as it lands inside "
+            "the goal's own tree and needs no privilege. System package managers "
+            "(yum/apt/brew), sudo, and piping a download into a shell stay refused. "
+            "Turn it off with provisioning=off if you would rather decide each one.",
+        )
+
+    pending = approvals_mod.scan_pending(state, slot_prefix=act.SLOT_NAME_PREFIX)
+    if not pending:
+        return summary
+    summary["pending"] = len(pending)
+
+    # Roots a worker may write in: every active goal's declared root, plus the
+    # per-session sandbox the platform hands each worker as its cwd. Union rather
+    # than per-goal because the slot name maps to a goal only by string surgery,
+    # and a wrong split must not be able to widen a grant — a path check against
+    # the union is the same answer for every legitimate call and never depends on
+    # having parsed the name correctly.
+    roots: list[str] = []
+    statements: list[str] = []
+    # The task each worker is ACTUALLY doing, keyed by its slot. A tool call has to
+    # be judged against the step that produced it, not against a summary of the
+    # whole goal: the goal here says "a chess engine from scratch with zero external
+    # dependencies", the step says "vendor Stockfish as the reference opponent", and
+    # a judge given only the former correctly concluded that cloning Stockfish
+    # contradicted it. The model was not wrong; it was told the wrong thing.
+    tasks: dict[str, str] = {}
+    for goal in tc.goals:
+        for leaf in goal.leaves or []:
+            leaf_id = str(leaf.get("id") or "")
+            brief = str(leaf.get("intent_text") or leaf.get("prompt") or "")
+            if leaf_id and brief:
+                tasks[f"{act.SLOT_NAME_PREFIX}{goal.id}-{leaf_id}"] = brief
+    for goal in tc.goals:
+        scope = goal.scope if isinstance(goal.scope, dict) else {}
+        for key in ("root", "project", "workspace"):
+            val = str(scope.get(key) or "").strip()
+            if val and val not in roots:
+                roots.append(val)
+        if goal.statement:
+            statements.append(goal.statement)
+    sandbox = _sandbox_root()
+    if sandbox and sandbox not in roots:
+        roots.append(sandbox)
+
+    if tc.dry_run:
+        summary["dry_run"] = True
+        summary["would_decide"] = [
+            {"call": pa.label, "kind": (r.kind or "judge"), "rule": r.rule}
+            for pa, r in [
+                (pa, approvals_mod.classify(
+                    pa, roots=tuple(roots), provisioning=tc.control.provisioning))
+                for pa in pending
+            ]
+        ]
+        return summary
+
+    if tc.control.approvals_mode == control_mod.APPROVALS_DENY_ALL:
+        rulings = [
+            (
+                pa,
+                approvals_mod.Ruling(
+                    approvals_mod.DENY, "deny-all", "the operator set approvals to deny-all"
+                ),
+            )
+            for pa in pending
+        ]
+    else:
+        rulings = await approvals_mod.adjudicate(
+            pending,
+            roots=tuple(roots),
+            goal_statement=statements[0] if statements else "",
+            tasks=tasks,
+            sessions=getattr(state, "sessions", None),
+            provisioning=tc.control.provisioning,
+            judge_mod=judge if tc.deliberate and judge.available(
+                sessions=getattr(state, "sessions", None)
+            ) else None,
+            # An observe tick withholds the judge for cost, not because the
+            # answer is "no" — so it must leave the middle alone rather than
+            # refuse it. Only a deliberate tick that actually tried and failed
+            # produces a denial.
+            defer_unclassified=not tc.deliberate,
+        )
+
+    result = approvals_mod.Pass()
+    for pa, ruling in rulings:
+        if not ruling.kind:
+            # Only reachable on an observe tick, where the judge is withheld.
+            # Leave it for the deliberate tick.
+            continue
+        if not approvals_mod.resolve(state, pa, ruling.approved):
+            continue
+        if ruling.kind == approvals_mod.ALLOW:
+            result.allowed += 1
+        elif ruling.kind == approvals_mod.ESCALATE:
+            result.escalated += 1
+        else:
+            result.denied += 1
+        result.judged += 1 if ruling.judged else 0
+        result.rows.append({"call": pa.title[:80], "kind": ruling.kind, "why": ruling.why})
+        try:
+            await ledger.record_event_async(
+                action_class="tool_approval",
+                goal_id=pa.goal_id,
+                outcome=("approved" if ruling.approved else ruling.kind),
+                detail=f"{pa.title[:120]} [{ruling.rule}]",
+                reason=ruling.why,
+                resource=f"{pa.slot_name}:{pa.request_id}",
+                user_id="conductor",
+            )
+        except Exception:
+            logger.warning("conductor: could not ledger approval %s", pa.label, exc_info=True)
+
+    if result.total:
+        summary.update(result.summary())
+        # An escalation is the rare case the operator asked to hear about, and a
+        # denial of something the worker wanted is worth a line too. Approvals are
+        # counted, not narrated: they are the common case and a per-call message
+        # would bury everything else in the chat.
+        notable = [r for r in result.rows if r["kind"] != approvals_mod.ALLOW]
+        if notable:
+            lines = "\n".join(f"  • {r['kind']}: {r['call']} — {r['why']}" for r in notable[:4])
+            _say_approval_note(
+                state,
+                f"Tool approvals this tick: {result.allowed} allowed, "
+                f"{result.denied} denied, {result.escalated} escalated.\n{lines}",
+            )
+    return summary
+
+
+def _say_approval_note(state: Any, body: str) -> None:
+    """Put an approval note in the Conductor chat, best effort.
+
+    Guarded the same way the planner's narration is: a missing chat surface must
+    not fail the step that keeps workers moving.
+    """
+    try:
+        say = getattr(act, "say_in_conductor_chat", None)
+        if callable(say):
+            say(state, body)
+    except Exception:
+        logger.debug("conductor: approval note not delivered", exc_info=True)
+
+
 # ── the step table ───────────────────────────────────────────────────────────
 
 CRITICAL = "critical"
@@ -2518,6 +3857,13 @@ STEPS: tuple[Step, ...] = (
     Step("operator", operator, CRITICAL, 5.0),
     Step("steer", steer, CRITICAL, 10.0),
     Step("observe", observe, CRITICAL, 10.0),
+    # Not deliberate_only: a parked tool call is a worker doing nothing, and the
+    # platform rejects it unattended after 180s. The deterministic classifier that
+    # answers almost every request costs microseconds, so it runs on the 15s
+    # cadence; the timeout is sized for the bounded model calls the step allows
+    # itself only on a deliberate tick. CRITICAL, not OPTIONAL: a breaker that
+    # disabled this would silently re-strand every worker.
+    Step("approvals", approvals, CRITICAL, 50.0),
     # `detect` is CRITICAL. The plan's three isolation lists cover steps 0-4 and
     # 6-13 and simply omit step 5, so this is a gap-fill rather than a divergence:
     # it runs pure functions over an in-memory observation, it can only fail on a

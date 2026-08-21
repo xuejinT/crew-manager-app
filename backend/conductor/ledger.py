@@ -241,6 +241,27 @@ def _rotated_path(index: int) -> Path:
     return store.conductor_dir() / f"{LEDGER_NAME}.{index}"
 
 
+def _roll(path: Path) -> None:
+    """Shift the generations and move *path* to ``.1``. Caller holds the lock.
+
+    Extracted so a size-triggered rotation and an operator-triggered one are the
+    SAME operation. "Clear the events" is not a new kind of deletion to invent — it
+    is this, now, and the history stays queryable in the generations exactly as it
+    does when the file fills up on its own.
+    """
+    with contextlib.suppress(OSError):
+        oldest = _rotated_path(KEEP_ROTATIONS)
+        if oldest.exists():
+            oldest.unlink()
+    for index in range(KEEP_ROTATIONS - 1, 0, -1):
+        src, dst = _rotated_path(index), _rotated_path(index + 1)
+        if src.exists():
+            with contextlib.suppress(OSError):
+                os.replace(src, dst)
+    with contextlib.suppress(OSError):
+        os.replace(path, _rotated_path(1))
+
+
 def _maybe_rotate(path: Path) -> None:
     """Roll the ledger when it passes :data:`ROTATE_BYTES`. Blocking.
 
@@ -259,18 +280,53 @@ def _maybe_rotate(path: Path) -> None:
                 return
         except OSError:
             return
-        with contextlib.suppress(OSError):
-            oldest = _rotated_path(KEEP_ROTATIONS)
-            if oldest.exists():
-                oldest.unlink()
-        for index in range(KEEP_ROTATIONS - 1, 0, -1):
-            src, dst = _rotated_path(index), _rotated_path(index + 1)
-            if src.exists():
-                with contextlib.suppress(OSError):
-                    os.replace(src, dst)
-        with contextlib.suppress(OSError):
-            os.replace(path, _rotated_path(1))
+        _roll(path)
         logger.info("conductor: rotated ledger at %d bytes", size)
+
+
+def rotate_now(*, force: bool = False) -> dict[str, Any]:
+    """Start a fresh live ledger on the operator's say-so. Blocking.
+
+    The visible events come from the live file, so rolling it empties the pane while
+    keeping every row in ``ledger.jsonl.1`` — the same place a size-triggered
+    rotation puts them, aged out by the same 10-generation policy. Nothing here
+    deletes a row that rotation would have kept.
+
+    **Refuses while an intent is unreconciled** unless forced. An intent with no
+    outcome is the crash window: :func:`steps.reconcile` reads exactly those rows to
+    close out actions whose fate is unknown, and rolling them out of the live file
+    takes away the only record it works from. That is a real loss of recoverability,
+    so it is the operator's explicit call rather than a silent consequence of
+    tidying a list.
+    """
+    path = ledger_path()
+    open_intents = unreconciled(limit=50)
+    if open_intents and not force:
+        return {
+            "ok": False,
+            "refused": f"{len(open_intents)} action(s) have no recorded outcome yet; "
+                       "clearing now would discard what reconcile needs to close them",
+            "open_intents": [str(r.get("action_class") or "") for r in open_intents[:5]],
+        }
+    try:
+        rows = len(store.read_jsonl(path, limit=SCAN_WINDOW))
+    except OSError:
+        rows = 0
+    if not path.exists():
+        return {"ok": True, "rows_cleared": 0, "rotated_to": "", "forced": bool(open_intents)}
+    with store.locked(path):
+        _roll(path)
+    logger.info("conductor: operator cleared the ledger (%d row(s) rolled)", rows)
+    return {
+        "ok": True,
+        "rows_cleared": rows,
+        "rotated_to": str(_rotated_path(1)),
+        "forced": bool(open_intents),
+    }
+
+
+async def rotate_now_async(*, force: bool = False) -> dict[str, Any]:
+    return await asyncio.to_thread(rotate_now, force=force)
 
 
 # ── row construction ─────────────────────────────────────────────────────────
@@ -492,6 +548,48 @@ def _append(row: dict[str, Any]) -> bool:
 
 
 # ── reading ──────────────────────────────────────────────────────────────────
+
+def record_event(
+    *,
+    action_class: str,
+    goal_id: str,
+    outcome: str,
+    detail: str = "",
+    reason: str = "",
+    resource: str = "",
+    user_id: str = "operator",
+) -> bool:
+    """Record one operator-initiated event that is not a gated proposal.
+
+    ``record_intent``/``record_outcome`` are for things the GATE ruled on and are
+    keyed by ``action_id``. Planning is not one of those: the operator pressed a
+    button, so there is no proposal, no tier and no verdict — but it is still the
+    single longest-running thing autonomy does, and an operator watching a button
+    spin deserves to see it start and finish in the same stream as everything else.
+
+    Same row shape as every other line, so the reader still never branches.
+    """
+    return _append(_row(
+        event_type="outcome",
+        user_id=user_id,
+        outcome=outcome,
+        origin=f"conductor:{goal_id}" if goal_id else "conductor",
+        resource=resource or goal_id,
+        action_id="",
+        action_class=action_class,
+        goal_id=goal_id,
+        signature="",
+        tier="",
+        verdict="",
+        reason=redact_field(reason),
+        reasons=[],
+        detail=redact_field(detail),
+    ))
+
+
+async def record_event_async(**kwargs: Any) -> bool:
+    return await asyncio.to_thread(record_event, **kwargs)
+
 
 def tail(limit: int = 100, *, goal_id: str = "") -> list[dict[str, Any]]:
     """The most recent rows, oldest-first, optionally for one goal.

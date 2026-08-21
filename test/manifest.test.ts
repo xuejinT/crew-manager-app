@@ -14,6 +14,8 @@ describe('Crew Manager app manifest', () => {
     expect(manifest.notifications?.channels?.map((c: { id: string }) => c.id)).toEqual([
       'stalled',
       'error-loop',
+      'conductor-escalation',
+      'conductor',
     ])
     expect(manifest.ui.entry).toBe('index.mjs')
     expect(manifest.ui.pages).toEqual([

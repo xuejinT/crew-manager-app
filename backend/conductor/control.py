@@ -150,6 +150,74 @@ def _mode_value(raw: object) -> str:
         return Mode.ADVISORY.value
 
 
+#: Planner ceiling bounds. The floor keeps a typo from making planning impossible;
+#: the ceiling keeps one from parking a request for a day. Wide on purpose — the
+#: whole point of exposing it is that only the operator knows how long their task
+#: deserves.
+DEFAULT_PLANNER_TIMEOUT_SECS = 300.0
+MIN_PLANNER_TIMEOUT_SECS = 30.0
+MAX_PLANNER_TIMEOUT_SECS = 3600.0
+
+
+def _clamp_planner_timeout(value: object) -> float:
+    """A usable planner ceiling, whatever the file or the request said."""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_PLANNER_TIMEOUT_SECS
+    if number != number or number <= 0:          # NaN or nonsense
+        return DEFAULT_PLANNER_TIMEOUT_SECS
+    return max(MIN_PLANNER_TIMEOUT_SECS, min(MAX_PLANNER_TIMEOUT_SECS, number))
+
+
+#: How the Conductor answers a worker's tool-approval requests.
+#:
+#: ``adjudicate`` is the default and the reason the setting exists: the driver
+#: rules on each request itself — a fixed deny table first, then path scoping,
+#: then one bounded model call for the narrow middle — and escalates only the
+#: classes an operator should own. ``off`` leaves every request to the platform
+#: and the human, which is the pre-Increment behaviour and reliably strands an
+#: unattended worker. ``deny_all`` is the panic setting: refuse everything and
+#: keep the workers moving rather than blocking on a human who is not there.
+#: Whether a worker may obtain a dependency the task needs. ``local`` permits an
+#: unprivileged fetch/build/install that lands in the goal's own tree; ``off``
+#: refuses it and the step must be delivered without the dependency. Mirrors
+#: :data:`approvals.PROVISION_LOCAL` / ``PROVISION_OFF``.
+#:
+#: Defaults to ``local`` because the alternative is a goal that declares a
+#: dependency and then cannot achieve it — the driver refuses the only means to
+#: the end it was given, and stalls forever with a correct-looking denial. System
+#: package managers, ``sudo`` and ``curl | sh`` stay denied in both modes.
+PROVISIONING_LOCAL = "local"
+PROVISIONING_OFF = "off"
+PROVISIONING_MODES: frozenset[str] = frozenset({PROVISIONING_LOCAL, PROVISIONING_OFF})
+
+
+def _clean_provisioning(value: object) -> str:
+    """A known provisioning posture; anything unrecognised means the default."""
+    mode = str(value or "").strip().lower()
+    return mode if mode in PROVISIONING_MODES else PROVISIONING_LOCAL
+
+
+APPROVALS_ADJUDICATE = "adjudicate"
+APPROVALS_OFF = "off"
+APPROVALS_DENY_ALL = "deny_all"
+
+APPROVALS_MODES: frozenset[str] = frozenset({
+    APPROVALS_ADJUDICATE, APPROVALS_OFF, APPROVALS_DENY_ALL,
+})
+
+
+def _clean_approvals_mode(value: object) -> str:
+    """A known approvals mode. Anything else means the default.
+
+    Unrecognised input does NOT fall through to ``off``: a typo in the file must
+    not silently disable the thing that keeps unattended workers running.
+    """
+    mode = str(value or "").strip().lower()
+    return mode if mode in APPROVALS_MODES else APPROVALS_ADJUDICATE
+
+
 @dataclass
 class Control:
     """The operator's standing instructions, as stored in ``control.json``."""
@@ -183,6 +251,22 @@ class Control:
     paused_reason: str = ""
     stopped_reason: str = ""
     stats: dict[str, Any] = field(default_factory=dict)
+
+    approvals_mode: str = APPROVALS_ADJUDICATE
+    """Who answers a parked tool call. See :data:`APPROVALS_ADJUDICATE`."""
+
+    provisioning: str = PROVISIONING_LOCAL
+    """Whether a worker may obtain a dependency it needs. See :data:`PROVISIONING_LOCAL`."""
+
+    planner_timeout_secs: float = DEFAULT_PLANNER_TIMEOUT_SECS
+    """How long the planner may think when decomposing a goal into steps.
+
+    Operator-editable because it is the one budget whose right value depends
+    entirely on the task: six modules of a chess engine planned in under a minute,
+    while a vague objective over an unfamiliar tree can take several. It shipped as
+    a 40s constant inherited from the in-tick judgements and timed out on the first
+    real goal, which taught the lesson twice — planning is not tick-bound, and its
+    ceiling is a preference rather than a safety property."""
 
     # -- serialization -----------------------------------------------------
 
@@ -219,6 +303,9 @@ class Control:
             paused_reason=_clean(src.get("paused_reason"), MAX_REASON_CHARS),
             stopped_reason=_clean(src.get("stopped_reason"), MAX_REASON_CHARS),
             stats=stats if isinstance(stats, dict) else {},
+            approvals_mode=_clean_approvals_mode(src.get("approvals_mode")),
+            provisioning=_clean_provisioning(src.get("provisioning")),
+            planner_timeout_secs=_clamp_planner_timeout(src.get("planner_timeout_secs")),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -240,6 +327,9 @@ class Control:
             "paused_reason": self.paused_reason,
             "stopped_reason": self.stopped_reason,
             "stats": dict(self.stats),
+            "approvals_mode": _clean_approvals_mode(self.approvals_mode),
+            "provisioning": _clean_provisioning(self.provisioning),
+            "planner_timeout_secs": self.planner_timeout_secs,
         }
 
     # -- derived -----------------------------------------------------------

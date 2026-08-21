@@ -86,6 +86,24 @@ try:
 except Exception:  # pragma: no cover - defensive
     judge = None  # type: ignore[assignment]
 
+# Only for say_in_conductor_chat: planning narrates itself so the operator watches
+# it happen in the chat instead of watching a button spin. Guarded because act
+# reaches the gateway, and a route layer must not fail to import over narration.
+try:
+    from . import act as act_mod
+except Exception:  # pragma: no cover - defensive
+    act_mod = None  # type: ignore[assignment]
+
+
+def _say(text: str) -> None:
+    """Narrate one line into the Conductor chat. Best effort, never fatal."""
+    if act_mod is None or RUNTIME.state is None:
+        return
+    try:
+        act_mod.say_in_conductor_chat(RUNTIME.state, text)
+    except Exception:
+        logger.debug("conductor: could not narrate to the chat", exc_info=True)
+
 
 # ── bounds ───────────────────────────────────────────────────────────────────
 
@@ -681,6 +699,24 @@ def _jsonable(value: Any, *, depth: int = 0) -> Any:
     return repr(value)[:400]
 
 
+def _workers_for(goal_id: str) -> list[dict[str, Any]]:
+    """The live worker sessions for one goal, for the panel's remove buttons.
+
+    Read from the gateway rather than the goal file: the operator's question is
+    "what sessions exist for this?", which is about the registry — a leaf that was
+    never dispatched has no slot, and a slot whose leaf was deleted still does. Best
+    effort, because a panel poll must not fail on a missing gateway.
+    """
+    state = RUNTIME.state
+    if state is None or act_mod is None:
+        return []
+    try:
+        return act_mod.worker_slots(state, goal_id)
+    except Exception:
+        logger.debug("conductor: could not list workers for %s", goal_id, exc_info=True)
+        return []
+
+
 def _goal_row(goal: goals.Goal) -> dict[str, Any]:
     """One goal as the panel needs it, and never a predicate evaluation.
 
@@ -703,6 +739,33 @@ def _goal_row(goal: goals.Goal) -> dict[str, Any]:
         "why": why,
         "done_when": list(goal.done_when),
         "leaves": {"total": len(leaves), "closed": closed},
+        # The live worker sessions, so the panel can show them and offer a Remove.
+        # Nothing could remove a session before this: they were visible and, once
+        # their goal was gone, unaddressable.
+        "workers": _workers_for(goal.id),
+        # The editable detail, so the panel can show a draft's plan and let the
+        # operator change it before activating. Summary counts alone forced an
+        # operator to accept a decomposition sight-unseen or retype it.
+        # ``intent_text`` is the brief a worker will actually receive, so it is the
+        # one field that has to round-trip exactly.
+        "leaf_rows": [
+            {
+                "id": str(leaf.get("id") or ""),
+                "title": str(leaf.get("title") or ""),
+                "intent_text": str(leaf.get("intent_text") or ""),
+                "depends_on": [str(d) for d in (leaf.get("depends_on") or [])],
+                "status": str(leaf.get("status") or ""),
+                "produces": next(
+                    (
+                        str(entry.get("path") or "")
+                        for entry in (leaf.get("done_when") or [])
+                        if isinstance(entry, dict) and entry.get("kind") == "file_exists"
+                    ),
+                    "",
+                ),
+            }
+            for leaf in leaves
+        ],
         "authority_act": sorted(
             name for name, tier in (goal.authority or {}).items() if tier == "act"
         ),
@@ -808,6 +871,10 @@ async def handle_state(request: Any, ctx: Any) -> Any:
         "heartbeat_age_secs": int(now - heartbeat) if heartbeat else None,
         "heartbeat_stale": bool(heartbeat) and (now - heartbeat) > control.HEARTBEAT_STALE_SECS,
         "heartbeat_stale_secs": control.HEARTBEAT_STALE_SECS,
+        "planner_timeout_secs": record.planner_timeout_secs,
+        "planner_timeout_bounds": [
+            control.MIN_PLANNER_TIMEOUT_SECS, control.MAX_PLANNER_TIMEOUT_SECS,
+        ],
         "owner_pid": record.pid or None,
         "owner_is_this_process": bool(record.pid) and record.pid == os.getpid(),
         # A second gateway on this host holding the record: the reason a START
@@ -1326,11 +1393,238 @@ def _declare(goal_id: str, body: dict[str, Any]) -> tuple[goals.Goal, bool]:
 
 
 async def handle_remove_goal(request: Any, ctx: Any) -> Any:
-    """POST /conductor/goals/remove {id} — delete one goal file.
+    """POST /conductor/goals/remove {id, force?} — delete a goal AND its workers.
 
     An unknown id is a no-op rather than a 404: the operator's intent ("this goal
     should not exist") is already satisfied, and a retried delete should not become
     an error the UI has to explain.
+
+    **The workers go with it.** A worker slot is named ``cm-<goal>-<leaf>``, so a
+    goal deleted on its own left sessions nothing in the panel could address again —
+    visible, orphaned, and unremovable. Deleting the goal first and the workers
+    second is deliberate order: if this call dies in between, the leftovers are
+    orphans that :func:`steps.reap_orphan_workers` collects on the next tick, whereas
+    the reverse order would leave a goal whose workers had silently vanished.
+
+    Refuses with 409 while a worker is mid-turn unless ``force``. Removing a goal
+    should not kill a running turn as an invisible side effect — the panel asks, and
+    passes ``force`` once the operator has seen the count.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+    _bind(request, ctx)
+    body = await _body(request)
+    goal_id = _text(body.get("id"), 64).lower()
+    if not goal_id:
+        return _json({"error": "id is required"}, 400)
+    if goals.goal_path(goal_id) is None:
+        return _json({"error": "invalid goal id", "id": goal_id}, 400)
+    caller = _caller(request)
+    force = _flag(request, "force", body)
+
+    workers: dict[str, Any] = {"removed": [], "archived": []}
+    state = RUNTIME.state
+    if state is not None and act_mod is not None:
+        probe = await asyncio.to_thread(
+            act_mod.remove_worker_slots, state, goal_id=goal_id, force=force
+        )
+        if not probe.get("ok"):
+            audit("conductor.goal_remove", "refused", caller=caller,
+                  resources=f"goal={goal_id} {probe.get('refused')}")
+            return _json(
+                {"ok": False, "error": probe.get("refused"),
+                 "running": probe.get("running") or [],
+                 "confirm_required": "force"},
+                409,
+            )
+        workers = probe
+
+    await goals.delete_goal_async(goal_id)
+    audit(
+        "conductor.goal_remove", "ok", caller=caller,
+        resources=f"goal={goal_id} workers={len(workers.get('removed') or [])}",
+    )
+    await ledger.record_event_async(
+        action_class="goal_remove", goal_id=goal_id, outcome="success", resource=goal_id,
+        detail=f"removed the goal and {len(workers.get('removed') or [])} worker session(s)"
+               + ("; forced past a running turn" if workers.get("forced") else ""),
+        user_id=caller,
+    )
+    return _json({
+        "ok": True, "id": goal_id,
+        "workers_removed": workers.get("removed") or [],
+        "archived": workers.get("archived") or [],
+    })
+
+
+async def handle_remove_session(request: Any, ctx: Any) -> Any:
+    """POST /conductor/sessions/remove {slot, force?} — retire ONE worker session.
+
+    The tool that was missing. Everything else in the panel could create a session
+    and nothing could remove one, so a worker whose goal had gone stayed on the board
+    for good. Only names this app minted are eligible; a session the operator opened
+    themselves is closed from the dashboard, not from here.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+    _bind(request, ctx)
+    body = await _body(request)
+    slot = _text(body.get("slot"), 200)
+    if not slot:
+        return _json({"error": "slot is required"}, 400)
+    state = RUNTIME.state
+    if state is None or act_mod is None:
+        return _json(RUNTIME.unavailable("no gateway state"), 503)
+    result = await asyncio.to_thread(
+        act_mod.remove_worker_slots, state, slot=slot,
+        force=_flag(request, "force", body),
+    )
+    caller = _caller(request)
+    if not result.get("ok"):
+        audit("conductor.session_remove", "refused", caller=caller,
+              resources=f"slot={slot} {result.get('refused')}")
+        return _json({"ok": False, "error": result.get("refused"),
+                      "confirm_required": "force"}, 409)
+    audit("conductor.session_remove", "ok", caller=caller, resources=f"slot={slot}")
+    return _json(result)
+
+
+async def handle_clear_chat(request: Any, ctx: Any) -> Any:
+    """POST /conductor/chat/clear — empty the Conductor chat, context included.
+
+    Two halves, and doing one without the other is worse than doing neither: the
+    visible rows, and the agent's memory of them. See
+    :func:`act.clear_conductor_chat`, which owns the ordering.
+
+    Audited like any other operator action. The transcript is renamed aside rather
+    than deleted, and the response says where — a demo reset should not be the one
+    irreversible button in the panel.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+    _bind(request, ctx)
+    caller = _caller(request)
+
+    state = RUNTIME.state
+    if state is None:
+        return _json(RUNTIME.unavailable("no gateway state"), 503)
+    if act_mod is None:
+        return _json({"error": "the executor is unavailable"}, 503)
+
+    result = await asyncio.to_thread(act_mod.clear_conductor_chat, state)
+    if not result.get("ok"):
+        audit("conductor.chat_clear", "refused", caller=caller,
+              resources=str(result.get("refused") or ""))
+        return _json({"ok": False, "error": result.get("refused") or "refused"}, 409)
+
+    audit(
+        "conductor.chat_clear", "ok", caller=caller,
+        resources=f"rows={result.get('rows_cleared')} context={result.get('context_cleared')}",
+    )
+    await ledger.record_event_async(
+        action_class="chat_clear", goal_id="", outcome="success", resource=act_mod.CONDUCTOR_SLOT,
+        detail=f"cleared {result.get('rows_cleared')} row(s) and "
+               f"{result.get('context_cleared')} queued context entr(ies)"
+               + (f"; archived to {result.get('archived_to')}" if result.get("archived_to") else ""),
+        user_id=caller,
+    )
+    return _json(result)
+
+
+async def handle_clear_events(request: Any, ctx: Any) -> Any:
+    """POST /conductor/events/clear {force?} — start a fresh event ledger.
+
+    Rolls the live ledger into ``ledger.jsonl.1`` using the module's own rotation, so
+    the pane empties and every row stays queryable in the generations. Deliberately
+    NOT a delete: the ledger is the audit trail, and "clear the view" and "destroy
+    the record" are different requests.
+
+    Refuses with 409 while an action has no recorded outcome — those rows are what
+    reconcile closes the crash window with. See :func:`ledger.rotate_now`.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+    _bind(request, ctx)
+    body = await _body(request)
+    caller = _caller(request)
+    result = await ledger.rotate_now_async(force=_flag(request, "force", body))
+    if not result.get("ok"):
+        audit("conductor.events_clear", "refused", caller=caller,
+              resources=str(result.get("refused") or ""))
+        return _json({"ok": False, "error": result.get("refused"),
+                      "open_intents": result.get("open_intents") or [],
+                      "confirm_required": "force"}, 409)
+    audit("conductor.events_clear", "ok", caller=caller,
+          resources=f"rows={result.get('rows_cleared')}")
+    # Written AFTER the roll, so the new ledger opens with the reason it is empty
+    # rather than with no explanation at all.
+    await ledger.record_event_async(
+        action_class="events_clear", goal_id="", outcome="success", resource="ledger",
+        detail=f"cleared {result.get('rows_cleared')} row(s); previous events kept in "
+               f"{result.get('rotated_to') or 'no earlier file'}"
+               + ("; forced past unreconciled action(s)" if result.get("forced") else ""),
+        user_id=caller,
+    )
+    return _json(result)
+
+
+async def handle_settings(request: Any, ctx: Any) -> Any:
+    """POST /conductor/settings {planner_timeout_secs} — operator preferences.
+
+    Deliberately separate from START/STOP: this changes how the Conductor behaves,
+    not whether it is running, and an operator raising a planning ceiling should
+    not have to stop autonomy to do it. Values are clamped rather than rejected —
+    a typo becomes the nearest usable number and the response says what was stored,
+    because the alternative is a form that refuses and explains nothing.
+    """
+    denied = _unauthorized(request)
+    if denied is not None:
+        return denied
+    body = await _body(request)
+    changed: dict[str, Any] = {}
+
+    if "planner_timeout_secs" in body:
+        wanted = control._clamp_planner_timeout(body.get("planner_timeout_secs"))
+        ctl = await control.load_control_async()
+        ctl.planner_timeout_secs = wanted
+        await control.save_control_async(ctl)
+        changed["planner_timeout_secs"] = wanted
+
+    if not changed:
+        return _json({"error": "nothing to change", "accepts": ["planner_timeout_secs"]}, 400)
+    audit("conductor.settings", "ok", caller=_caller(request), resources=str(changed))
+    return _json({"ok": True, **changed})
+
+
+async def handle_decompose_goal(request: Any, ctx: Any) -> Any:
+    """POST /conductor/goals/decompose {id} — ask the model for the goal's steps.
+
+    The operator states an outcome; deciding how it breaks into work is the one
+    part of this that is genuinely a judgement call, and a model is better at it
+    than a form. ``judge.decompose_goal`` already existed for exactly this and was
+    never called from anywhere — so the first version of the UI made a human type
+    six steps that the system could have proposed.
+
+    **These are candidates, and they land on a DRAFT.** Nothing is dispatched by
+    decomposing: the leaves are written to the goal and the operator still has to
+    read them, edit them, and press Activate. That ordering is deliberate — a model
+    may propose the plan, and only a human may start it.
+
+    Accepts a ``draft`` or a ``ready`` goal — re-planning something nobody has
+    started is safe, and on success the goal becomes ``ready`` so the operator can
+    see that planning achieved something and that starting it is now their move.
+
+    Refuses on a STARTED goal. Re-planning a goal whose workers are already
+    running would orphan sessions bound to leaf ids that no longer exist, and the
+    honest recovery for "the plan was wrong" is a new goal, not a swap underneath
+    live work.
+
+    ``[]`` back from the model is reported as such rather than written: an empty
+    decomposition would clear a plan the operator may have typed by hand.
     """
     denied = _unauthorized(request)
     if denied is not None:
@@ -1339,11 +1633,111 @@ async def handle_remove_goal(request: Any, ctx: Any) -> Any:
     goal_id = _text(body.get("id"), 64).lower()
     if not goal_id:
         return _json({"error": "id is required"}, 400)
-    if goals.goal_path(goal_id) is None:
-        return _json({"error": "invalid goal id", "id": goal_id}, 400)
-    await goals.delete_goal_async(goal_id)
-    audit("conductor.goal_remove", "ok", caller=_caller(request), resources=f"goal={goal_id}")
-    return _json({"ok": True, "id": goal_id})
+    goal = await goals.get_goal_async(goal_id)
+    if goal is None:
+        return _json({"error": "no such goal", "id": goal_id}, 404)
+    if goal.status not in (goals.GoalStatus.DRAFT.value, goals.GoalStatus.READY.value):
+        return _json(
+            {"error": f"goal is {goal.status}; decompose only applies to a draft",
+             "id": goal_id, "status": goal.status},
+            409,
+        )
+
+    ceiling = (await control.load_control_async()).planner_timeout_secs
+    # Both ends of the call land in the ledger, so "the button is spinning" has a
+    # matching pair of rows an operator can see in the events pane rather than a
+    # silence they have to guess at.
+    await ledger.record_event_async(
+        action_class="plan", goal_id=goal_id, outcome="attempt", resource=goal_id,
+        detail=f"planning steps for {goal.title!r} (up to {ceiling:.0f}s)",
+    )
+    _say(
+        f"**Planning** {goal.title!r}\n"
+        f"Reading the objective and breaking it into steps (up to {ceiling:.0f}s). "
+        f"Nothing is dispatched by planning — the goal becomes *ready* and waits for you."
+    )
+    started = time.time()
+    try:
+        leaves = await judge.decompose_goal(
+            goal.to_json(),
+            sessions=getattr(RUNTIME.state, "sessions", None),
+            timeout=ceiling,
+        )
+    except Exception:
+        logger.exception("conductor: decompose failed for %s", goal_id)
+        await ledger.record_event_async(
+            action_class="plan", goal_id=goal_id, outcome="failure", resource=goal_id,
+            detail="the planner raised; the goal is unchanged",
+        )
+        _say(f"**Planning failed** for {goal.title!r} — the planner errored. The goal is unchanged.")
+        return _json({"error": "the planner failed; nothing was changed", "id": goal_id}, 502)
+    elapsed = time.time() - started
+
+    if not leaves:
+        await ledger.record_event_async(
+            action_class="plan", goal_id=goal_id, outcome="failure", resource=goal_id,
+            detail=f"no usable steps after {elapsed:.0f}s"
+                   + (f" — the {ceiling:.0f}s ceiling was reached, try raising it"
+                      if elapsed >= ceiling - 1 else ""),
+        )
+        _say(
+            f"**No usable steps** for {goal.title!r} after {elapsed:.0f}s"
+            + (f" — the {ceiling:.0f}s planning ceiling was reached. Raise it in "
+               f"Automation and try again." if elapsed >= ceiling - 1
+               else ". A clearer objective, or a working directory, usually fixes it.")
+        )
+        return _json(
+            {"ok": False, "id": goal_id, "leaves": 0,
+             "error": "the planner returned no usable steps; the goal is unchanged "
+                      "(a clearer statement, or a working directory, usually fixes it)"},
+            200,
+        )
+
+    goal.leaves = leaves
+    # Planning succeeded, so the goal is no longer a bare draft: it is described,
+    # planned, and waiting for the operator. Setting it here rather than leaving it
+    # to a second call is the point — an operator who has just watched the planner
+    # work should not have to ask what changed, and "draft" said nothing changed.
+    #
+    # It becomes READY, never ACTIVE. Planning is not permission.
+    if goal.status == goals.GoalStatus.DRAFT.value:
+        goal.status = goals.GoalStatus.READY.value
+    goal.updated_ts = time.time()
+    try:
+        await goals.save_goal_async(goal)
+    except OSError:
+        logger.exception("conductor: could not persist decomposed goal %s", goal_id)
+        return _json({"error": "could not write the goal"}, 500)
+
+    _say("\n".join(
+        [f"**Planned** {goal.title!r} — {len(goal.leaves)} step(s) in {elapsed:.0f}s"]
+        + [
+            f"{index}. `{leaf.get('id')}` {leaf.get('title') or ''}"
+            + (f" → {next((e.get('path') for e in (leaf.get('done_when') or []) if isinstance(e, dict) and e.get('kind') == 'file_exists'), '')}"
+               if leaf.get("done_when") else "")
+            + (f" (after {', '.join(str(d) for d in leaf.get('depends_on') or [])})"
+               if leaf.get("depends_on") else "")
+            for index, leaf in enumerate(goal.leaves, 1)
+        ]
+        + [f"This goal is now **ready**. Review or edit the steps in Goals, then "
+           f"press Start when you want it to run — planning changed nothing on disk."]
+    ))
+    await ledger.record_event_async(
+        action_class="plan", goal_id=goal_id, outcome="success", resource=goal_id,
+        detail=f"planned {len(goal.leaves)} step(s) in {elapsed:.0f}s: "
+               + ", ".join(str(leaf.get("id")) for leaf in goal.leaves[:8]),
+    )
+    audit(
+        "conductor.goal_decompose", "ok", caller=_caller(request),
+        resources=f"goal={goal_id} leaves={len(goal.leaves)}",
+    )
+    fresh = await goals.get_goal_async(goal_id)
+    return _json({
+        "ok": True,
+        "id": goal_id,
+        "leaves": len(goal.leaves),
+        "goal": _goal_row(fresh) if fresh is not None else None,
+    })
 
 
 async def handle_goal_authority(request: Any, ctx: Any) -> Any:
@@ -1460,6 +1854,11 @@ ROUTES: tuple[tuple[str, str, Any], ...] = (
     ("GET", "/conductor/ledger", handle_ledger),
     ("GET", "/conductor/goals", handle_goals),
     ("POST", "/conductor/goals", handle_declare_goal),
+    ("POST", "/conductor/settings", handle_settings),
+    ("POST", "/conductor/chat/clear", handle_clear_chat),
+    ("POST", "/conductor/sessions/remove", handle_remove_session),
+    ("POST", "/conductor/events/clear", handle_clear_events),
+    ("POST", "/conductor/goals/decompose", handle_decompose_goal),
     ("POST", "/conductor/goals/remove", handle_remove_goal),
     ("POST", "/conductor/goals/authority", handle_goal_authority),
 )

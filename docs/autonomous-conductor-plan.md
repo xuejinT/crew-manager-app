@@ -1200,7 +1200,7 @@ merge-queue availability for the target repos.
 
 ## Prior art, credited concretely
 
-**From batty** (`/home/zedmor/workplace/batty`):
+**From batty** (`~/workplace/batty`):
 
 - **`tick()` factored out of the sleep loop** so it can be called once from a test
   (`daemon/poll.rs:246`, with its own explanatory comment). The single most portable idea in the
