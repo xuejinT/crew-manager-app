@@ -189,7 +189,7 @@ export const OVERWATCH_STYLES = String.raw`
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 11px 14px;
+    padding: 7px 14px;
     list-style: none;
     cursor: pointer;
   }
@@ -253,6 +253,9 @@ export const OVERWATCH_STYLES = String.raw`
     background: var(--card);
     padding: 14px 0 10px;
   }
+  /* The first section sits right under the panel header, so it needs no airy
+     top gap — that space reads as empty at the top of the list. */
+  .ow-section:first-child .ow-section-header { padding-top: 2px; }
   .ow-section-heading { display: flex; align-items: baseline; gap: 8px; }
   .ow-section-title {
     margin: 0;
