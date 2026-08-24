@@ -1160,3 +1160,37 @@ describe('a work card accounts for the goal it stands for', () => {
     })
   })
 })
+
+/*
+ * When the summary feature is off, the board has nothing real to show, so it
+ * points the user at the one setting that turns it on rather than rendering the
+ * degraded bare-card fallback.
+ */
+describe('session summaries turned off', () => {
+  function withSummariesDisabled() {
+    const base = appSdkMocks.get.getMockImplementation() as (path: string) => Promise<unknown>
+    appSdkMocks.get.mockImplementation(async (path: string) => {
+      // The workspace-wide flag is off; the endpoint answers enabled:false for
+      // every slot.
+      if (path.endsWith('/summary')) return { enabled: false }
+      return base(path)
+    })
+  }
+
+  it('shows a settings call-to-action instead of the work list', async () => {
+    withSummariesDisabled()
+    renderApp()
+
+    expect(await screen.findByText('Turn on session summaries to see your work')).toBeInTheDocument()
+    // The degraded board is not shown underneath the empty state.
+    expect(screen.queryByTestId('work-item-session:session-1')).toBeNull()
+  })
+
+  it('takes the user to Settings from the empty state', async () => {
+    withSummariesDisabled()
+    renderApp()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open settings' }))
+    expect(appSdkMocks.navigate).toHaveBeenCalledWith('/settings')
+  })
+})

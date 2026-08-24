@@ -2563,6 +2563,18 @@ export default function CrewOverviewApp() {
                       action={<Btn onClick={retrySources}>Try again</Btn>}
                     />
                   )
+                  : summarySupport === 'disabled'
+                    ? (
+                      // The whole board is built from session summaries, so with the
+                      // feature off it degrades to bare cards. Point the user at the
+                      // one place that fixes it instead of showing that degraded view.
+                      <EmptyState
+                        icon={<MessageSquare className="ow-icon" />}
+                        title="Turn on session summaries to see your work"
+                        subtitle="Crew Manager reads each session's summary to show what needs you, what's in progress, and what's done. Summaries are off right now — turn them on in Settings → Chat → Sessions."
+                        action={<Btn onClick={() => navigate('/settings')}>Open settings</Btn>}
+                      />
+                    )
                   : sessionItems.length === 0
                     ? (
                       <EmptyState
