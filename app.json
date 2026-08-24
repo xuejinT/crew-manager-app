@@ -72,10 +72,9 @@
       }
     ]
   },
-  "iconUrl": "/apps/crew-manager/ui/icon.svg",
   "iconPath": "ui/icon.png",
-  "heroImage": "/apps/crew-manager/ui/hero-light.svg",
-  "heroImageDark": "/apps/crew-manager/ui/hero-dark.svg",
-  "heroImageDetail": "/apps/crew-manager/ui/hero-detail-light.svg",
-  "heroImageDetailDark": "/apps/crew-manager/ui/hero-detail-dark.svg"
+  "heroImage": "ui/hero-light.svg",
+  "heroImageDark": "ui/hero-dark.svg",
+  "heroImageDetail": "ui/hero-detail-light.svg",
+  "heroImageDetailDark": "ui/hero-detail-dark.svg"
 }
