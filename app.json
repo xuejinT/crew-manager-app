@@ -1,7 +1,7 @@
 {
   "name": "crew-manager",
   "displayName": "Crew Manager",
-  "version": "0.4.13",
+  "version": "0.4.14",
   "description": "A live view of work across Kiro Crew that shows what needs you, what is running, and what recently finished.",
   "author": "Kiro Crew",
   "license": "MIT",
@@ -73,6 +73,7 @@
     ]
   },
   "iconUrl": "/apps/crew-manager/ui/icon.svg",
+  "iconPath": "ui/icon.png",
   "heroImage": "/apps/crew-manager/ui/hero-light.svg",
   "heroImageDark": "/apps/crew-manager/ui/hero-dark.svg",
   "heroImageDetail": "/apps/crew-manager/ui/hero-detail-light.svg",
