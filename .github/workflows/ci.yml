@@ -1,0 +1,65 @@
+# The repo's only automated gate. CodeRabbit is configured to skip review here,
+# so before this workflow existed a PR could merge with no signal at all — which
+# is how the manifest store-art test spent a day red on main after PR #41
+# changed app.json without updating it.
+#
+# Node is pinned to 22, the floor package.json declares. It is NOT just a
+# convenience: Node 25 ships an empty Web Storage global that shadows jsdom's
+# real localStorage, and the behavior specs fail wholesale under it for reasons
+# that have nothing to do with the diff.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Node 22 bundles npm 10, whose arborist crashes resolving vitest 4's
+      # optional peer graph (@vitest/browser-playwright -> @vitejs/devtools-vitest):
+      # `Cannot read properties of null (reading 'edgesOut')` in #loadPeerSet,
+      # before a single package is written. Reproduced locally with npm@10.9.4 and
+      # clean on 11.6.2, so the npm version is pinned independently of Node's.
+      - name: Pin npm past the arborist peer-resolution crash
+        run: npm install -g npm@11.6.2
+
+      # No package-lock.json is committed, so `npm ci` cannot run and there is
+      # nothing for setup-node to cache against. A plain install writes a
+      # lockfile into the runner's workspace only, discarded with the job.
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      # typecheck -> build -> frontend tests -> backend selftest.
+      - name: Check
+        run: npm run check
+
+      # The build writes ui/index.mjs, which is COMMITTED (the host loads it
+      # directly from the repo). A PR that edits src/ without rebuilding ships a
+      # bundle that does not match its own source, and nothing else would notice.
+      - name: Committed bundle matches the build
+        run: |
+          if ! git diff --exit-code -- ui/index.mjs; then
+            echo "::error file=ui/index.mjs::ui/index.mjs is stale — run 'node scripts/build.mjs' and commit the result"
+            exit 1
+          fi

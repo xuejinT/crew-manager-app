@@ -28,26 +28,43 @@ describe('Crew Manager app manifest', () => {
   it('ships store art for every surface, as files that exist', () => {
     // The store renders an external app's art through a plain <img>, so the bytes
     // are fixed: theme variables cannot reach them, which is why the light and
-    // dark heroes are separate files. Absolute
-    // `/apps/<name>/ui/...` paths matter: the host rewrites a RELATIVE art path
-    // only when the app came from a git registry (there is a repo to proxy
-    // against), and passes an absolute one through untouched — which is the only
-    // form a locally installed app can serve.
-    const art: Record<string, string> = {
-      iconUrl: 'icon.svg',
-      heroImage: 'hero-light.svg',
-      heroImageDark: 'hero-dark.svg',
-      heroImageDetail: 'hero-detail-light.svg',
-      heroImageDetailDark: 'hero-detail-dark.svg',
+    // dark heroes are separate files.
+    //
+    // The paths must be REPO-RELATIVE because this app is distributed from a
+    // repository. The host rewrites each art field onto its blob proxy
+    // (`/api/apps/blob?repo=...&path=...`) whenever the app has a `repo`, and
+    // that proxy refuses any path containing `..` or starting with `/` — so the
+    // built-in `/apps/<name>/ui/...` form, which this test once required, loads
+    // nothing on the store card or the detail banner. Assert the SHAPE the proxy
+    // accepts rather than one literal string: a rename then stays free, while
+    // reverting to the absolute form fails here instead of on a store card.
+    const fields = [
+      'iconPath',
+      'heroImage',
+      'heroImageDark',
+      'heroImageDetail',
+      'heroImageDetailDark',
+    ]
+    for (const field of fields) {
+      const value = manifest[field]
+      expect(typeof value, `${field} must be declared`).toBe('string')
+      // The three forms the blob proxy rejects: absolute, parent-traversal, and
+      // an off-origin URL (which the host refuses to copy out of a manifest).
+      expect(value.startsWith('/'), `${field} must not be absolute`).toBe(false)
+      expect(value, `${field} must not traverse`).not.toMatch(/\.\./)
+      expect(value, `${field} must not carry a scheme`).not.toMatch(/^[a-z][a-z0-9+.-]*:/i)
+      // A manifest pointing at a missing file degrades to the host's generic
+      // Package glyph with nothing failing loudly, so assert the file is there.
+      expect(existsSync(resolve(process.cwd(), value)), `${field} -> ${value} must exist`).toBe(true)
     }
-    for (const [field, file] of Object.entries(art)) {
-      expect(manifest[field]).toBe(`/apps/crew-manager/ui/${file}`)
-    }
-    // A manifest pointing at a missing file degrades to the host's generic
-    // Package glyph with nothing failing loudly, so assert the files are there.
-    for (const file of Object.values(art)) {
-      expect(existsSync(resolve(process.cwd(), 'ui', file))).toBe(true)
-    }
+    // Five surfaces, five files: a copy-paste that pointed the dark hero at the
+    // light one would satisfy every check above and render the wrong art.
+    expect(new Set(fields.map(f => manifest[f])).size).toBe(fields.length)
+    // A top-level `iconUrl` is silently ignored for a repo-distributed app: the
+    // host reads `iconPath` only, because an index-fetched manifest is untrusted
+    // and an absolute URL out of it could aim the store's <img> at any host.
+    // Declaring one again would look like art that works and never load.
+    expect(manifest.iconUrl).toBeUndefined()
   })
 
   it('keeps art SVGs free of CSS variables, which do not resolve through <img>', () => {
