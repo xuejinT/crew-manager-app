@@ -1263,15 +1263,17 @@ function SessionCard({
           onDecide={action => onDecideApproval(lead, action)}
         /></Expand>
       )}
-      {hasMore && (
+      {/* Collapsed only: once expanded the toggle moves to the last row of the
+          card, below everything it revealed, instead of staying mid-list. */}
+      {hasMore && !expanded && (
         <button
           type="button"
           className="ow-goals-toggle"
-          aria-expanded={expanded}
-          onClick={event => { event.stopPropagation(); setExpanded(show => !show) }}
+          aria-expanded={false}
+          onClick={event => { event.stopPropagation(); setExpanded(true) }}
         >
-          <ChevronRight className="ow-icon" data-open={expanded ? 'true' : undefined} aria-hidden="true" />
-          {expanded ? 'Show less' : 'Show more'}
+          <ChevronRight className="ow-icon" aria-hidden="true" />
+          Show more
         </button>
       )}
       {/* Hover-only actions. Reference in chat quotes this goal to the Conductor
@@ -1345,6 +1347,18 @@ function SessionCard({
               )}
             </div>
           )}
+          {/* Last row of the expanded card: collapse below everything it opened. */}
+          <button
+            type="button"
+            className="ow-goals-toggle ow-card-collapse"
+            aria-expanded
+            onClick={event => { event.stopPropagation(); setExpanded(false) }}
+          >
+            {/* The host's lucide stub exports no ChevronUp, so the collapse
+                chevron is the right one turned up in CSS (.ow-card-collapse). */}
+            <ChevronRight className="ow-icon" aria-hidden="true" />
+            Show less
+          </button>
         </div>
       )}
     </>
