@@ -800,6 +800,11 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-card-step-what { font-size: 13px; }
   .ow-card-step-why { color: var(--muted); font-size: 12px; font-style: italic; }
   .ow-card-expanded { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+  /* The collapse control is the card's last row; keep its hit area tight to its
+     own text rather than letting the flex column stretch it full width. */
+  .ow-card-collapse { align-self: flex-start; margin-top: 2px; }
+  /* Up-chevron: the host's icon stub has no ChevronUp, so turn the right one. */
+  .ow-card-collapse .ow-icon { transform: rotate(-90deg); }
   /* A clear section break: the session's OTHER items are distinct from the
      headline goal's own detail above, so give the group a rule + real space. */
   .ow-card-morelabel {
