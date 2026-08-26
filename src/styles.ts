@@ -702,7 +702,7 @@ export const OVERWATCH_STYLES = String.raw`
      A plain bordered card: a collapse chevron + the goal name + an optional Split
      + a "N need you" flag, then a one-line composition meta, then the member rows
      (each a dot + label + chevron that expands on select). */
-  .ow-goalcard { display: flex; flex-direction: column; gap: 0; padding: 12px 14px; }
+  .ow-goalcard { position: relative; display: flex; flex-direction: column; gap: 0; padding: 12px 14px; }
   .ow-goalcard-summary { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .ow-goalcard-chevron {
     flex: none; display: inline-flex; align-items: center; justify-content: center;
@@ -743,7 +743,7 @@ export const OVERWATCH_STYLES = String.raw`
   /* --- Session card: one session = one card (status/name/turns, PRs, latest
      goal summary + first next step, everything else behind expand). --- */
   .ow-sessioncard {
-    position: relative; display: flex; flex-direction: column;
+    display: flex; flex-direction: column;
   }
   /* Selection tints the WHOLE goal card, not just the headline: the expanded
      section is a sibling of .ow-sessioncard, so the tint lives on the enclosing
@@ -753,7 +753,12 @@ export const OVERWATCH_STYLES = String.raw`
   .ow-block[data-grouped='true']:has(.ow-sessioncard[data-selected='true']) { background: var(--aim-subtle); }
   .ow-sessioncard:hover .ow-row-aside,
   .ow-sessioncard:focus-within .ow-row-aside { opacity: 1; pointer-events: auto; }
-  .ow-card-top { display: flex; align-items: center; gap: 8px; }
+  /* The hover strip belongs to the CARD, not the card's body: the body sits
+     inside .ow-goalcard's 12px/14px padding, so anchoring there pushed the strip
+     20px/24px in from the edges the reader sees. Anchor on the card itself so the
+     offsets below are measured from the visible border. */
+  .ow-sessioncard .ow-row-aside { top: 8px; right: 8px; }
+  .ow-card-top { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; }
   .ow-card-meta {
     margin-left: auto; display: flex; align-items: center; gap: 6px;
     min-width: 0; color: var(--muted); font-size: 12px;
@@ -766,7 +771,7 @@ export const OVERWATCH_STYLES = String.raw`
   }
   .ow-card-name:hover { color: var(--accent); text-decoration: underline; }
   .ow-card-metapart { white-space: nowrap; }
-  .ow-card-title { margin: 8px 0 0; color: var(--text-strong); font-size: 16px; font-weight: 600; line-height: 1.3; }
+  .ow-card-title { margin: 0; color: var(--text-strong); font-size: 16px; font-weight: 600; line-height: 1.3; }
   .ow-card-prs { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
   .ow-card-pr {
     display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px;

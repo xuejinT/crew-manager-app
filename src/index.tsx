@@ -1121,8 +1121,9 @@ function MoreItem({
 }
 
 /**
- * One session as a single card: a status / clickable-name / last-active / turns
- * headline, the PRs it touches, the latest goal's summary and its first next step.
+ * One session as a single card: the goal title as the headline, then its
+ * attribution row (status / clickable-name / last-active / turns), the PRs it
+ * touches, the latest goal's summary and its first next step.
  * Everything else — the rest of the steps, the ask + progress, the other goals —
  * lives behind the expand.
  */
@@ -1214,6 +1215,9 @@ function SessionCard({
       data-selected={selected ? 'true' : undefined}
       data-testid={`work-item-${lead.id}`}
     >
+      <h3 className="ow-card-title">{lead.title}</h3>
+      {/* The identity row sits UNDER the goal title: the title is the headline,
+          and status / which session / when / how long is its attribution line. */}
       <div className="ow-card-top">
         {stateBadge(statusItem)}
         <span className="ow-card-meta">
@@ -1227,7 +1231,6 @@ function SessionCard({
           {metaParts.map(part => <span key={part} className="ow-card-metapart">{part}</span>)}
         </span>
       </div>
-      <h3 className="ow-card-title">{lead.title}</h3>
       {prRefs.length > 0 && (
         <div className="ow-card-prs">
           {prRefs.map(ref => (
