@@ -63,3 +63,35 @@ jobs:
             echo "::error file=ui/index.mjs::ui/index.mjs is stale — run 'node scripts/build.mjs' and commit the result"
             exit 1
           fi
+
+  # A separate job, not a step in `check`: it needs no npm install, so it reports
+  # in seconds instead of behind the suite, and a red here names a distinct
+  # problem ("you shipped without relabelling") rather than "the build is broken".
+  #
+  # pull_request only. On a push to main the merge has already happened, so a red
+  # would report a fact nobody can act on — and the version that matters is the
+  # one on the commit the catalog resolves, which this gate protects on the way in.
+  version-bump:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The check diffs against the base commit, which a depth-1 clone lacks.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # No `npm install`: the script is stdlib-only node, deliberately, so this
+      # gate cannot be taken down by a dependency-resolution failure — which is
+      # exactly what broke this workflow's first two runs.
+      - name: Manifest version bumps when the shipped app changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # The checked-out ref is the merge commit, so BASE_SHA...HEAD is this
+          # PR's net change against the base.
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node scripts/check-version-bump.mjs
